@@ -30,10 +30,6 @@ jobs:
         run: npm run build --if-present
 
       - name: 📦  Publish
-        # 1. --access public: Required for first‑time scoped or new packages
-        # 2. --provenance: Links this version to this specific GitHub run
         run: npm publish --access public --provenance
         env:
-          # THIS IS THE CRITICAL LINE:
-          # It maps your GitHub Secret to the internal variable npm uses
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
