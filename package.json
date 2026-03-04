@@ -23,9 +23,13 @@
     "clean-code",
     "json-repository"
   ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
    "repository": {
     "type": "git",
-    "url": "https://github.com/umutayb/pw-element-repository"
+    "url": "git@github.com:Umutayb/pw-element-repository.git"
   },
   "author": "Umut Ay Bora",
   "license": "MIT"
