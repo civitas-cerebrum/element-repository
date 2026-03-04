@@ -22,8 +22,10 @@
     "playwright",
     "automation",
     "locators",
+    "selectors",
     "clean-code",
     "page-object-model",
+    "test-automation",
     "json-repository"
   ],
   "publishConfig": {
