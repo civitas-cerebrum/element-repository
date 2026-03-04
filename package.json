@@ -1,7 +1,7 @@
 {
   "name": "pw-element-repository",
   "version": "0.0.2",
-  "description": "A lightweight, robust package that decouples your Playwright UI selectors from your test code. By externalizing locators into a central JSON repository, you make your test automation framework cleaner, easier to maintain, and accessible to non-developers.",
+  "description": "A zero-dependency, decoupled JSON locator management package for Playwright.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
@@ -12,23 +12,16 @@
   "files": [
     "dist"
   ],
-  "peerDependencies": {
-    "@playwright/test": ">=1.20.0",
-    "playwright-core": ">=1.20.0"
-  },
   "devDependencies": {
-    "@playwright/test": "^1.42.0",
     "@types/node": "^20.0.0",
-    "playwright": "^1.42.0",
     "typescript": "^5.0.0"
   },
   "keywords": [
     "playwright",
-    "testing",
     "automation",
-    "e2e",
-    "page-object-model",
-    "locators"
+    "locators",
+    "clean-code",
+    "json-repository"
   ],
   "author": "Your Name",
   "license": "MIT"
