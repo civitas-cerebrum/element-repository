@@ -1,12 +1,12 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
-import { PageObjectSchema } from './schema/repository';
+import { PageRepository } from './schema/repository';
 import { Page } from './schema/page';
 import { pickRandomIndex } from './utils/math';
 
 export class ElementRepository {
-  private pageData: PageObjectSchema;
+  private pageData: PageRepository;
   private defaultTimeout: number;
 
   /**
@@ -21,9 +21,9 @@ export class ElementRepository {
    * @param data The parsed JSON object matching the PageObjectSchema.
    * @param defaultTimeout Default wait timeout in milliseconds (defaults to 15000).
    */
-  constructor(data: PageObjectSchema, defaultTimeout?: number);
+  constructor(data: PageRepository, defaultTimeout?: number);
 
-  constructor(dataOrPath: string | PageObjectSchema, defaultTimeout: number = 15000) {
+  constructor(dataOrPath: string | PageRepository, defaultTimeout: number = 15000) {
     if (typeof dataOrPath === 'string') {
       const absolutePath = path.resolve(process.cwd(), dataOrPath);
       const rawData = fs.readFileSync(absolutePath, 'utf-8');
