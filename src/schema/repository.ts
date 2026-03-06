@@ -12,6 +12,6 @@ export interface PageObject {
   elements: Element[];
 }
 
-export interface PageObjectSchema {
+export interface PageRepository {
   pages: PageObject[];
 }
