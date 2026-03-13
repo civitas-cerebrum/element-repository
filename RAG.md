@@ -1,11 +1,6 @@
-# pw-element-repository (RAG Context)
-
-**Purpose:** A JSON-based locator repository for Playwright. It externalizes selectors (CSS, XPath, ID, Text) from test code, allowing tests to reference elements by `pageName` and `elementName` strings.
-
-## 🏗️ JSON Schema Requirement
-
-The repository requires a specific JSON structure to function:
-
+# pw-element-repository — AI Reference
+**Purpose:** A JSON-based locator repository for Playwright. It externalizes selectors (CSS, XPath, ID, Text) from test code, allowing tests to reference elements by pageName and elementName strings.
+## JSON Schema
 ```json
 {
   "pages": [
@@ -14,51 +9,41 @@ The repository requires a specific JSON structure to function:
       "elements": [
         {
           "elementName": "StringElementName",
-          "selector": { 
-            "css": "selector", 
-            "xpath": "selector", 
-            "id": "id", 
-            "text": "text" 
+          "selector": {
+            "css": "selector",
+            "xpath": "selector",
+            "id": "id",
+            "text": "text"
           }
         }
       ]
     }
   ]
 }
-
 ```
 
-## 🚀 Initialization
+## Usage Example:
 
 ```ts
-import { ElementRepository } from 'pw-element-repository';
 
-// Initialize via file path or imported JSON object
+await test.step('✅ Open Forms Page and verify navigation', async () => {
+  const repo = new ElementRepository("tests/data/page-repository.json");
+  const formsCategory = await repo.getByText(page, 'HomePage', 'categories', 'Forms');
+  await formsCategory?.click();
+  await steps.verifyAbsence('HomePage', 'categories');
+});
+```
+
+## Setup
+```ts
 // Constructor: (pathOrData: string | object, timeout?: number)
 const repo = new ElementRepository('path/to/locators.json', 15000);
 ```
 
-## 🛠️ API Reference
+## API (all async, return Playwright `Locator` unless noted)
+- `get(page, pageName, elementName)` — single `Locator`, waits for DOM attachment
+- `getAll(page, pageName, elementName)` — `Locator[]` for iteration
+- `getRandom(page, pageName, elementName, strict?)` — random `Locator`, waits for visibility
+- `getByText(page, pageName, elementName, desiredText, strict?)` — first `Locator` containing `desiredText`
+- `getSelector(pageName, elementName)` — **sync**, returns raw selector string (e.g. `css=.btn`)
 
-All retrieval methods are **asynchronous** and return Playwright `Locator` objects.
-
-### Element Retrieval
-
-* **`get(page, pageName, elementName)`**: Returns a single `Locator`. Waits for DOM attachment based on repository timeout.
-* **`getAll(page, pageName, elementName)`**: Returns an array of resolved handles (`Locator[]`) for iteration.
-* **`getRandom(page, pageName, elementName, strict?)`**: Counts matches and returns one random `Locator`. Waits for visibility.
-* **`getByText(page, pageName, elementName, desiredText, strict?)`**: Returns the first `Locator` matching the selector that contains `desiredText`.
-
-### Utilities
-
-* **`getSelector(pageName, elementName)`**: **Synchronous**. Returns the raw string selector (e.g., `css=.btn`) for debugging or native Playwright APIs requiring strings.
-
----
-
-## 🤖 AI / LLM Implementation Note
-
-When generating tests using these two packages:
-
-1. **Reference the JSON:** Use the `pageName` and `elementName` defined in the `locators.json`.
-2. **Use `Steps`:** Prefer `steps.click('Page', 'Element')` over `repo.get` + `locator.click()`.
-3. **Avoid Selectors:** Do not hardcode CSS/XPath in the test script; add them to the JSON repository instead.
