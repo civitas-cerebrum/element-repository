@@ -87,7 +87,7 @@ Create a JSON file in your project to hold your selectors. The file must adhere 
 | `placeholder` | `[placeholder='<value>']` | `"placeholder": "Search..."` |
 | `label` | `[aria-label='<value>']` | `"label": "Close"` |
 
-> **Note:** The `testid` key uses `data-testid` by default. If your project uses a custom test ID attribute (e.g., `data-cy`, `data-test`), you can configure it via the constructor's `testIdAttribute` parameter to match your Playwright config's `testIdAttribute`.
+> **Note:** The `testid` key uses the standard `data-testid` attribute.
 
 ## 💻 Usage
 
@@ -100,17 +100,11 @@ import { test } from '@playwright/test';
 import { ElementRepository } from 'pw-element-repository';
 
 // Option A: Pass the path to your JSON (relative to your project root)
-const repo = new ElementRepository('tests/data/locators.json');
+const repo = new ElementRepository('tests/data/locators.json', 15000);
 
-// Option B: With custom timeout (default: 15000ms)
-const repo = new ElementRepository('tests/data/locators.json', 10000);
-
-// Option C: With custom test ID attribute (e.g., for Cypress-style data-cy attributes)
-const repo = new ElementRepository('tests/data/locators.json', 15000, 'data-cy');
-
-// Option D: Import the JSON directly (requires resolveJsonModule in tsconfig)
+// Option B: Import the JSON directly (requires resolveJsonModule in tsconfig)
 import locatorData from '../data/locators.json';
-const repo = new ElementRepository(locatorData);
+const repo = new ElementRepository(locatorData, 15000);
 
 ```
 
