@@ -8,22 +8,25 @@ import { pickRandomIndex } from './utils/math';
 export class ElementRepository {
   private pageData: PageRepository;
   private defaultTimeout: number;
+  private testIdAttribute: string;
 
   /**
    * Initializes the repository with a path to a JSON file.
    * @param filePath Path to the JSON file (relative to the project root).
    * @param defaultTimeout Default wait timeout in milliseconds (defaults to 15000).
+   * @param testIdAttribute The HTML attribute used for test IDs (defaults to 'data-testid').
    */
-  constructor(filePath: string, defaultTimeout?: number);
+  constructor(filePath: string, defaultTimeout?: number, testIdAttribute?: string);
 
   /**
    * Initializes the repository with pre-parsed JSON data.
    * @param data The parsed JSON object matching the PageObjectSchema.
    * @param defaultTimeout Default wait timeout in milliseconds (defaults to 15000).
+   * @param testIdAttribute The HTML attribute used for test IDs (defaults to 'data-testid').
    */
-  constructor(data: PageRepository, defaultTimeout?: number);
+  constructor(data: PageRepository, defaultTimeout?: number, testIdAttribute?: string);
 
-  constructor(dataOrPath: string | PageRepository, defaultTimeout: number = 15000) {
+  constructor(dataOrPath: string | PageRepository, defaultTimeout: number = 15000, testIdAttribute: string = 'data-testid') {
     if (typeof dataOrPath === 'string') {
       const absolutePath = path.resolve(process.cwd(), dataOrPath);
       const rawData = fs.readFileSync(absolutePath, 'utf-8');
@@ -33,6 +36,7 @@ export class ElementRepository {
     }
 
     this.defaultTimeout = defaultTimeout;
+    this.testIdAttribute = testIdAttribute;
   }
 
   /**
@@ -123,10 +127,159 @@ export class ElementRepository {
   }
 
   /**
-   * Internal helper method to parse the JSON schema and return a Playwright-friendly selector string.
+   * Filters elements by a specific HTML attribute value.
+   * Iterates through all matching elements and returns the first one whose attribute matches.
+   * @param page The Playwright Page instance.
+   * @param pageName The name of the page block in the JSON repository.
+   * @param elementName The specific element name to look up.
+   * @param attribute The HTML attribute name to filter by (e.g., 'data-status', 'href').
+   * @param value The attribute value to match against.
+   * @param options Optional configuration.
+   * @param options.exact If true (default), requires an exact attribute match. If false, matches when the attribute contains the value.
+   * @param options.strict If true, throws an error when no matching element is found. Defaults to false.
+   * @returns A promise that resolves to the matched Playwright Locator, or null if not found.
+   *
+   * @example
+   * // Exact match (default)
+   * const activeItem = await repo.getByAttribute(page, 'Dashboard', 'statusCards', 'data-status', 'active');
+   *
+   * @example
+   * // Partial (contains) match
+   * const item = await repo.getByAttribute(page, 'Dashboard', 'links', 'href', '/dashboard', { exact: false });
+   */
+  public async getByAttribute<P extends Page>(
+    page: P,
+    pageName: string,
+    elementName: string,
+    attribute: string,
+    value: string,
+    options: { exact?: boolean; strict?: boolean } = {}
+  ): Promise<ReturnType<P['locator']> | null> {
+    const { exact = true, strict = false } = options;
+    const allElements = await this.getAll(page, pageName, elementName);
+
+    for (const element of allElements) {
+      const attrValue = await element.getAttribute(attribute);
+      if (attrValue === null) continue;
+
+      const matches = exact ? attrValue === value : attrValue.includes(value);
+      if (matches) return element;
+    }
+
+    const matchType = exact ? 'equal to' : 'containing';
+    const msg = `Element '${elementName}' on '${pageName}' with attribute [${attribute}] ${matchType} "${value}" not found.`;
+    if (strict) throw new Error(msg);
+    console.warn(msg);
+    return null;
+  }
+
+  /**
+   * Returns the nth matching element from a list of locators.
+   * @param page The Playwright Page instance.
+   * @param pageName The name of the page block in the JSON repository.
+   * @param elementName The specific element name to look up.
+   * @param index The zero-based index of the element to retrieve.
+   * @param strict If true, throws an error if the index is out of bounds. Defaults to false.
+   * @returns A promise that resolves to the Playwright Locator at the given index, or null if out of bounds.
+   *
+   * @example
+   * const thirdCard = await repo.getByIndex(page, 'ProductList', 'product-cards', 2);
+   * await thirdCard?.click();
+   */
+  public async getByIndex<P extends Page>(
+    page: P,
+    pageName: string,
+    elementName: string,
+    index: number,
+    strict: boolean = false
+  ): Promise<ReturnType<P['locator']> | null> {
+    const baseLocator = await this.get(page, pageName, elementName);
+    const count = await baseLocator.count();
+
+    if (index < 0 || index >= count) {
+      const msg = `Index ${index} out of bounds for '${elementName}' on '${pageName}' (found ${count} elements).`;
+      if (strict) throw new Error(msg);
+      console.warn(msg);
+      return null;
+    }
+
+    return baseLocator.nth(index);
+  }
+
+  /**
+   * Returns the first visible element matching the selector.
+   * Unlike `get()`, which returns the locator after a basic wait, this method
+   * explicitly filters to only visible elements and waits for visibility.
+   * @param page The Playwright Page instance.
+   * @param pageName The name of the page block in the JSON repository.
+   * @param elementName The specific element name to look up.
+   * @param strict If true, throws an error if no visible element is found. Defaults to false.
+   * @returns A promise that resolves to a visible Playwright Locator, or null if none are visible.
+   *
+   * @example
+   * const visibleModal = await repo.getVisible(page, 'Dashboard', 'modal');
+   * await visibleModal?.click();
+   */
+  public async getVisible<P extends Page>(
+    page: P,
+    pageName: string,
+    elementName: string,
+    strict: boolean = false
+  ): Promise<ReturnType<P['locator']> | null> {
+    const baseLocator = await this.get(page, pageName, elementName);
+    const allElements = await baseLocator.all();
+
+    for (const element of allElements) {
+      if (await element.isVisible()) return element;
+    }
+
+    const msg = `No visible elements found for '${elementName}' on '${pageName}'.`;
+    if (strict) throw new Error(msg);
+    console.warn(msg);
+    return null;
+  }
+
+  /**
+   * Filters elements by their ARIA role attribute and returns the first match.
+   * This checks the explicit `role` HTML attribute on elements.
+   * @param page The Playwright Page instance.
+   * @param pageName The name of the page block in the JSON repository.
+   * @param elementName The specific element name to look up.
+   * @param role The ARIA role value to filter by (e.g., 'button', 'link', 'tab').
+   * @param strict If true, throws an error if no matching element is found. Defaults to false.
+   * @returns A promise that resolves to the matched Playwright Locator, or null if not found.
+   *
+   * @example
+   * const navLink = await repo.getByRole(page, 'Header', 'navItems', 'link');
+   * await navLink?.click();
+   */
+  public async getByRole<P extends Page>(
+    page: P,
+    pageName: string,
+    elementName: string,
+    role: string,
+    strict: boolean = false
+  ): Promise<ReturnType<P['locator']> | null> {
+    return this.getByAttribute(page, pageName, elementName, 'role', role, { exact: true, strict });
+  }
+
+  /**
+   * Parses the JSON schema and returns a Playwright-friendly selector string.
+   *
+   * Supported selector keys:
+   * - `css` — CSS selector (e.g., `"css": "button.primary"`)
+   * - `xpath` — XPath expression (e.g., `"xpath": "//button[@id='submit']"`)
+   * - `id` — Element ID, converted to CSS `#id` selector
+   * - `text` — Text content selector
+   * - `testid` / `testId` — Test ID attribute selector (configurable via constructor, defaults to `data-testid`)
+   * - `role` — ARIA role attribute selector (e.g., `"role": "button"`)
+   * - `placeholder` — Placeholder attribute selector
+   * - `label` — `aria-label` attribute selector
+   *
    * @param pageName The name of the page block in the JSON repository.
    * @param elementName The specific element name to look up.
    * @returns The raw string selector formatted for Playwright (e.g., 'css=...', 'xpath=...').
+   * @throws Error if the page, element, or selector is not found.
    */
   public getSelector(pageName: string, elementName: string): string {
     const page = this.pageData.pages.find((p) => p.name === pageName);
@@ -148,6 +301,10 @@ export class ElementRepository {
       case 'text': return `text=${value}`;
       case 'id': return `#${value}`;
       case 'css': return `css=${value}`;
+      case 'testid': return `[${this.testIdAttribute}='${value}']`;
+      case 'role': return `[role='${value}']`;
+      case 'placeholder': return `[placeholder='${value}']`;
+      case 'label': return `[aria-label='${value}']`;
       default: return value;
     }
   }
