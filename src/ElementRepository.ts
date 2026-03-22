@@ -8,25 +8,22 @@ import { pickRandomIndex } from './utils/math';
 export class ElementRepository {
   private pageData: PageRepository;
   private defaultTimeout: number;
-  private testIdAttribute: string;
 
   /**
    * Initializes the repository with a path to a JSON file.
    * @param filePath Path to the JSON file (relative to the project root).
    * @param defaultTimeout Default wait timeout in milliseconds (defaults to 15000).
-   * @param testIdAttribute The HTML attribute used for test IDs (defaults to 'data-testid').
    */
-  constructor(filePath: string, defaultTimeout?: number, testIdAttribute?: string);
+  constructor(filePath: string, defaultTimeout?: number);
 
   /**
    * Initializes the repository with pre-parsed JSON data.
    * @param data The parsed JSON object matching the PageObjectSchema.
    * @param defaultTimeout Default wait timeout in milliseconds (defaults to 15000).
-   * @param testIdAttribute The HTML attribute used for test IDs (defaults to 'data-testid').
    */
-  constructor(data: PageRepository, defaultTimeout?: number, testIdAttribute?: string);
+  constructor(data: PageRepository, defaultTimeout?: number);
 
-  constructor(dataOrPath: string | PageRepository, defaultTimeout: number = 15000, testIdAttribute: string = 'data-testid') {
+  constructor(dataOrPath: string | PageRepository, defaultTimeout: number = 15000) {
     if (typeof dataOrPath === 'string') {
       const absolutePath = path.resolve(process.cwd(), dataOrPath);
       const rawData = fs.readFileSync(absolutePath, 'utf-8');
@@ -36,7 +33,6 @@ export class ElementRepository {
     }
 
     this.defaultTimeout = defaultTimeout;
-    this.testIdAttribute = testIdAttribute;
   }
 
   /**
@@ -301,7 +297,7 @@ export class ElementRepository {
       case 'text': return `text=${value}`;
       case 'id': return `#${value}`;
       case 'css': return `css=${value}`;
-      case 'testid': return `[${this.testIdAttribute}='${value}']`;
+      case 'testid': return `[data-testid='${value}']`;
       case 'role': return `[role='${value}']`;
       case 'placeholder': return `[placeholder='${value}']`;
       case 'label': return `[aria-label='${value}']`;
