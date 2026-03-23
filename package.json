@@ -1,6 +1,6 @@
 {
   "name": "@civitas-cerebrum/element-repository",
-  "version": "0.0.1",
+  "version": "0.0.5",
   "description": "A lightweight, robust package that decouples your Playwright UI selectors from your test code. By externalizing locators into a central JSON repository, you make your test automation framework cleaner, easier to maintain, and accessible to non-developers.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -34,7 +34,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git@github.com:Umutayb/pw-element-repository.git"
+    "url": "git@github.com/civitas-cerebrum/element-repository.git"
   },
   "author": "Umut Ay Bora",
   "license": "MIT"
