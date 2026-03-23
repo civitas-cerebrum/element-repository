@@ -9,7 +9,7 @@ A lightweight, robust package that decouples your Playwright UI selectors from y
 Install the package via your preferred package manager:
 
 ```bash
-npm i pw-element-repository
+npm i @civitas-cerebrum/element-repository
 ```
 
 **Peer Dependencies:**
@@ -97,7 +97,7 @@ You can initialize the `ElementRepository` either by passing the **file path** t
 
 ```typescript
 import { test } from '@playwright/test';
-import { ElementRepository } from 'pw-element-repository';
+import { ElementRepository } from '@civitas-cerebrum/element-repository';
 
 // Option A: Pass the path to your JSON (relative to your project root)
 const repo = new ElementRepository('tests/data/locators.json', 15000);
