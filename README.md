@@ -1,6 +1,6 @@
 # Playwright Element Repository
 
-[![NPM Version](https://img.shields.io/npm/v/pw-element-repository?color=rgb(88%2C%20171%2C%2070))](https://www.npmjs.com/package/pw-element-repository)
+[![NPM Version](https://img.shields.io/npm/v/@civitas-cerebrum/element-repository?color=rgb(88%2C%20171%2C%2070))](https://www.npmjs.com/package/@civitas-cerebrum/element-repository)
 
 A lightweight, robust package that decouples your Playwright UI selectors from your test code. By externalizing locators into a central JSON repository, you make your test automation framework cleaner, easier to maintain, and accessible to non-developers.
 
