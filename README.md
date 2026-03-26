@@ -1,4 +1,4 @@
-# Playwright Element Repository
+# Element Repository
 
 [![NPM Version](https://img.shields.io/npm/v/@civitas-cerebrum/element-repository?color=rgb(88%2C%20171%2C%2070))](https://www.npmjs.com/package/@civitas-cerebrum/element-repository)
 
@@ -13,15 +13,15 @@ npm i @civitas-cerebrum/element-repository
 ```
 
 **Peer Dependencies:**
-This package requires `@playwright/test` or `playwright` to be installed in your project. For mobile/platform testing, `webdriverio` is included as a dependency.
+For web testing, install `@playwright/test` or `playwright`. For mobile/platform testing, `webdriverio` is included as a dependency.
 
 ## 🚀 What is it good for?
 
 * **Zero Hardcoded Selectors:** Keep your Page Objects and Step Definitions completely free of complex DOM queries.
 * **Platform-Agnostic Element API:** A unified `Element` interface with interaction, state, extraction, querying, and waiting methods that work identically across Playwright and WebDriverIO.
-* **Dynamic Parsing:** Automatically converts your JSON configuration into native Playwright CSS, XPath, ID, Text, Test ID, Role, Placeholder, or Label selectors.
+* **Dynamic Parsing:** Automatically converts your JSON configuration into platform-native selectors — CSS, XPath, ID, Text, Test ID, Role, Placeholder, and Label for web; Accessibility ID, UIAutomator, Predicate, Class Chain, and more for mobile.
 * **Smart Locators:** Built-in methods for handling arrays, randomized element selection (great for catalog/PLP testing), text-filtering, attribute-filtering, and visibility checks.
-* **Soft Waiting:** Seamlessly waits for elements to attach and become visible before returning a locator to prevent flake.
+* **Soft Waiting:** Seamlessly waits for elements to attach and become visible before returning them to prevent flake.
 
 ## 🏗️ Configuration
 
@@ -204,7 +204,6 @@ You can initialize the `ElementRepository` either by passing the **file path** t
 ### Initialization
 
 ```typescript
-import { test } from '@playwright/test';
 import { ElementRepository } from '@civitas-cerebrum/element-repository';
 
 // Option A: Pass the path to your JSON (relative to your project root)
@@ -223,7 +222,7 @@ The third parameter (`platform`) defaults to `'web'`. When set to a non-web plat
 
 ### Retrieving Elements
 
-The repository exposes clean, asynchronous methods that return `Element` objects (wrapping Playwright `Locator` for web, or WebdriverIO elements for mobile), ready for interaction.
+The repository exposes clean, asynchronous methods that return unified `Element` objects, ready for interaction regardless of the underlying platform.
 
 ```typescript
 test('Search and select random product', async ({ page }) => {
