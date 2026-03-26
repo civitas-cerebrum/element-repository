@@ -1,7 +1,7 @@
 {
   "name": "@civitas-cerebrum/element-repository",
   "version": "0.0.8",
-  "description": "A lightweight, robust package that decouples your Playwright UI selectors from your test code. By externalizing locators into a central JSON repository, you make your test automation framework cleaner, easier to maintain, and accessible to non-developers.",
+  "description": "A lightweight, robust package that decouples your UI selectors from your test code. By externalizing locators into a central JSON repository, you make your test automation framework cleaner, easier to maintain, and accessible to non-developers.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
@@ -14,9 +14,20 @@
     "dist"
   ],
   "devDependencies": {
-    "@playwright/test": "^1.58.2",
     "@types/node": "^20.0.0",
     "typescript": "^5.0.0"
+  },
+  "peerDependencies": {
+    "@playwright/test": "^1.58.2",
+    "webdriverio": "^9.27.0"
+  },
+  "peerDependenciesMeta": {
+    "@playwright/test": {
+      "optional": true
+    },
+    "webdriverio": {
+      "optional": true
+    }
   },
   "keywords": [
     "playwright",
@@ -39,7 +50,6 @@
   "author": "Umut Ay Bora",
   "license": "MIT",
   "dependencies": {
-    "@civitas-cerebrum/test-coverage": "^0.0.8",
-    "webdriverio": "^9.27.0"
+    "@civitas-cerebrum/test-coverage": "^0.0.8"
   }
 }
