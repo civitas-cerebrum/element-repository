@@ -42,22 +42,6 @@ Create a JSON file in your project to hold your selectors. The file must adhere 
         {
           "elementName": "submit-button",
           "selector": { "id": "btn-submit" }
-        },
-        {
-          "elementName": "login-button",
-          "selector": { "testid": "login-btn" }
-        },
-        {
-          "elementName": "nav-links",
-          "selector": { "role": "link" }
-        },
-        {
-          "elementName": "search-field",
-          "selector": { "placeholder": "Search..." }
-        },
-        {
-          "elementName": "close-button",
-          "selector": { "label": "Close" }
         }
       ]
     },
@@ -147,55 +131,6 @@ The `platform` field on each page object determines which selector format is use
 > **Note:** The `text` key resolves to `android=new UiSelector().text("...")` on Android, `-ios predicate string:label == "..."` on iOS, and the raw value on other platforms.
 >
 > **Note:** All strategy keys that contain spaces also accept a camelCase alias (e.g., `"accessibilityId"` instead of `"accessibility id"`). Both forms produce identical selectors.
-
-#### Full Example
-
-```json
-{
-  "pages": [
-    {
-      "name": "LoginPage",
-      "platform": "web",
-      "elements": [
-        { "elementName": "emailInput", "selector": { "css": "input[type='email']" } },
-        { "elementName": "passwordInput", "selector": { "id": "password" } },
-        { "elementName": "submitButton", "selector": { "testid": "login-submit" } },
-        { "elementName": "forgotPasswordLink", "selector": { "text": "Forgot password?" } },
-        { "elementName": "heading", "selector": { "xpath": "//h1[@class='title']" } },
-        { "elementName": "navMenu", "selector": { "role": "navigation" } },
-        { "elementName": "searchField", "selector": { "placeholder": "Search..." } },
-        { "elementName": "closeButton", "selector": { "label": "Close" } }
-      ]
-    },
-    {
-      "name": "LoginPage",
-      "platform": "android",
-      "elements": [
-        { "elementName": "emailInput", "selector": { "accessibilityId": "email-field" } },
-        { "elementName": "passwordInput", "selector": { "id": "password-field" } },
-        { "elementName": "submitButton", "selector": { "androidUIAutomator": "new UiSelector().text(\"Log In\")" } },
-        { "elementName": "heading", "selector": { "xpath": "//android.widget.TextView[@text='Login']" } },
-        { "elementName": "editField", "selector": { "className": "android.widget.EditText" } },
-        { "elementName": "taggedView", "selector": { "androidViewTag": "login-form" } },
-        { "elementName": "matchedItem", "selector": { "androidDataMatcher": "{\"name\":\"email\"}" } },
-        { "elementName": "welcomeText", "selector": { "text": "Welcome back" } }
-      ]
-    },
-    {
-      "name": "LoginPage",
-      "platform": "ios",
-      "elements": [
-        { "elementName": "emailInput", "selector": { "accessibilityId": "email-field" } },
-        { "elementName": "passwordInput", "selector": { "iOSNsPredicateString": "type == 'XCUIElementTypeSecureTextField'" } },
-        { "elementName": "submitButton", "selector": { "iOSClassChain": "**/XCUIElementTypeButton[`label == \"Log In\"`]" } },
-        { "elementName": "heading", "selector": { "xpath": "//XCUIElementTypeStaticText[@name='Login']" } },
-        { "elementName": "textField", "selector": { "className": "XCUIElementTypeTextField" } },
-        { "elementName": "welcomeText", "selector": { "text": "Welcome back" } }
-      ]
-    }
-  ]
-}
-```
 
 ## 💻 Usage
 
