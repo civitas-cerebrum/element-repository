@@ -12,6 +12,21 @@
           "selector": { "css": "p a[href]" }
         }
       ]
+    },
+    {
+      "name": "ButtonsPage",
+      "elements": [
+        { "elementName": "primaryButton", "selector": { "testid": "btn-primary" } },
+        { "elementName": "secondaryButton", "selector": { "testid": "btn-secondary" } },
+        { "elementName": "dangerButton", "selector": { "testid": "btn-danger" } },
+        { "elementName": "ghostButton", "selector": { "testid": "btn-ghost" } },
+        { "elementName": "outlineButton", "selector": { "testid": "btn-outline" } },
+        { "elementName": "allVariantButtons", "selector": { "css": "button.btn" } },
+        { "elementName": "disabledButton", "selector": { "testid": "btn-disabled" } },
+        { "elementName": "loadingButton", "selector": { "testid": "btn-loading" } },
+        { "elementName": "resultText", "selector": { "testid": "btn-result" } },
+        { "elementName": "pageHeading", "selector": { "css": "main h1" } }
+      ]
     }
   ]
 }

@@ -1,8 +1,11 @@
-// Export all types so consumers can type-check their JSON
+// Export all schema types
 export * from './schema';
 
-// Export standalone utilities in case the user finds them helpful
+// Export standalone utilities
 export * from './utils/math';
+
+// Export element types
+export { Element, ElementType, WebElement, PlatformElement, isWeb, isPlatform } from './types';
 
 // Export the primary class
 export { ElementRepository } from './ElementRepository';

@@ -2,14 +2,15 @@ export interface Selector {
   [key: string]: string;
 }
 
-export interface Element {
+export interface ElementDefinition {
   elementName: string;
   selector: Selector;
 }
 
 export interface PageObject {
   name: string;
-  elements: Element[];
+  platform?: string;
+  elements: ElementDefinition[];
 }
 
 export interface PageObjectSchema {
@@ -17,6 +18,8 @@ export interface PageObjectSchema {
 }
 
 export interface Page {
-  waitForSelector(selector: string, options?: any): Promise<any>;
-  locator(selector: string): any;
+  waitForSelector?(selector: string, options?: any): Promise<any>;
+  locator?(selector: string): any;
+  $?(selector: string): Promise<any>;
+  $$(selector: string): Promise<any[]>;
 }

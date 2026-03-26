@@ -2,14 +2,15 @@ export interface Selector {
   [key: string]: string;
 }
 
-export interface Element {
+export interface ElementDefinition {
   elementName: string;
   selector: Selector;
 }
 
 export interface PageObject {
   name: string;
-  elements: Element[];
+  platform?: string;
+  elements: ElementDefinition[];
 }
 
 export interface PageRepository {
