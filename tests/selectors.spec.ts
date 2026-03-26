@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { ElementRepository } from '../src/ElementRepository';
+import { ElementRepository } from '../src/repo/ElementRepository';
 
 test.describe('getSelector — Appium platform formatting', () => {
 
@@ -12,7 +12,6 @@ test.describe('getSelector — Appium platform formatting', () => {
           { elementName: 'byAccessibilityId', selector: { 'accessibility id': 'Login' } },
           { elementName: 'byXpath', selector: { xpath: '//android.widget.Button' } },
           { elementName: 'byId', selector: { id: 'submit-btn' } },
-          { elementName: 'byCss', selector: { css: 'button.primary' } },
           { elementName: 'byUiAutomator', selector: { uiautomator: 'new UiSelector().text("Submit")' } },
           { elementName: 'byText', selector: { text: 'Submit' } },
           { elementName: 'byClassName', selector: { 'class name': 'android.widget.EditText' } },
@@ -47,10 +46,6 @@ test.describe('getSelector — Appium platform formatting', () => {
 
     test('id → #value', () => {
       expect(repo.getSelector('TestPage', 'byId')).toBe('#submit-btn');
-    });
-
-    test('css → css=value', () => {
-      expect(repo.getSelector('TestPage', 'byCss')).toBe('css=button.primary');
     });
 
     test('uiautomator → android=value', () => {
@@ -95,6 +90,125 @@ test.describe('getSelector — Appium platform formatting', () => {
 
     test('class name → raw value', () => {
       expect(repo.getSelector('TestPage', 'byClassName')).toBe('XCUIElementTypeTextField');
+    });
+  });
+
+  test.describe('Android — new strategies', () => {
+    const newStrategyData = {
+      pages: [{
+        name: 'TestPage',
+        platform: 'android',
+        elements: [
+          { elementName: 'byTagName', selector: { 'tag name': 'button' } },
+          { elementName: 'byName', selector: { name: 'username' } },
+          { elementName: 'byDataMatcher', selector: { 'android data matcher': '{"name":"Title"}' } },
+          { elementName: 'byViewMatcher', selector: { 'android view matcher': '{"id":"btn"}' } },
+          { elementName: 'byViewTag', selector: { 'android view tag': 'my-tag' } },
+        ],
+      }],
+    };
+    const repo = new ElementRepository(newStrategyData, undefined, 'android');
+
+    test('tag name → raw value', () => {
+      expect(repo.getSelector('TestPage', 'byTagName')).toBe('button');
+    });
+
+    test('name → raw value', () => {
+      expect(repo.getSelector('TestPage', 'byName')).toBe('username');
+    });
+
+    test('android data matcher → -android datamatcher:value', () => {
+      expect(repo.getSelector('TestPage', 'byDataMatcher')).toBe('-android datamatcher:{"name":"Title"}');
+    });
+
+    test('android view matcher → -android viewmatcher:value', () => {
+      expect(repo.getSelector('TestPage', 'byViewMatcher')).toBe('-android viewmatcher:{"id":"btn"}');
+    });
+
+    test('android view tag → -android viewtag:value', () => {
+      expect(repo.getSelector('TestPage', 'byViewTag')).toBe('-android viewtag:my-tag');
+    });
+  });
+
+  test.describe('camelCase strategy aliases', () => {
+    const camelCaseData = {
+      pages: [
+        {
+          name: 'TestPage',
+          platform: 'android',
+          elements: [
+            { elementName: 'byAccessibilityId', selector: { accessibilityId: 'LoginBtn' } },
+            { elementName: 'byUIAutomator', selector: { androidUIAutomator: 'new UiSelector().text("Go")' } },
+            { elementName: 'byClassName', selector: { className: 'android.widget.EditText' } },
+            { elementName: 'byTagName', selector: { tagName: 'button' } },
+            { elementName: 'byDataMatcher', selector: { androidDataMatcher: '{"name":"Title"}' } },
+            { elementName: 'byViewMatcher', selector: { androidViewMatcher: '{"id":"btn"}' } },
+            { elementName: 'byViewTag', selector: { androidViewTag: 'my-tag' } },
+          ],
+        },
+        {
+          name: 'TestPage',
+          platform: 'ios',
+          elements: [
+            { elementName: 'byPredicate', selector: { iOSNsPredicateString: 'label == "Login"' } },
+            { elementName: 'byClassChain', selector: { iOSClassChain: '**/XCUIElementTypeButton' } },
+            { elementName: 'byAccessibilityId', selector: { accessibilityId: 'MyButton' } },
+            { elementName: 'byClassName', selector: { className: 'XCUIElementTypeTextField' } },
+          ],
+        },
+      ],
+    };
+
+    test.describe('Android camelCase', () => {
+      const repo = new ElementRepository(camelCaseData, undefined, 'android');
+
+      test('accessibilityId → ~value', () => {
+        expect(repo.getSelector('TestPage', 'byAccessibilityId')).toBe('~LoginBtn');
+      });
+
+      test('androidUIAutomator → android=value', () => {
+        expect(repo.getSelector('TestPage', 'byUIAutomator')).toBe('android=new UiSelector().text("Go")');
+      });
+
+      test('className → raw value', () => {
+        expect(repo.getSelector('TestPage', 'byClassName')).toBe('android.widget.EditText');
+      });
+
+      test('tagName → raw value', () => {
+        expect(repo.getSelector('TestPage', 'byTagName')).toBe('button');
+      });
+
+      test('androidDataMatcher → -android datamatcher:value', () => {
+        expect(repo.getSelector('TestPage', 'byDataMatcher')).toBe('-android datamatcher:{"name":"Title"}');
+      });
+
+      test('androidViewMatcher → -android viewmatcher:value', () => {
+        expect(repo.getSelector('TestPage', 'byViewMatcher')).toBe('-android viewmatcher:{"id":"btn"}');
+      });
+
+      test('androidViewTag → -android viewtag:value', () => {
+        expect(repo.getSelector('TestPage', 'byViewTag')).toBe('-android viewtag:my-tag');
+      });
+    });
+
+    test.describe('iOS camelCase', () => {
+      const repo = new ElementRepository(camelCaseData, undefined, 'ios');
+
+      test('iOSNsPredicateString → -ios predicate string:value', () => {
+        expect(repo.getSelector('TestPage', 'byPredicate')).toBe('-ios predicate string:label == "Login"');
+      });
+
+      test('iOSClassChain → -ios class chain:value', () => {
+        expect(repo.getSelector('TestPage', 'byClassChain')).toBe('-ios class chain:**/XCUIElementTypeButton');
+      });
+
+      test('accessibilityId → ~value', () => {
+        expect(repo.getSelector('TestPage', 'byAccessibilityId')).toBe('~MyButton');
+      });
+
+      test('className → raw value', () => {
+        expect(repo.getSelector('TestPage', 'byClassName')).toBe('XCUIElementTypeTextField');
+      });
     });
   });
 

@@ -1,9 +1,13 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
-import { PageRepository, PageObject } from './schema/repository';
-import { pickRandomIndex } from './utils/math';
-import { Element, WebElement, PlatformElement } from './types';
+import { PageRepository, PageObject } from '../schema/repository';
+import { pickRandomIndex } from '../utils/math';
+import { Element, WebElement, PlatformElement } from '../types';
+import {
+  SelectorFormatter,
+  WEB_FORMATTERS, APPIUM_FORMATTERS, ANDROID_FORMATTERS, IOS_FORMATTERS,
+} from './formatters';
 
 export class ElementRepository {
   private pageData: PageRepository;
@@ -50,6 +54,7 @@ export class ElementRepository {
     );
   }
 
+  /** Returns `true` when the repository is configured for the `'web'` platform. */
   private isWebPlatform(): boolean {
     return this.platform === 'web';
   }
@@ -63,6 +68,27 @@ export class ElementRepository {
   }
 
   /**
+   * Creates the platform-appropriate Element wrapper and waits for it to
+   * be attached in the DOM / exist in the view hierarchy.
+   *
+   * This is the **only** place that branches on {@link isWebPlatform} for
+   * element construction, keeping every public API method platform-agnostic.
+   *
+   * @param page        The page (Playwright) or driver (WebDriverIO) instance.
+   * @param pageName    The name of the page block in the JSON repository.
+   * @param elementName The specific element name to look up.
+   * @returns A promise that resolves to the located Element.
+   */
+  private async resolveElement(page: any, pageName: string, elementName: string): Promise<Element> {
+    const selector = this.getSelector(pageName, elementName);
+    const element = this.isWebPlatform()
+      ? new WebElement(page.locator(selector))
+      : new PlatformElement(page, selector);
+    await element.waitFor({ state: 'attached', timeout: this.defaultTimeout }).catch(() => {});
+    return element;
+  }
+
+  /**
    * Retrieves a single Element based on the externalized JSON mapping.
    * @param page The page/driver instance.
    * @param pageName The name of the page block in the JSON repository.
@@ -70,13 +96,7 @@ export class ElementRepository {
    * @returns A promise that resolves to an Element.
    */
   public async get(page: any, pageName: string, elementName: string): Promise<Element> {
-    if (this.isWebPlatform()) {
-      const selector = this.getSelector(pageName, elementName);
-      await page.waitForSelector(selector, { timeout: this.defaultTimeout }).catch(() => {});
-      return new WebElement(page.locator(selector));
-    }
-    const selector = this.getSelector(pageName, elementName);
-    return new PlatformElement(page, selector);
+    return this.resolveElement(page, pageName, elementName);
   }
 
   /**
@@ -87,13 +107,8 @@ export class ElementRepository {
    * @returns A promise that resolves to an array of Elements.
    */
   public async getAll(page: any, pageName: string, elementName: string): Promise<Element[]> {
-    if (this.isWebPlatform()) {
-      const el = await this.get(page, pageName, elementName);
-      return el.all();
-    }
-    const selector = this.getSelector(pageName, elementName);
-    const elements: any[] = await page.$$(selector);
-    return elements.map(rawEl => new PlatformElement(page, selector, rawEl));
+    const el = await this.resolveElement(page, pageName, elementName);
+    return el.all();
   }
 
   /**
@@ -105,31 +120,14 @@ export class ElementRepository {
    * @returns A promise that resolves to a randomly selected Element, or null if none are found.
    */
   public async getRandom(page: any, pageName: string, elementName: string, strict: boolean = false): Promise<Element | null> {
-    if (this.isWebPlatform()) {
-      const baseEl = await this.get(page, pageName, elementName);
-      const count = await baseEl.count();
-      if (count === 0) {
-        const msg = `No elements found for '${elementName}' on '${pageName}'`;
-        if (strict) throw new Error(msg);
-        console.warn(msg);
-        return null;
-      }
-      const index = pickRandomIndex(count);
-      const randomEl = baseEl.nth(index);
-      await randomEl.waitFor({ state: 'attached', timeout: this.defaultTimeout });
-      await randomEl.waitFor({ state: 'visible', timeout: this.defaultTimeout });
-      return randomEl;
-    }
-    const selector = this.getSelector(pageName, elementName);
-    const elements: any[] = await page.$$(selector);
-    if (elements.length === 0) {
+    const allElements = await this.getAll(page, pageName, elementName);
+    if (allElements.length === 0) {
       const msg = `No elements found for '${elementName}' on '${pageName}'`;
       if (strict) throw new Error(msg);
       console.warn(msg);
       return null;
     }
-    const randomIndex = Math.floor(Math.random() * elements.length);
-    return new PlatformElement(page, selector, elements[randomIndex]);
+    return allElements[pickRandomIndex(allElements.length)];
   }
 
   /**
@@ -142,24 +140,10 @@ export class ElementRepository {
    * @returns A promise that resolves to the matched Element, or null if not found.
    */
   public async getByText(page: any, pageName: string, elementName: string, desiredText: string, strict: boolean = false): Promise<Element | null> {
-    if (this.isWebPlatform()) {
-      const baseEl = await this.get(page, pageName, elementName);
-      const filtered = baseEl.filter({ hasText: desiredText }).first();
-      if ((await filtered.count()) === 0) {
-        const msg = `Element '${elementName}' on '${pageName}' with text "${desiredText}" not found.`;
-        if (strict) throw new Error(msg);
-        console.warn(msg);
-        return null;
-      }
-      return filtered;
-    }
-    const selector = this.getSelector(pageName, elementName);
-    const elements: any[] = await page.$$(selector);
-    for (const el of elements) {
-      const elText: string = await el.getText();
-      if (elText.trim() === desiredText) {
-        return new PlatformElement(page, selector, el);
-      }
+    const allElements = await this.getAll(page, pageName, elementName);
+    for (const element of allElements) {
+      const text = await element.textContent();
+      if (text?.trim() === desiredText) return element;
     }
     const msg = `Element '${elementName}' on '${pageName}' with text "${desiredText}" not found.`;
     if (strict) throw new Error(msg);
@@ -221,26 +205,14 @@ export class ElementRepository {
     index: number,
     strict: boolean = false
   ): Promise<Element | null> {
-    if (this.isWebPlatform()) {
-      const baseEl = await this.get(page, pageName, elementName);
-      const count = await baseEl.count();
-      if (index < 0 || index >= count) {
-        const msg = `Index ${index} out of bounds for '${elementName}' on '${pageName}' (found ${count} elements).`;
-        if (strict) throw new Error(msg);
-        console.warn(msg);
-        return null;
-      }
-      return baseEl.nth(index);
-    }
-    const selector = this.getSelector(pageName, elementName);
-    const elements: any[] = await page.$$(selector);
-    if (index < 0 || index >= elements.length) {
-      const msg = `Index ${index} out of bounds for '${elementName}' on '${pageName}' (found ${elements.length} elements).`;
+    const allElements = await this.getAll(page, pageName, elementName);
+    if (index < 0 || index >= allElements.length) {
+      const msg = `Index ${index} out of bounds for '${elementName}' on '${pageName}' (found ${allElements.length} elements).`;
       if (strict) throw new Error(msg);
       console.warn(msg);
       return null;
     }
-    return new PlatformElement(page, selector, elements[index]);
+    return allElements[index];
   }
 
   /**
@@ -319,7 +291,12 @@ export class ElementRepository {
    * **Web (Playwright) selector keys:** css, xpath, id, text, testid, role, placeholder, label
    *
    * **Non-web (Appium) selector keys:** accessibility id, xpath, id, css, uiautomator,
-   * predicate, class chain, class name, text
+   * predicate, class chain, class name, tag name, name, android data matcher,
+   * android view matcher, android view tag, text
+   *
+   * All space-separated keys also accept camelCase aliases (e.g., `accessibilityId`,
+   * `androidUIAutomator`, `iOSNsPredicateString`, `iOSClassChain`, `className`,
+   * `tagName`, `androidDataMatcher`, `androidViewMatcher`, `androidViewTag`).
    *
    * @param pageName The name of the page block in the JSON repository.
    * @param elementName The specific element name to look up.
@@ -328,45 +305,19 @@ export class ElementRepository {
    */
   public getSelector(pageName: string, elementName: string): string {
     const { strategy, value } = this.getSelectorRaw(pageName, elementName);
+    const formatters = this.getFormatters();
+    const formatter = formatters[strategy.toLowerCase()];
+    return formatter ? formatter(value) : value;
+  }
 
-    if (this.isWebPlatform()) {
-      switch (strategy.toLowerCase()) {
-        case 'xpath': return `xpath=${value}`;
-        case 'text': return `text=${value}`;
-        case 'id': return `#${value}`;
-        case 'css': return `css=${value}`;
-        case 'testid': return `[data-testid='${value}']`;
-        case 'role': return `[role='${value}']`;
-        case 'placeholder': return `[placeholder='${value}']`;
-        case 'label': return `[aria-label='${value}']`;
-        default: return value;
-      }
-    }
-
-    // Non-web (Appium) formatting
-    switch (strategy) {
-      case 'accessibility id':
-        return `~${value}`;
-      case 'xpath':
-        return value;
-      case 'id':
-        return `#${value}`;
-      case 'css':
-        return `css=${value}`;
-      case 'uiautomator':
-        return `android=${value}`;
-      case 'predicate':
-        return `-ios predicate string:${value}`;
-      case 'class chain':
-        return `-ios class chain:${value}`;
-      case 'class name':
-        return value;
-      case 'text':
-        if (this.platform === 'android') return `android=new UiSelector().text("${value}")`;
-        if (this.platform === 'ios') return `-ios predicate string:label == "${value}"`;
-        return value;
-      default:
-        return value;
-    }
+  /**
+   * Returns the {@link SelectorFormatter} lookup table for the current platform.
+   * Falls back to the base {@link APPIUM_FORMATTERS} for unrecognised non-web platforms.
+   */
+  private getFormatters(): Record<string, SelectorFormatter> {
+    if (this.isWebPlatform()) return WEB_FORMATTERS;
+    if (this.platform === 'android') return ANDROID_FORMATTERS;
+    if (this.platform === 'ios') return IOS_FORMATTERS;
+    return APPIUM_FORMATTERS;
   }
 }
