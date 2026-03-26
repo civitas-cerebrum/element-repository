@@ -319,7 +319,12 @@ export class ElementRepository {
    * **Web (Playwright) selector keys:** css, xpath, id, text, testid, role, placeholder, label
    *
    * **Non-web (Appium) selector keys:** accessibility id, xpath, id, css, uiautomator,
-   * predicate, class chain, class name, text
+   * predicate, class chain, class name, tag name, name, android data matcher,
+   * android view matcher, android view tag, text
+   *
+   * All space-separated keys also accept camelCase aliases (e.g., `accessibilityId`,
+   * `androidUIAutomator`, `iOSNsPredicateString`, `iOSClassChain`, `className`,
+   * `tagName`, `androidDataMatcher`, `androidViewMatcher`, `androidViewTag`).
    *
    * @param pageName The name of the page block in the JSON repository.
    * @param elementName The specific element name to look up.
@@ -343,9 +348,10 @@ export class ElementRepository {
       }
     }
 
-    // Non-web (Appium) formatting
+    // Non-web (Appium) formatting — supports both space-separated and camelCase strategy names
     switch (strategy) {
       case 'accessibility id':
+      case 'accessibilityId':
         return `~${value}`;
       case 'xpath':
         return value;
@@ -354,13 +360,31 @@ export class ElementRepository {
       case 'css':
         return `css=${value}`;
       case 'uiautomator':
+      case 'androidUIAutomator':
         return `android=${value}`;
       case 'predicate':
+      case 'iOSNsPredicateString':
         return `-ios predicate string:${value}`;
       case 'class chain':
+      case 'iOSClassChain':
         return `-ios class chain:${value}`;
       case 'class name':
+      case 'className':
         return value;
+      case 'tag name':
+      case 'tagName':
+        return value;
+      case 'name':
+        return value;
+      case 'android data matcher':
+      case 'androidDataMatcher':
+        return `-android datamatcher:${value}`;
+      case 'android view matcher':
+      case 'androidViewMatcher':
+        return `-android viewmatcher:${value}`;
+      case 'android view tag':
+      case 'androidViewTag':
+        return `-android viewtag:${value}`;
       case 'text':
         if (this.platform === 'android') return `android=new UiSelector().text("${value}")`;
         if (this.platform === 'ios') return `-ios predicate string:label == "${value}"`;

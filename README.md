@@ -126,19 +126,75 @@ The `platform` field on each page object determines which selector format is use
 
 #### Non-Web / Mobile (Appium)
 
-| Key | Resolves To | Example |
-|-----|-------------|---------|
-| `accessibility id` | `~<value>` | `"accessibility id": "LoginBtn"` |
-| `xpath` | `<value>` (raw) | `"xpath": "//android.widget.Button"` |
-| `id` | `#<value>` | `"id": "submit-btn"` |
-| `css` | `css=<value>` | `"css": "button.primary"` |
-| `uiautomator` | `android=<value>` | `"uiautomator": "new UiSelector().text(\"Go\")"` |
-| `predicate` | `-ios predicate string:<value>` | `"predicate": "label == \"Login\""` |
-| `class chain` | `-ios class chain:<value>` | `"class chain": "**/XCUIElementTypeButton"` |
-| `class name` | `<value>` (raw) | `"class name": "android.widget.EditText"` |
-| `text` | Platform-specific | `"text": "Submit"` |
+| Key | camelCase Alias | Resolves To | Example |
+|-----|-----------------|-------------|---------|
+| `accessibility id` | `accessibilityId` | `~<value>` | `"accessibility id": "LoginBtn"` |
+| `xpath` | — | `<value>` (raw) | `"xpath": "//android.widget.Button"` |
+| `id` | — | `#<value>` | `"id": "submit-btn"` |
+| `css` | — | `css=<value>` | `"css": "button.primary"` |
+| `uiautomator` | `androidUIAutomator` | `android=<value>` | `"uiautomator": "new UiSelector().text(\"Go\")"` |
+| `predicate` | `iOSNsPredicateString` | `-ios predicate string:<value>` | `"predicate": "label == \"Login\""` |
+| `class chain` | `iOSClassChain` | `-ios class chain:<value>` | `"class chain": "**/XCUIElementTypeButton"` |
+| `class name` | `className` | `<value>` (raw) | `"class name": "android.widget.EditText"` |
+| `tag name` | `tagName` | `<value>` (raw) | `"tag name": "button"` |
+| `name` | — | `<value>` (raw) | `"name": "username"` |
+| `android data matcher` | `androidDataMatcher` | `-android datamatcher:<value>` | `"androidDataMatcher": "{\"name\":\"Title\"}"` |
+| `android view matcher` | `androidViewMatcher` | `-android viewmatcher:<value>` | `"androidViewMatcher": "{\"id\":\"btn\"}"` |
+| `android view tag` | `androidViewTag` | `-android viewtag:<value>` | `"androidViewTag": "my-tag"` |
+| `text` | — | Platform-specific | `"text": "Submit"` |
 
 > **Note:** The `text` key resolves to `android=new UiSelector().text("...")` on Android, `-ios predicate string:label == "..."` on iOS, and the raw value on other platforms.
+>
+> **Note:** All strategy keys that contain spaces also accept a camelCase alias (e.g., `"accessibilityId"` instead of `"accessibility id"`). Both forms produce identical selectors.
+
+#### Full Example
+
+```json
+{
+  "pages": [
+    {
+      "name": "LoginPage",
+      "platform": "web",
+      "elements": [
+        { "elementName": "emailInput", "selector": { "css": "input[type='email']" } },
+        { "elementName": "passwordInput", "selector": { "id": "password" } },
+        { "elementName": "submitButton", "selector": { "testid": "login-submit" } },
+        { "elementName": "forgotPasswordLink", "selector": { "text": "Forgot password?" } },
+        { "elementName": "heading", "selector": { "xpath": "//h1[@class='title']" } },
+        { "elementName": "navMenu", "selector": { "role": "navigation" } },
+        { "elementName": "searchField", "selector": { "placeholder": "Search..." } },
+        { "elementName": "closeButton", "selector": { "label": "Close" } }
+      ]
+    },
+    {
+      "name": "LoginPage",
+      "platform": "android",
+      "elements": [
+        { "elementName": "emailInput", "selector": { "accessibilityId": "email-field" } },
+        { "elementName": "passwordInput", "selector": { "id": "password-field" } },
+        { "elementName": "submitButton", "selector": { "androidUIAutomator": "new UiSelector().text(\"Log In\")" } },
+        { "elementName": "heading", "selector": { "xpath": "//android.widget.TextView[@text='Login']" } },
+        { "elementName": "editField", "selector": { "className": "android.widget.EditText" } },
+        { "elementName": "taggedView", "selector": { "androidViewTag": "login-form" } },
+        { "elementName": "matchedItem", "selector": { "androidDataMatcher": "{\"name\":\"email\"}" } },
+        { "elementName": "welcomeText", "selector": { "text": "Welcome back" } }
+      ]
+    },
+    {
+      "name": "LoginPage",
+      "platform": "ios",
+      "elements": [
+        { "elementName": "emailInput", "selector": { "accessibilityId": "email-field" } },
+        { "elementName": "passwordInput", "selector": { "iOSNsPredicateString": "type == 'XCUIElementTypeSecureTextField'" } },
+        { "elementName": "submitButton", "selector": { "iOSClassChain": "**/XCUIElementTypeButton[`label == \"Log In\"`]" } },
+        { "elementName": "heading", "selector": { "xpath": "//XCUIElementTypeStaticText[@name='Login']" } },
+        { "elementName": "textField", "selector": { "className": "XCUIElementTypeTextField" } },
+        { "elementName": "welcomeText", "selector": { "text": "Welcome back" } }
+      ]
+    }
+  ]
+}
+```
 
 ## 💻 Usage
 
