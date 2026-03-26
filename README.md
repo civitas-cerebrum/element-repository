@@ -13,7 +13,7 @@ npm i @civitas-cerebrum/element-repository
 ```
 
 **Peer Dependencies:**
-For web testing, install `@playwright/test` or `playwright`. For mobile/platform testing, `webdriverio` is included as a dependency.
+For web testing, install `@playwright/test` or `playwright`. For mobile/platform testing, install `webdriverio`.
 
 ## 🚀 What is it good for?
 
