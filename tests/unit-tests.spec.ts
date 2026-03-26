@@ -62,12 +62,12 @@ test.describe('Type Compatibility Tests', () => {
 
     await test.step('Android platform returns android selector', () => {
       const androidRepo = new ElementRepository(mockData, undefined, 'android');
-      expect(androidRepo.getSelector('LoginPage', 'submitButton')).toBe('xpath=//android.widget.Button[@text="Submit"]');
+      expect(androidRepo.getSelector('LoginPage', 'submitButton')).toBe('//android.widget.Button[@text="Submit"]');
     });
 
     await test.step('iOS platform returns ios selector', () => {
       const iosRepo = new ElementRepository(mockData, undefined, 'ios');
-      expect(iosRepo.getSelector('LoginPage', 'submitButton')).toBe('xpath=//XCUIElementTypeButton[@name="Submit"]');
+      expect(iosRepo.getSelector('LoginPage', 'submitButton')).toBe('//XCUIElementTypeButton[@name="Submit"]');
     });
   });
 
