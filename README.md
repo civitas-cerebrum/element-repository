@@ -18,6 +18,7 @@ This package requires `@playwright/test` or `playwright` to be installed in your
 ## 🚀 What is it good for?
 
 * **Zero Hardcoded Selectors:** Keep your Page Objects and Step Definitions completely free of complex DOM queries.
+* **Platform-Agnostic Element API:** A unified `Element` interface with interaction, state, extraction, querying, and waiting methods that work identically across Playwright and WebDriverIO.
 * **Dynamic Parsing:** Automatically converts your JSON configuration into native Playwright CSS, XPath, ID, Text, Test ID, Role, Placeholder, or Label selectors.
 * **Smart Locators:** Built-in methods for handling arrays, randomized element selection (great for catalog/PLP testing), text-filtering, attribute-filtering, and visibility checks.
 * **Soft Waiting:** Seamlessly waits for elements to attach and become visible before returning a locator to prevent flake.
@@ -73,7 +74,7 @@ Create a JSON file in your project to hold your selectors. The file must adhere 
 }
 ```
 
-#### Multi-Platform Configuration
+### Multi-Platform Configuration
 
 Use the `platform` field to define platform-specific selectors for the same page. Pages without a `platform` field default to `web`.
 
@@ -259,28 +260,29 @@ test('Search and select random product', async ({ page }) => {
   const navLink = await repo.getByRole(page, 'HomePage', 'nav-links', 'link');
   await navLink?.click();
 });
-
 ```
 
 ## 🛠️ API Reference
 
-### `get(page, pageName, elementName)`
+### ElementRepository
+
+#### `get(page, pageName, elementName)`
 
 Returns a single `Element`. For web, waits for the selector to attach to the DOM based on your configured timeout. For platform, returns a lazy `PlatformElement` that resolves on interaction.
 
-### `getAll(page, pageName, elementName)`
+#### `getAll(page, pageName, elementName)`
 
 Returns an array of `Element` objects. Useful when you need to iterate over multiple elements.
 
-### `getRandom(page, pageName, elementName, strict?)`
+#### `getRandom(page, pageName, elementName, strict?)`
 
 Counts the matching elements and randomly selects one. Safely waits for the specific randomized element to become visible.
 
-### `getByText(page, pageName, elementName, desiredText, strict?)`
+#### `getByText(page, pageName, elementName, desiredText, strict?)`
 
 Returns the first `Element` matching the mapped selector that also contains the `desiredText`.
 
-### `getByAttribute(page, pageName, elementName, attribute, value, options?)`
+#### `getByAttribute(page, pageName, elementName, attribute, value, options?)`
 
 Returns the first `Element` whose HTML attribute matches the given value. Iterates through all matching elements and checks the specified attribute.
 
@@ -296,7 +298,7 @@ const active = await repo.getByAttribute(page, 'Dashboard', 'cards', 'data-statu
 const dashLink = await repo.getByAttribute(page, 'Nav', 'links', 'href', '/dashboard', { exact: false });
 ```
 
-### `getByIndex(page, pageName, elementName, index, strict?)`
+#### `getByIndex(page, pageName, elementName, index, strict?)`
 
 Returns the `Element` at the specified zero-based index from the list of matching elements. Returns `null` (or throws in strict mode) if the index is out of bounds.
 
@@ -304,7 +306,7 @@ Returns the `Element` at the specified zero-based index from the list of matchin
 const thirdCard = await repo.getByIndex(page, 'ProductList', 'product-cards', 2);
 ```
 
-### `getVisible(page, pageName, elementName, strict?)`
+#### `getVisible(page, pageName, elementName, strict?)`
 
 Returns the first visible element matching the selector. Unlike `get()`, which returns the locator after a basic wait, this method explicitly filters to only visible elements — useful when hidden duplicates exist in the DOM.
 
@@ -312,7 +314,7 @@ Returns the first visible element matching the selector. Unlike `get()`, which r
 const visibleModal = await repo.getVisible(page, 'Dashboard', 'modal');
 ```
 
-### `getByRole(page, pageName, elementName, role, strict?)`
+#### `getByRole(page, pageName, elementName, role, strict?)`
 
 Filters elements by their explicit `role` HTML attribute and returns the first match.
 
@@ -320,7 +322,7 @@ Filters elements by their explicit `role` HTML attribute and returns the first m
 const navButton = await repo.getByRole(page, 'Header', 'navItems', 'button');
 ```
 
-### `getSelector(pageName, elementName)`
+#### `getSelector(pageName, elementName)`
 
 Returns a platform-appropriate selector string. For web platforms, returns Playwright-formatted selectors (e.g., `"css=input[name='search']"`). For non-web platforms (android, ios), returns Appium-formatted selectors (e.g., `"~LoginBtn"`, `"android=new UiSelector().text(\"Submit\")"`). This is a synchronous method useful for debugging, custom logging, or passing raw selector strings directly into native APIs.
 
@@ -334,7 +336,7 @@ const androidRepo = new ElementRepository(data, undefined, 'android');
 androidRepo.getSelector('LoginPage', 'submitButton'); // "~SubmitBtn"
 ```
 
-### `getSelectorRaw(pageName, elementName)`
+#### `getSelectorRaw(pageName, elementName)`
 
 Returns the raw selector strategy and value as an object, without any platform-specific formatting. Useful when you need the original strategy name and value from the JSON.
 
@@ -343,13 +345,83 @@ const { strategy, value } = repo.getSelectorRaw('HomePage', 'search-input');
 // { strategy: 'css', value: "input[name='search']" }
 ```
 
-### `setDefaultTimeout(timeout)`
+#### `setDefaultTimeout(timeout)`
 
 Updates the default timeout (in milliseconds) for all subsequent element retrievals.
 
-## 🔧 Type Safety
+#### Strict Mode
 
-All `get*` methods return an `Element` interface that wraps either a Playwright `Locator` (web) or a WebdriverIO element (platform). Use the type guards to narrow:
+All `get*` methods that return `Element | null` accept an optional `strict` parameter (default: `false`):
+
+- **`strict: false`** — logs a warning and returns `null` when no match is found.
+- **`strict: true`** — throws an `Error` when no match is found.
+
+```typescript
+// Non-strict (default): returns null on failure
+const card = await repo.getByText(page, 'ProductList', 'product-cards', 'Missing Item');
+// card === null
+
+// Strict: throws an error on failure
+const card = await repo.getByText(page, 'ProductList', 'product-cards', 'Missing Item', true);
+// Error: Element 'product-cards' on 'ProductList' with text "Missing Item" not found.
+```
+
+### Element Interface
+
+All `get*` methods return an `Element` — a platform-agnostic interface that wraps either a Playwright `Locator` (via `WebElement`) or a WebDriverIO element (via `PlatformElement`). You can interact with elements directly without caring about the underlying driver.
+
+#### Interaction Methods
+
+| Method | Description |
+|--------|-------------|
+| `click()` | Clicks the element. |
+| `fill(text)` | Clears the input and fills it with the given text. |
+| `clear()` | Clears the element's value. |
+| `check()` | Checks a checkbox or radio button. |
+| `uncheck()` | Unchecks a checkbox. |
+| `hover()` | Hovers over the element. |
+| `doubleClick()` | Double-clicks the element. |
+| `scrollIntoView()` | Scrolls the element into the visible area. |
+| `pressSequentially(text, delay?)` | Types text one character at a time. |
+| `setInputFiles(filePath)` | Sets the value of a file input. **Web only.** |
+| `dispatchEvent(event)` | Dispatches a DOM event on the element. **Web only.** |
+
+#### State Methods
+
+| Method | Description |
+|--------|-------------|
+| `isVisible()` | Returns `true` if the element is visible. |
+| `isEnabled()` | Returns `true` if the element is enabled. |
+| `isChecked()` | Returns `true` if a checkbox/radio is checked. |
+
+#### Extraction Methods
+
+| Method | Description |
+|--------|-------------|
+| `textContent()` | Returns the text content, or `null` if empty. |
+| `getAttribute(name)` | Returns the value of an HTML attribute, or `null`. |
+| `inputValue()` | Returns the current value of an input/textarea/select. |
+
+#### Querying Methods
+
+| Method | Description |
+|--------|-------------|
+| `locateChild(selector)` | Locates a descendant element matching the selector. |
+| `count()` | Returns the number of matched elements. |
+| `all()` | Returns an array of all matched elements. |
+| `first()` | Returns the first matched element. |
+| `nth(index)` | Returns the element at the given zero-based index. |
+| `filter({ hasText })` | Filters matched elements by text content. |
+
+#### Waiting
+
+| Method | Description |
+|--------|-------------|
+| `waitFor(options?)` | Waits for the element to reach a state: `"visible"` (default), `"hidden"`, `"attached"`, or `"detached"`. Accepts an optional `timeout` in ms. |
+
+### 🔧 Type Safety
+
+Use the `ElementType` enum and type guards to narrow to the concrete implementation when you need driver-specific access:
 
 ```typescript
 import { Element, WebElement, PlatformElement, isWeb, isPlatform } from '@civitas-cerebrum/element-repository';
@@ -357,12 +429,36 @@ import { Element, WebElement, PlatformElement, isWeb, isPlatform } from '@civita
 const el = await repo.get(page, 'LoginPage', 'submitButton');
 
 if (isWeb(el)) {
-  // el is WebElement — access el.locator (Playwright Locator)
+  // el is WebElement — access the underlying Playwright Locator
   await el.locator.click();
 }
 
 if (isPlatform(el)) {
-  // el is PlatformElement — access el.driver, el.selector
+  // el is PlatformElement — access the WebDriverIO driver and selector
+  console.log(el.selector); // the Appium selector string
   await el.click();
 }
 ```
+
+### 📤 Exports
+
+```typescript
+// Primary class
+export { ElementRepository } from '@civitas-cerebrum/element-repository';
+
+// Element types and type guards
+export { Element, WebElement, PlatformElement, ElementType, isWeb, isPlatform };
+
+// Schema types
+export { Selector, ElementDefinition, PageObject, PageRepository, Page };
+
+// Formatter type
+export type { SelectorFormatter };
+
+// Utility functions
+export { pickRandomIndex, pickRandomMember };
+```
+
+## License
+
+MIT
