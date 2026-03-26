@@ -39,6 +39,7 @@
   "author": "Umut Ay Bora",
   "license": "MIT",
   "dependencies": {
+    "@civitas-cerebrum/test-coverage": "^0.0.8",
     "webdriverio": "^9.27.0"
   }
 }
