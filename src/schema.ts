@@ -2,7 +2,7 @@ export interface Selector {
   [key: string]: string;
 }
 
-export interface Element {
+export interface ElementDefinition {
   elementName: string;
   selector: Selector;
 }
@@ -10,7 +10,7 @@ export interface Element {
 export interface PageObject {
   name: string;
   platform?: string;
-  elements: Element[];
+  elements: ElementDefinition[];
 }
 
 export interface PageObjectSchema {
