@@ -2,8 +2,9 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 import { PageRepository, PageObject } from './schema/repository';
-import { Page } from './schema/page';
 import { pickRandomIndex } from './utils/math';
+import { Element, WebElement, PlatformElement } from './types';
+import { toAppiumSelector } from './selectors/appium';
 
 export class ElementRepository {
   private pageData: PageRepository;
@@ -34,7 +35,6 @@ export class ElementRepository {
     } else {
       this.pageData = dataOrPath;
     }
-
     this.defaultTimeout = defaultTimeout;
     this.platform = platform;
   }
@@ -51,6 +51,15 @@ export class ElementRepository {
     );
   }
 
+  private isWebPlatform(): boolean {
+    return this.platform === 'web';
+  }
+
+  private getAppiumSelector(pageName: string, elementName: string): string {
+    const { strategy, value } = this.getSelectorRaw(pageName, elementName);
+    return toAppiumSelector(strategy, value, this.platform);
+  }
+
   /**
    * Updates the default timeout for all subsequent element retrievals.
    * @param timeout The new timeout in milliseconds.
@@ -60,113 +69,130 @@ export class ElementRepository {
   }
 
   /**
-   * Retrieves a single Playwright Locator based on the externalized JSON mapping.
-   * @param page The Playwright Page instance.
+   * Retrieves a single Element based on the externalized JSON mapping.
+   * @param page The page/driver instance.
    * @param pageName The name of the page block in the JSON repository.
    * @param elementName The specific element name to look up.
-   * @returns A promise that resolves to a dynamically typed Playwright Locator.
+   * @returns A promise that resolves to an Element.
    */
-  public async get<P extends Page>(page: P, pageName: string, elementName: string): Promise<ReturnType<P['locator']>> {
-    const selector = this.getSelector(pageName, elementName);
-    await page.waitForSelector(selector, { timeout: this.defaultTimeout }).catch(() => { });
-    return page.locator(selector);
+  public async get(page: any, pageName: string, elementName: string): Promise<Element> {
+    if (this.isWebPlatform()) {
+      const selector = this.getSelector(pageName, elementName);
+      await page.waitForSelector(selector, { timeout: this.defaultTimeout }).catch(() => {});
+      return new WebElement(page.locator(selector));
+    }
+    const selector = this.getAppiumSelector(pageName, elementName);
+    return new PlatformElement(page, selector);
   }
 
   /**
-   * Retrieves an array of Playwright Locators matching the mapped selector.
-   * @param page The Playwright Page instance.
+   * Retrieves an array of Elements matching the mapped selector.
+   * @param page The page/driver instance.
    * @param pageName The name of the page block in the JSON repository.
    * @param elementName The specific element name to look up.
-   * @returns A promise that resolves to an array of dynamically typed Playwright Locators.
+   * @returns A promise that resolves to an array of Elements.
    */
-  public async getAll<P extends Page>(page: P, pageName: string, elementName: string): Promise<ReturnType<P['locator']>[]> {
-    const locator = await this.get(page, pageName, elementName);
-    return locator.all();
+  public async getAll(page: any, pageName: string, elementName: string): Promise<Element[]> {
+    if (this.isWebPlatform()) {
+      const el = await this.get(page, pageName, elementName);
+      return el.all();
+    }
+    const selector = this.getAppiumSelector(pageName, elementName);
+    const elements: any[] = await page.$$(selector);
+    return elements.map(rawEl => new PlatformElement(page, selector, rawEl));
   }
 
   /**
-   * Randomly selects one element from a list of locators matching the given selector.
-   * Automatically waits for the randomly selected element to be attached and visible.
-   * @param page The Playwright Page instance.
+   * Randomly selects one element from a list of elements matching the given selector.
+   * @param page The page/driver instance.
    * @param pageName The name of the page block in the JSON repository.
    * @param elementName The specific element name to look up.
    * @param strict If true, throws an error if no elements are found. Defaults to false.
-   * @returns A promise that resolves to a randomly selected Playwright Locator, or null if none are found.
+   * @returns A promise that resolves to a randomly selected Element, or null if none are found.
    */
-  public async getRandom<P extends Page>(page: P, pageName: string, elementName: string, strict: boolean = false): Promise<ReturnType<P['locator']> | null> {
-    const baseLocator = await this.get(page, pageName, elementName);
-    const count = await baseLocator.count();
-
-    if (count === 0) {
+  public async getRandom(page: any, pageName: string, elementName: string, strict: boolean = false): Promise<Element | null> {
+    if (this.isWebPlatform()) {
+      const baseEl = await this.get(page, pageName, elementName);
+      const count = await baseEl.count();
+      if (count === 0) {
+        const msg = `No elements found for '${elementName}' on '${pageName}'`;
+        if (strict) throw new Error(msg);
+        console.warn(msg);
+        return null;
+      }
+      const index = pickRandomIndex(count);
+      const randomEl = baseEl.nth(index);
+      await randomEl.waitFor({ state: 'attached', timeout: this.defaultTimeout });
+      await randomEl.waitFor({ state: 'visible', timeout: this.defaultTimeout });
+      return randomEl;
+    }
+    const selector = this.getAppiumSelector(pageName, elementName);
+    const elements: any[] = await page.$$(selector);
+    if (elements.length === 0) {
       const msg = `No elements found for '${elementName}' on '${pageName}'`;
       if (strict) throw new Error(msg);
       console.warn(msg);
       return null;
     }
-
-    const index = pickRandomIndex(count);
-    const randomElement = baseLocator.nth(index);
-
-    await Promise.all([
-      randomElement.waitFor({ state: 'attached', timeout: this.defaultTimeout }),
-      randomElement.waitFor({ state: 'visible', timeout: this.defaultTimeout })
-    ]);
-
-    return randomElement;
+    const randomIndex = Math.floor(Math.random() * elements.length);
+    return new PlatformElement(page, selector, elements[randomIndex]);
   }
 
   /**
-   * Filters a locator list and returns the first element that contains the specified text.
-   * @param page The Playwright Page instance.
+   * Filters an element list and returns the first element that contains the specified text.
+   * @param page The page/driver instance.
    * @param pageName The name of the page block in the JSON repository.
    * @param elementName The specific element name to look up.
    * @param desiredText The string of text to search for within the elements.
    * @param strict If true, throws an error if the element is not found. Defaults to false.
-   * @returns A promise that resolves to the matched Playwright Locator, or null if not found.
+   * @returns A promise that resolves to the matched Element, or null if not found.
    */
-  public async getByText<P extends Page>(page: P, pageName: string, elementName: string, desiredText: string, strict: boolean = false): Promise<ReturnType<P['locator']> | null> {
-    const baseLocator = await this.get(page, pageName, elementName);
-    const locator = baseLocator.filter({ hasText: desiredText }).first();
-
-    if ((await locator.count()) === 0) {
-      const msg = `Element '${elementName}' on '${pageName}' with text "${desiredText}" not found.`;
-      if (strict) throw new Error(msg);
-      console.warn(msg);
-      return null;
+  public async getByText(page: any, pageName: string, elementName: string, desiredText: string, strict: boolean = false): Promise<Element | null> {
+    if (this.isWebPlatform()) {
+      const baseEl = await this.get(page, pageName, elementName);
+      const filtered = baseEl.filter({ hasText: desiredText }).first();
+      if ((await filtered.count()) === 0) {
+        const msg = `Element '${elementName}' on '${pageName}' with text "${desiredText}" not found.`;
+        if (strict) throw new Error(msg);
+        console.warn(msg);
+        return null;
+      }
+      return filtered;
     }
-
-    return locator;
+    const selector = this.getAppiumSelector(pageName, elementName);
+    const elements: any[] = await page.$$(selector);
+    for (const el of elements) {
+      const elText: string = await el.getText();
+      if (elText.trim() === desiredText) {
+        return new PlatformElement(page, selector, el);
+      }
+    }
+    const msg = `Element '${elementName}' on '${pageName}' with text "${desiredText}" not found.`;
+    if (strict) throw new Error(msg);
+    console.warn(msg);
+    return null;
   }
 
   /**
    * Filters elements by a specific HTML attribute value.
-   * Iterates through all matching elements and returns the first one whose attribute matches.
-   * @param page The Playwright Page instance.
+   * @param page The page/driver instance.
    * @param pageName The name of the page block in the JSON repository.
    * @param elementName The specific element name to look up.
-   * @param attribute The HTML attribute name to filter by (e.g., 'data-status', 'href').
+   * @param attribute The HTML attribute name to filter by.
    * @param value The attribute value to match against.
    * @param options Optional configuration.
    * @param options.exact If true (default), requires an exact attribute match. If false, matches when the attribute contains the value.
    * @param options.strict If true, throws an error when no matching element is found. Defaults to false.
-   * @returns A promise that resolves to the matched Playwright Locator, or null if not found.
-   *
-   * @example
-   * // Exact match (default)
-   * const activeItem = await repo.getByAttribute(page, 'Dashboard', 'statusCards', 'data-status', 'active');
-   *
-   * @example
-   * // Partial (contains) match
-   * const item = await repo.getByAttribute(page, 'Dashboard', 'links', 'href', '/dashboard', { exact: false });
+   * @returns A promise that resolves to the matched Element, or null if not found.
    */
-  public async getByAttribute<P extends Page>(
-    page: P,
+  public async getByAttribute(
+    page: any,
     pageName: string,
     elementName: string,
     attribute: string,
     value: string,
     options: { exact?: boolean; strict?: boolean } = {}
-  ): Promise<ReturnType<P['locator']> | null> {
+  ): Promise<Element | null> {
     const { exact = true, strict = false } = options;
     const allElements = await this.getAll(page, pageName, elementName);
 
@@ -186,60 +212,58 @@ export class ElementRepository {
   }
 
   /**
-   * Returns the nth matching element from a list of locators.
-   * @param page The Playwright Page instance.
+   * Returns the nth matching element from a list of elements.
+   * @param page The page/driver instance.
    * @param pageName The name of the page block in the JSON repository.
    * @param elementName The specific element name to look up.
    * @param index The zero-based index of the element to retrieve.
    * @param strict If true, throws an error if the index is out of bounds. Defaults to false.
-   * @returns A promise that resolves to the Playwright Locator at the given index, or null if out of bounds.
-   *
-   * @example
-   * const thirdCard = await repo.getByIndex(page, 'ProductList', 'product-cards', 2);
-   * await thirdCard?.click();
+   * @returns A promise that resolves to the Element at the given index, or null if out of bounds.
    */
-  public async getByIndex<P extends Page>(
-    page: P,
+  public async getByIndex(
+    page: any,
     pageName: string,
     elementName: string,
     index: number,
     strict: boolean = false
-  ): Promise<ReturnType<P['locator']> | null> {
-    const baseLocator = await this.get(page, pageName, elementName);
-    const count = await baseLocator.count();
-
-    if (index < 0 || index >= count) {
-      const msg = `Index ${index} out of bounds for '${elementName}' on '${pageName}' (found ${count} elements).`;
+  ): Promise<Element | null> {
+    if (this.isWebPlatform()) {
+      const baseEl = await this.get(page, pageName, elementName);
+      const count = await baseEl.count();
+      if (index < 0 || index >= count) {
+        const msg = `Index ${index} out of bounds for '${elementName}' on '${pageName}' (found ${count} elements).`;
+        if (strict) throw new Error(msg);
+        console.warn(msg);
+        return null;
+      }
+      return baseEl.nth(index);
+    }
+    const selector = this.getAppiumSelector(pageName, elementName);
+    const elements: any[] = await page.$$(selector);
+    if (index < 0 || index >= elements.length) {
+      const msg = `Index ${index} out of bounds for '${elementName}' on '${pageName}' (found ${elements.length} elements).`;
       if (strict) throw new Error(msg);
       console.warn(msg);
       return null;
     }
-
-    return baseLocator.nth(index);
+    return new PlatformElement(page, selector, elements[index]);
   }
 
   /**
    * Returns the first visible element matching the selector.
-   * Unlike `get()`, which returns the locator after a basic wait, this method
-   * explicitly filters to only visible elements and waits for visibility.
-   * @param page The Playwright Page instance.
+   * @param page The page/driver instance.
    * @param pageName The name of the page block in the JSON repository.
    * @param elementName The specific element name to look up.
    * @param strict If true, throws an error if no visible element is found. Defaults to false.
-   * @returns A promise that resolves to a visible Playwright Locator, or null if none are visible.
-   *
-   * @example
-   * const visibleModal = await repo.getVisible(page, 'Dashboard', 'modal');
-   * await visibleModal?.click();
+   * @returns A promise that resolves to a visible Element, or null if none are visible.
    */
-  public async getVisible<P extends Page>(
-    page: P,
+  public async getVisible(
+    page: any,
     pageName: string,
     elementName: string,
     strict: boolean = false
-  ): Promise<ReturnType<P['locator']> | null> {
-    const baseLocator = await this.get(page, pageName, elementName);
-    const allElements = await baseLocator.all();
+  ): Promise<Element | null> {
+    const allElements = await this.getAll(page, pageName, elementName);
 
     for (const element of allElements) {
       if (await element.isVisible()) return element;
@@ -253,46 +277,23 @@ export class ElementRepository {
 
   /**
    * Filters elements by their ARIA role attribute and returns the first match.
-   * This checks the explicit `role` HTML attribute on elements.
-   * @param page The Playwright Page instance.
+   * @param page The page/driver instance.
    * @param pageName The name of the page block in the JSON repository.
    * @param elementName The specific element name to look up.
    * @param role The ARIA role value to filter by (e.g., 'button', 'link', 'tab').
    * @param strict If true, throws an error if no matching element is found. Defaults to false.
-   * @returns A promise that resolves to the matched Playwright Locator, or null if not found.
-   *
-   * @example
-   * const navLink = await repo.getByRole(page, 'Header', 'navItems', 'link');
-   * await navLink?.click();
+   * @returns A promise that resolves to the matched Element, or null if not found.
    */
-  public async getByRole<P extends Page>(
-    page: P,
+  public async getByRole(
+    page: any,
     pageName: string,
     elementName: string,
     role: string,
     strict: boolean = false
-  ): Promise<ReturnType<P['locator']> | null> {
+  ): Promise<Element | null> {
     return this.getByAttribute(page, pageName, elementName, 'role', role, { exact: true, strict });
   }
 
-  /**
-   * Parses the JSON schema and returns a Playwright-friendly selector string.
-   *
-   * Supported selector keys:
-   * - `css` — CSS selector (e.g., `"css": "button.primary"`)
-   * - `xpath` — XPath expression (e.g., `"xpath": "//button[@id='submit']"`)
-   * - `id` — Element ID, converted to CSS `#id` selector
-   * - `text` — Text content selector
-   * - `testid` / `testId` — Test ID attribute selector (configurable via constructor, defaults to `data-testid`)
-   * - `role` — ARIA role attribute selector (e.g., `"role": "button"`)
-   * - `placeholder` — Placeholder attribute selector
-   * - `label` — `aria-label` attribute selector
-   *
-   * @param pageName The name of the page block in the JSON repository.
-   * @param elementName The specific element name to look up.
-   * @returns The raw string selector formatted for Playwright (e.g., 'css=...', 'xpath=...').
-   * @throws Error if the page, element, or selector is not found.
-   */
   /**
    * Returns the raw selector strategy and value without Playwright-specific formatting.
    * @param pageName The name of the page block in the JSON repository.
@@ -318,6 +319,24 @@ export class ElementRepository {
     return { strategy, value };
   }
 
+  /**
+   * Parses the JSON schema and returns a Playwright-friendly selector string.
+   *
+   * Supported selector keys:
+   * - `css` — CSS selector (e.g., `"css": "button.primary"`)
+   * - `xpath` — XPath expression (e.g., `"xpath": "//button[@id='submit']"`)
+   * - `id` — Element ID, converted to CSS `#id` selector
+   * - `text` — Text content selector
+   * - `testid` / `testId` — Test ID attribute selector (configurable via constructor, defaults to `data-testid`)
+   * - `role` — ARIA role attribute selector (e.g., `"role": "button"`)
+   * - `placeholder` — Placeholder attribute selector
+   * - `label` — `aria-label` attribute selector
+   *
+   * @param pageName The name of the page block in the JSON repository.
+   * @param elementName The specific element name to look up.
+   * @returns The raw string selector formatted for Playwright (e.g. 'css=...', 'xpath=...').
+   * @throws Error if the page, element, or selector is not found.
+   */
   public getSelector(pageName: string, elementName: string): string {
     const page = this.findPage(pageName);
     if (!page) throw new Error(`ElementRepository: Page '${pageName}' not found for platform '${this.platform}'.`);
