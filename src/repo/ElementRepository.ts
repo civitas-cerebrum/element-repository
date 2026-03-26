@@ -290,7 +290,6 @@ export class ElementRepository {
    *
    * **Web (Playwright) selector keys:** css, xpath, id, text, testid, role, placeholder, label
    *
-<<<<<<< Updated upstream:src/ElementRepository.ts
    * **Non-web (Appium) selector keys:** accessibility id, xpath, id, css, uiautomator,
    * predicate, class chain, class name, tag name, name, android data matcher,
    * android view matcher, android view tag, text
@@ -298,10 +297,6 @@ export class ElementRepository {
    * All space-separated keys also accept camelCase aliases (e.g., `accessibilityId`,
    * `androidUIAutomator`, `iOSNsPredicateString`, `iOSClassChain`, `className`,
    * `tagName`, `androidDataMatcher`, `androidViewMatcher`, `androidViewTag`).
-=======
-   * **Non-web (Appium) selector keys:** accessibility id, xpath, id, uiautomator,
-   * predicate, class chain, class name, text
->>>>>>> Stashed changes:src/repo/ElementRepository.ts
    *
    * @param pageName The name of the page block in the JSON repository.
    * @param elementName The specific element name to look up.
@@ -315,66 +310,6 @@ export class ElementRepository {
     return formatter ? formatter(value) : value;
   }
 
-<<<<<<< Updated upstream:src/ElementRepository.ts
-    if (this.isWebPlatform()) {
-      switch (strategy.toLowerCase()) {
-        case 'xpath': return `xpath=${value}`;
-        case 'text': return `text=${value}`;
-        case 'id': return `#${value}`;
-        case 'css': return `css=${value}`;
-        case 'testid': return `[data-testid='${value}']`;
-        case 'role': return `[role='${value}']`;
-        case 'placeholder': return `[placeholder='${value}']`;
-        case 'label': return `[aria-label='${value}']`;
-        default: return value;
-      }
-    }
-
-    // Non-web (Appium) formatting — supports both space-separated and camelCase strategy names
-    switch (strategy) {
-      case 'accessibility id':
-      case 'accessibilityId':
-        return `~${value}`;
-      case 'xpath':
-        return value;
-      case 'id':
-        return `#${value}`;
-      case 'css':
-        return `css=${value}`;
-      case 'uiautomator':
-      case 'androidUIAutomator':
-        return `android=${value}`;
-      case 'predicate':
-      case 'iOSNsPredicateString':
-        return `-ios predicate string:${value}`;
-      case 'class chain':
-      case 'iOSClassChain':
-        return `-ios class chain:${value}`;
-      case 'class name':
-      case 'className':
-        return value;
-      case 'tag name':
-      case 'tagName':
-        return value;
-      case 'name':
-        return value;
-      case 'android data matcher':
-      case 'androidDataMatcher':
-        return `-android datamatcher:${value}`;
-      case 'android view matcher':
-      case 'androidViewMatcher':
-        return `-android viewmatcher:${value}`;
-      case 'android view tag':
-      case 'androidViewTag':
-        return `-android viewtag:${value}`;
-      case 'text':
-        if (this.platform === 'android') return `android=new UiSelector().text("${value}")`;
-        if (this.platform === 'ios') return `-ios predicate string:label == "${value}"`;
-        return value;
-      default:
-        return value;
-    }
-=======
   /**
    * Returns the {@link SelectorFormatter} lookup table for the current platform.
    * Falls back to the base {@link APPIUM_FORMATTERS} for unrecognised non-web platforms.
@@ -384,6 +319,5 @@ export class ElementRepository {
     if (this.platform === 'android') return ANDROID_FORMATTERS;
     if (this.platform === 'ios') return IOS_FORMATTERS;
     return APPIUM_FORMATTERS;
->>>>>>> Stashed changes:src/repo/ElementRepository.ts
   }
 }
