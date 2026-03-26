@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { ElementRepository } from '../src/ElementRepository';
+import { WebElement } from '../src/types';
 
 test.describe('Type Compatibility Tests', () => {
 
@@ -19,7 +20,8 @@ test.describe('Type Compatibility Tests', () => {
     } as any;
 
     await test.step('Retrieve and validate selector formatting', async () => {
-      const locator = await repo.get(mockPage, 'LoginPage', 'Submit');
+      const element = await repo.get(mockPage, 'LoginPage', 'Submit');
+      const locator = (element as WebElement).locator as any;
 
       expect(locator.selector).toBe('xpath=//button');
 
@@ -27,7 +29,7 @@ test.describe('Type Compatibility Tests', () => {
       console.log('✅ TEST PASSED: TC_001: Should format selectors correctly');
       console.log(`👉 Found Page: "LoginPage"`);
       console.log(`👉 Element: "Submit"`);
-      console.log(`👉 Resulting Selector: "${locator.selector}"`);
+      console.log(`👉 Resulting Selector: "${(element as WebElement).locator as any}"`);
       console.log('--------------------------------------------------');
     });
   });

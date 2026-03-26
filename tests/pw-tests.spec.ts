@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { Page as PlaywrightPage } from 'playwright-core';
 import { ElementRepository } from '../src/ElementRepository';
+import { WebElement } from '../src/types';
 
 const repo = new ElementRepository('./tests/locators.json');
 
@@ -11,8 +12,8 @@ test.describe('Type Compatibility Tests', () => {
     
     await typedPage.goto('https://example.com');
     const heading = await repo.get(typedPage, 'ExamplePage', 'main-heading');
-    
-    await expect(heading).toBeVisible();
+
+    await expect((heading as WebElement).locator).toBeVisible();
 
     console.log('--------------------------------------------------');
     console.log('✅ TEST PASSED: TC_002: Should accept an explicitly typed Page from @playwright/test');
@@ -39,8 +40,8 @@ test.describe('Type Compatibility Tests', () => {
     await page.goto('https://example.com');
 
     const heading = await repo.get(wrapped, 'ExamplePage', 'main-heading');
-    
-    await expect(heading).toBeVisible();
+
+    await expect((heading as WebElement).locator).toBeVisible();
 
     console.log('--------------------------------------------------');
     console.log('✅ TEST PASSED: TC_003: Should work with a Wrapped Page (Dependency Injection)');
