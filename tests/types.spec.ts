@@ -698,27 +698,33 @@ test.describe('PlatformElement waitFor', () => {
 });
 
 // ===========================================================================
-// PlatformElement — parentElement branch
+// PlatformElement — resolvedElement branch
 // ===========================================================================
 
-test.describe('PlatformElement with parentElement', () => {
-  test('findOne uses parentElement.$ when parentElement is set', async () => {
-    let queryUsed = '';
-    const parentEl = createMockWdioElement({
-      $: async (sel: string) => { queryUsed = `parent:${sel}`; return createMockWdioElement(); },
+test.describe('PlatformElement with resolvedElement', () => {
+  test('findOne returns resolvedElement directly instead of re-querying', async () => {
+    let clicked = false;
+    const resolved = createMockWdioElement({
+      click: async () => { clicked = true; },
     });
-    const el = new PlatformElement(createMockDriver(), '~inner', parentEl);
+    const el = new PlatformElement(createMockDriver(), '~inner', resolved);
     await el.click();
-    expect(queryUsed).toBe('parent:~inner');
+    expect(clicked).toBe(true);
   });
 
-  test('findAll uses parentElement.$$ when parentElement is set', async () => {
-    let queryUsed = '';
-    const parentEl = createMockWdioElement({
-      $$: async (sel: string) => { queryUsed = `parent:${sel}`; return [createMockWdioElement()]; },
-    });
-    const el = new PlatformElement(createMockDriver(), '~list-item', parentEl);
+  test('textContent operates on the resolvedElement', async () => {
+    const resolved = createMockWdioElement({ getText: async () => '  resolved text  ' });
+    const el = new PlatformElement(createMockDriver(), '~inner', resolved);
+    expect(await el.textContent()).toBe('resolved text');
+  });
+
+  test('findAll still queries the driver (not scoped to resolvedElement)', async () => {
+    let driverQueried = false;
+    const driver = createMockDriver();
+    driver.$$ = async () => { driverQueried = true; return [createMockWdioElement()]; };
+    const resolved = createMockWdioElement();
+    const el = new PlatformElement(driver, '~list-item', resolved);
     await el.count();
-    expect(queryUsed).toBe('parent:~list-item');
+    expect(driverQueried).toBe(true);
   });
 });

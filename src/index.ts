@@ -5,7 +5,9 @@ export * from './schema';
 export * from './utils/math';
 
 // Export element types
-export { Element, ElementType, WebElement, PlatformElement, isWeb, isPlatform } from './types';
+export * from './types';
 
-// Export the primary class
-export { ElementRepository } from './ElementRepository';
+// Export the primary class and selector formatters
+export { ElementRepository } from './repo';
+export type { SelectorFormatter } from './repo';
+export { WEB_FORMATTERS, APPIUM_FORMATTERS, ANDROID_FORMATTERS, IOS_FORMATTERS } from './repo';

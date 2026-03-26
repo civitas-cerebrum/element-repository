@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { ElementRepository } from '../src/ElementRepository';
+import { ElementRepository } from '../src/repo/ElementRepository';
 
 test.describe('getSelector — Appium platform formatting', () => {
 
@@ -12,7 +12,6 @@ test.describe('getSelector — Appium platform formatting', () => {
           { elementName: 'byAccessibilityId', selector: { 'accessibility id': 'Login' } },
           { elementName: 'byXpath', selector: { xpath: '//android.widget.Button' } },
           { elementName: 'byId', selector: { id: 'submit-btn' } },
-          { elementName: 'byCss', selector: { css: 'button.primary' } },
           { elementName: 'byUiAutomator', selector: { uiautomator: 'new UiSelector().text("Submit")' } },
           { elementName: 'byText', selector: { text: 'Submit' } },
           { elementName: 'byClassName', selector: { 'class name': 'android.widget.EditText' } },
@@ -47,10 +46,6 @@ test.describe('getSelector — Appium platform formatting', () => {
 
     test('id → #value', () => {
       expect(repo.getSelector('TestPage', 'byId')).toBe('#submit-btn');
-    });
-
-    test('css → css=value', () => {
-      expect(repo.getSelector('TestPage', 'byCss')).toBe('css=button.primary');
     });
 
     test('uiautomator → android=value', () => {

@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { ElementRepository } from '../src/ElementRepository';
+import { ElementRepository } from '../src/repo/ElementRepository';
 import { WebElement, PlatformElement } from '../src/types';
 
 // ---------------------------------------------------------------------------
@@ -158,7 +158,6 @@ test.describe('Web element location — get()', () => {
       await repo.get(page, 'TestPage', elementName);
 
       expect(calls.locator).toContain(expectedSelector);
-      expect(calls.waitForSelector).toContain(expectedSelector);
     });
   }
 
@@ -209,7 +208,8 @@ test.describe('Web element location — getByText()', () => {
   test('resolves selector then filters by text', async () => {
     const { page, calls } = createCapturingPage();
     const repo = new ElementRepository(webMockData);
-    const el = await repo.getByText(page, 'TestPage', 'cssBtn', 'Click');
+    // The mock locator's textContent returns 'text', so match on that
+    const el = await repo.getByText(page, 'TestPage', 'cssBtn', 'text');
 
     expect(calls.locator).toContain('css=button.primary');
     expect(el).toBeInstanceOf(WebElement);
@@ -347,13 +347,17 @@ test.describe('iOS element location — get()', () => {
 // ===========================================================================
 
 test.describe('Timeout propagation', () => {
-  test('default timeout (15000) is passed to waitForSelector', async () => {
+  test('default timeout (15000) is passed to element.waitFor', async () => {
     let capturedTimeout: number | undefined;
     const page = {
       locator: () => createCapturingMockLocator(),
-      waitForSelector: async (_sel: string, opts: any) => {
-        capturedTimeout = opts?.timeout;
-      },
+    };
+    // Override waitFor on the locator returned by page.locator()
+    const origLocator = page.locator;
+    page.locator = (sel: string) => {
+      const loc = origLocator(sel);
+      loc.waitFor = async (opts?: any) => { capturedTimeout = opts?.timeout; };
+      return loc;
     };
     const repo = new ElementRepository(webMockData);
     await repo.get(page, 'TestPage', 'cssBtn');
@@ -363,9 +367,10 @@ test.describe('Timeout propagation', () => {
   test('custom timeout from constructor is propagated', async () => {
     let capturedTimeout: number | undefined;
     const page = {
-      locator: () => createCapturingMockLocator(),
-      waitForSelector: async (_sel: string, opts: any) => {
-        capturedTimeout = opts?.timeout;
+      locator: (_sel: string) => {
+        const loc = createCapturingMockLocator();
+        loc.waitFor = async (opts?: any) => { capturedTimeout = opts?.timeout; };
+        return loc;
       },
     };
     const repo = new ElementRepository(webMockData, 5000);
@@ -376,9 +381,10 @@ test.describe('Timeout propagation', () => {
   test('setDefaultTimeout updates the propagated timeout', async () => {
     let capturedTimeout: number | undefined;
     const page = {
-      locator: () => createCapturingMockLocator(),
-      waitForSelector: async (_sel: string, opts: any) => {
-        capturedTimeout = opts?.timeout;
+      locator: (_sel: string) => {
+        const loc = createCapturingMockLocator();
+        loc.waitFor = async (opts?: any) => { capturedTimeout = opts?.timeout; };
+        return loc;
       },
     };
     const repo = new ElementRepository(webMockData);

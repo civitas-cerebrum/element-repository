@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { ElementRepository } from '../src/ElementRepository';
+import { ElementRepository } from '../src/repo/ElementRepository';
 import { WebElement } from '../src/types';
 
 test.describe('Type Compatibility Tests', () => {
