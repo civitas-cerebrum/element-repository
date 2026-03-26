@@ -37,5 +37,8 @@
     "url": "git@github.com/civitas-cerebrum/element-repository.git"
   },
   "author": "Umut Ay Bora",
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "webdriverio": "^9.27.0"
+  }
 }
