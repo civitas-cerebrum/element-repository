@@ -9,6 +9,14 @@ import {
   WEB_FORMATTERS, APPIUM_FORMATTERS, ANDROID_FORMATTERS, IOS_FORMATTERS,
 } from './formatters';
 
+/**
+ * Platform-agnostic element lookup engine backed by a JSON repository.
+ *
+ * Maps human-readable page/element names to platform-specific selectors and
+ * returns unified {@link Element} wrappers (either {@link WebElement} for
+ * Playwright or {@link PlatformElement} for WebDriverIO/Appium). Every
+ * element is automatically waited for before it is returned.
+ */
 export class ElementRepository {
   private pageData: PageRepository;
   private defaultTimeout: number;
