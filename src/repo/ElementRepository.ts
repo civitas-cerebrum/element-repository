@@ -168,13 +168,18 @@ export class ElementRepository {
 
   /**
    * Filters elements by a specific HTML attribute value.
+   *
+   * Matching strategy: when `exact` is not specified, first attempts an exact
+   * match, then falls back to a contains match. When `exact` is explicitly set,
+   * only that matching mode is used.
+   *
    * @param page The page/driver instance.
    * @param pageName The name of the page block in the JSON repository.
    * @param elementName The specific element name to look up.
    * @param attribute The HTML attribute name to filter by.
    * @param value The attribute value to match against.
    * @param options Optional configuration.
-   * @param options.exact If true (default), requires an exact attribute match. If false, matches when the attribute contains the value.
+   * @param options.exact If true, requires an exact attribute match. If false, matches when the attribute contains the value. If omitted, tries exact first then falls back to contains.
    * @param options.strict If true, throws an error when no matching element is found. Defaults to false.
    * @returns A promise that resolves to the matched Element, or null if not found.
    */
@@ -186,18 +191,34 @@ export class ElementRepository {
     value: string,
     options: { exact?: boolean; strict?: boolean } = {}
   ): Promise<Element | null> {
-    const { exact = true, strict = false } = options;
+    const { exact, strict = false } = options;
     const allElements = await this.getAll(page, pageName, elementName);
 
-    for (const element of allElements) {
-      const attrValue = await element.getAttribute(attribute);
-      if (attrValue === null) continue;
+    // When exact is explicitly set, use only that matching mode
+    if (exact !== undefined) {
+      for (const element of allElements) {
+        const attrValue = await element.getAttribute(attribute);
+        if (attrValue === null) continue;
 
-      const matches = exact ? attrValue === value : attrValue.includes(value);
-      if (matches) return element;
+        const matches = exact ? attrValue === value : attrValue.includes(value);
+        if (matches) return element;
+      }
+    } else {
+      // Default: try exact match first, then fall back to contains
+      for (const element of allElements) {
+        const attrValue = await element.getAttribute(attribute);
+        if (attrValue === null) continue;
+        if (attrValue === value) return element;
+      }
+
+      for (const element of allElements) {
+        const attrValue = await element.getAttribute(attribute);
+        if (attrValue === null) continue;
+        if (attrValue.includes(value)) return element;
+      }
     }
 
-    const matchType = exact ? 'equal to' : 'containing';
+    const matchType = exact === true ? 'equal to' : exact === false ? 'containing' : 'matching';
     const msg = `Element '${elementName}' on '${pageName}' with attribute [${attribute}] ${matchType} "${value}" not found.`;
     if (strict) throw new Error(msg);
     console.warn(msg);
