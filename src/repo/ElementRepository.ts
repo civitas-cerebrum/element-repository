@@ -133,7 +133,11 @@ export class ElementRepository {
   }
 
   /**
-   * Filters an element list and returns the first element that contains the specified text.
+   * Filters an element list and returns the first element matching the specified text.
+   *
+   * Matching strategy: first attempts an exact match (trimmed), then falls back
+   * to a contains match if no exact match is found.
+   *
    * @param page The page/driver instance.
    * @param pageName The name of the page block in the JSON repository.
    * @param elementName The specific element name to look up.
@@ -143,10 +147,19 @@ export class ElementRepository {
    */
   public async getByText(page: any, pageName: string, elementName: string, desiredText: string, strict: boolean = false): Promise<Element | null> {
     const allElements = await this.getAll(page, pageName, elementName);
+
+    // First pass: exact match
     for (const element of allElements) {
       const text = await element.textContent();
       if (text?.trim() === desiredText) return element;
     }
+
+    // Second pass: contains match
+    for (const element of allElements) {
+      const text = await element.textContent();
+      if (text?.trim().includes(desiredText)) return element;
+    }
+
     const msg = `Element '${elementName}' on '${pageName}' with text "${desiredText}" not found.`;
     if (strict) throw new Error(msg);
     console.warn(msg);
