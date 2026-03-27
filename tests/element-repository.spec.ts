@@ -146,6 +146,42 @@ test.describe('setDefaultTimeout', () => {
 });
 
 // ===========================================================================
+// getPagePlatform
+// ===========================================================================
+
+test.describe('getPagePlatform', () => {
+  test('returns "web" when platform is not specified', () => {
+    const repo = new ElementRepository(webMockData);
+    expect(repo.getPagePlatform('TestPage')).toBe('web');
+  });
+
+  test('returns explicit platform when set', () => {
+    const repo = new ElementRepository(multiPlatformMockData);
+    expect(repo.getPagePlatform('LoginPage')).toBe('web');
+    expect(repo.getPagePlatform('LoginPageAndroid')).toBe('android');
+    expect(repo.getPagePlatform('LoginPageIOS')).toBe('ios');
+  });
+
+  test('returns custom platform string as-is', () => {
+    const repo = new ElementRepository({
+      pages: [
+        { name: 'DesktopPage', platform: 'macos', elements: [] },
+        { name: 'WinPage', platform: 'windows', elements: [] },
+      ],
+    });
+    expect(repo.getPagePlatform('DesktopPage')).toBe('macos');
+    expect(repo.getPagePlatform('WinPage')).toBe('windows');
+  });
+
+  test('throws when page is not found', () => {
+    const repo = new ElementRepository(webMockData);
+    expect(() => repo.getPagePlatform('NonExistentPage')).toThrow(
+      "ElementRepository: Page 'NonExistentPage' not found."
+    );
+  });
+});
+
+// ===========================================================================
 // get — platform branch
 // ===========================================================================
 
