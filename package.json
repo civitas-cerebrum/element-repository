@@ -52,6 +52,6 @@
   "author": "Umut Ay Bora",
   "license": "MIT",
   "dependencies": {
-    "@civitas-cerebrum/test-coverage": "^0.0.8"
+    "@civitas-cerebrum/test-coverage": "^0.0.9"
   }
 }
