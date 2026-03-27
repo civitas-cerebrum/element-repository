@@ -61,6 +61,18 @@ export class ElementRepository {
   }
 
   /**
+   * Returns the platform string for the given page, or `'web'` if not specified.
+   * @param pageName The name of the page block in the JSON repository.
+   * @returns The platform string (e.g. `'web'`, `'android'`, `'ios'`).
+   * @throws Error if the page is not found.
+   */
+  public getPagePlatform(pageName: string): string {
+    const page = this.findPage(pageName);
+    if (!page) throw new Error(`ElementRepository: Page '${pageName}' not found.`);
+    return page.platform ?? 'web';
+  }
+
+  /**
    * Updates the default timeout for all subsequent element retrievals.
    * @param timeout The new timeout in milliseconds.
    */
