@@ -360,7 +360,7 @@ test.describe('getByAttribute', () => {
     const repo = new ElementRepository(webMockData);
     await expect(
       repo.getByAttribute(mockPage, 'TestPage', 'button', 'class', 'nonexistent', { strict: true })
-    ).rejects.toThrow('Element \'button\' on \'TestPage\' with attribute [class] equal to "nonexistent" not found.');
+    ).rejects.toThrow('Element \'button\' on \'TestPage\' with attribute [class] matching "nonexistent" not found.');
   });
 
   test('throws with partial-match wording when exact=false and strict=true', async () => {
@@ -380,6 +380,32 @@ test.describe('getByAttribute', () => {
     const repo = new ElementRepository(webMockData);
     const el = await repo.getByAttribute(mockPage, 'TestPage', 'button', 'data-id', 'x');
     expect(el).toBeNull();
+  });
+
+  test('defaults to exact-then-contains when exact is not specified', async () => {
+    const exactLocator = createMockLocator({ getAttribute: async (_name: string) => 'btn-primary' });
+    const partialLocator = createMockLocator({ getAttribute: async (_name: string) => 'btn-primary extra' });
+    const baseLocator = createMockLocator({
+      all: async () => [partialLocator, exactLocator],
+    });
+    const mockPage = { locator: () => baseLocator, waitForSelector: async () => {} };
+    const repo = new ElementRepository(webMockData);
+    // Should prefer exact match even though partial match appears first
+    const el = await repo.getByAttribute(mockPage, 'TestPage', 'button', 'class', 'btn-primary');
+    expect(el).not.toBeNull();
+    const attr = await el!.getAttribute('class');
+    expect(attr).toBe('btn-primary');
+  });
+
+  test('falls back to contains match when no exact match exists (default)', async () => {
+    const partialLocator = createMockLocator({ getAttribute: async (_name: string) => 'btn-primary extra' });
+    const baseLocator = createMockLocator({
+      all: async () => [partialLocator],
+    });
+    const mockPage = { locator: () => baseLocator, waitForSelector: async () => {} };
+    const repo = new ElementRepository(webMockData);
+    const el = await repo.getByAttribute(mockPage, 'TestPage', 'button', 'class', 'btn-primary');
+    expect(el).not.toBeNull();
   });
 });
 
