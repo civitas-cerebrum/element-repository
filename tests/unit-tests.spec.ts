@@ -12,15 +12,19 @@ test.describe('Type Compatibility Tests', () => {
       }]
     };
 
-    const repo = new ElementRepository(mockData);
-
     const mockPage = {
-      locator: (s: string) => ({ selector: s }),
+      locator: (s: string) => {
+        const loc: any = { selector: s, waitFor: async () => {} };
+        loc.first = () => loc;
+        return loc;
+      },
       waitForSelector: async () => { }
     } as any;
 
+    const repo = new ElementRepository(mockPage, mockData);
+
     await test.step('Retrieve and validate selector formatting', async () => {
-      const element = await repo.get(mockPage, 'LoginPage', 'Submit');
+      const element = await repo.get('Submit', 'LoginPage');
       const locator = (element as WebElement).locator as any;
 
       expect(locator.selector).toBe('xpath=//button');
@@ -56,18 +60,18 @@ test.describe('Type Compatibility Tests', () => {
     };
 
     await test.step('Web platform returns web selector', () => {
-      const webRepo = new ElementRepository(mockData);
-      expect(webRepo.getSelector('LoginPage', 'submitButton')).toBe('css=button.web-submit');
+      const webRepo = new ElementRepository({} as any, mockData);
+      expect(webRepo.getSelector('submitButton', 'LoginPage')).toBe('css=button.web-submit');
     });
 
     await test.step('Android platform returns android selector', () => {
-      const androidRepo = new ElementRepository(mockData);
-      expect(androidRepo.getSelector('LoginPageAndroid', 'submitButton')).toBe('//android.widget.Button[@text="Submit"]');
+      const androidRepo = new ElementRepository({} as any, mockData);
+      expect(androidRepo.getSelector('submitButton', 'LoginPageAndroid')).toBe('//android.widget.Button[@text="Submit"]');
     });
 
     await test.step('iOS platform returns ios selector', () => {
-      const iosRepo = new ElementRepository(mockData);
-      expect(iosRepo.getSelector('LoginPageIOS', 'submitButton')).toBe('//XCUIElementTypeButton[@name="Submit"]');
+      const iosRepo = new ElementRepository({} as any, mockData);
+      expect(iosRepo.getSelector('submitButton', 'LoginPageIOS')).toBe('//XCUIElementTypeButton[@name="Submit"]');
     });
   });
 
@@ -82,8 +86,8 @@ test.describe('Type Compatibility Tests', () => {
     };
 
     await test.step('Default platform (web) finds page without platform field', () => {
-      const webRepo = new ElementRepository(mockData);
-      expect(webRepo.getSelector('HomePage', 'logo')).toBe('css=img.logo');
+      const webRepo = new ElementRepository({} as any, mockData);
+      expect(webRepo.getSelector('logo', 'HomePage')).toBe('css=img.logo');
     });
 
   });
@@ -102,22 +106,22 @@ test.describe('Type Compatibility Tests', () => {
       ]
     };
 
-    const repo = new ElementRepository(mockData);
+    const repo = new ElementRepository({} as any, mockData);
 
     await test.step('Returns css strategy and raw value', () => {
-      const raw = repo.getSelectorRaw('SearchPage', 'searchInput');
+      const raw = repo.getSelectorRaw('searchInput', 'SearchPage');
       expect(raw.strategy).toBe('css');
       expect(raw.value).toBe('input.search');
     });
 
     await test.step('Returns xpath strategy and raw value', () => {
-      const raw = repo.getSelectorRaw('SearchPage', 'searchButton');
+      const raw = repo.getSelectorRaw('searchButton', 'SearchPage');
       expect(raw.strategy).toBe('xpath');
       expect(raw.value).toBe('//button[@id="search"]');
     });
 
     await test.step('Returns id strategy and raw value', () => {
-      const raw = repo.getSelectorRaw('SearchPage', 'logo');
+      const raw = repo.getSelectorRaw('logo', 'SearchPage');
       expect(raw.strategy).toBe('id');
       expect(raw.value).toBe('site-logo');
     });

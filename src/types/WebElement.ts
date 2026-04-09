@@ -1,5 +1,6 @@
 import { Locator } from '@playwright/test';
-import { Element, ElementType } from './Element';
+import { Element, ElementType, ElementActionOptions } from './Element';
+import { ElementChain } from './ElementChain';
 
 /**
  * Playwright-backed {@link Element} implementation.
@@ -10,56 +11,91 @@ import { Element, ElementType } from './Element';
 export class WebElement implements Element {
   readonly _type = ElementType.WEB;
 
-  /** @param locator - The Playwright locator this element wraps. */
-  constructor(public readonly locator: Locator) {}
-
-  /** {@inheritDoc Element.click} */
-  async click(): Promise<void> { await this.locator.click(); }
-
   /**
-   * {@inheritDoc Element.fill}
-   * @param text - The value to type into the element.
+   * @param locator - The Playwright locator this element wraps.
+   * @param selector - The original selector string used to create this element.
+   * @param defaultTimeout - Default timeout in ms inherited from the repository.
    */
-  async fill(text: string): Promise<void> { await this.locator.fill(text); }
+  constructor(
+    public readonly locator: Locator,
+    private readonly selector?: string,
+    private readonly defaultTimeout?: number,
+  ) {}
 
-  /** {@inheritDoc Element.clear} */
-  async clear(): Promise<void> { await this.locator.clear(); }
-
-  /** {@inheritDoc Element.check} */
-  async check(): Promise<void> { await this.locator.check(); }
-
-  /** {@inheritDoc Element.uncheck} */
-  async uncheck(): Promise<void> { await this.locator.uncheck(); }
-
-  /** {@inheritDoc Element.hover} */
-  async hover(): Promise<void> { await this.locator.hover(); }
-
-  /** {@inheritDoc Element.doubleClick} */
-  async doubleClick(): Promise<void> { await this.locator.dblclick(); }
-
-  /** {@inheritDoc Element.scrollIntoView} */
-  async scrollIntoView(): Promise<void> { await this.locator.scrollIntoViewIfNeeded(); }
-
-  /**
-   * {@inheritDoc Element.pressSequentially}
-   * @param text  - The characters to type.
-   * @param delay - Optional millisecond delay between keystrokes.
-   */
-  async pressSequentially(text: string, delay?: number): Promise<void> {
-    await this.locator.pressSequentially(text, { delay });
+  /** {@inheritDoc Element.action} */
+  action(timeout?: number): ElementChain {
+    return new ElementChain(this, timeout ?? this.defaultTimeout);
   }
 
-  /**
-   * {@inheritDoc Element.setInputFiles}
-   * @param filePath - Absolute or relative path to the file.
-   */
-  async setInputFiles(filePath: string): Promise<void> { await this.locator.setInputFiles(filePath); }
+  // ── Interaction ──────────────────────────────────────────────
 
-  /**
-   * {@inheritDoc Element.dispatchEvent}
-   * @param event - The event type to dispatch (e.g. `"change"`).
-   */
-  async dispatchEvent(event: string): Promise<void> { await this.locator.dispatchEvent(event); }
+  /** {@inheritDoc Element.click} */
+  async click(options?: ElementActionOptions): Promise<Element> {
+    await this.locator.click({ timeout: options?.timeout });
+    return this;
+  }
+
+  /** {@inheritDoc Element.fill} */
+  async fill(text: string, options?: ElementActionOptions): Promise<Element> {
+    await this.locator.fill(text, { timeout: options?.timeout });
+    return this;
+  }
+
+  /** {@inheritDoc Element.clear} */
+  async clear(options?: ElementActionOptions): Promise<Element> {
+    await this.locator.clear({ timeout: options?.timeout });
+    return this;
+  }
+
+  /** {@inheritDoc Element.check} */
+  async check(options?: ElementActionOptions): Promise<Element> {
+    await this.locator.check({ timeout: options?.timeout });
+    return this;
+  }
+
+  /** {@inheritDoc Element.uncheck} */
+  async uncheck(options?: ElementActionOptions): Promise<Element> {
+    await this.locator.uncheck({ timeout: options?.timeout });
+    return this;
+  }
+
+  /** {@inheritDoc Element.hover} */
+  async hover(options?: ElementActionOptions): Promise<Element> {
+    await this.locator.hover({ timeout: options?.timeout });
+    return this;
+  }
+
+  /** {@inheritDoc Element.doubleClick} */
+  async doubleClick(options?: ElementActionOptions): Promise<Element> {
+    await this.locator.dblclick({ timeout: options?.timeout });
+    return this;
+  }
+
+  /** {@inheritDoc Element.scrollIntoView} */
+  async scrollIntoView(options?: ElementActionOptions): Promise<Element> {
+    await this.locator.scrollIntoViewIfNeeded({ timeout: options?.timeout });
+    return this;
+  }
+
+  /** {@inheritDoc Element.pressSequentially} */
+  async pressSequentially(text: string, delay?: number, options?: ElementActionOptions): Promise<Element> {
+    await this.locator.pressSequentially(text, { delay, timeout: options?.timeout });
+    return this;
+  }
+
+  /** {@inheritDoc Element.setInputFiles} */
+  async setInputFiles(filePath: string, options?: ElementActionOptions): Promise<Element> {
+    await this.locator.setInputFiles(filePath, { timeout: options?.timeout });
+    return this;
+  }
+
+  /** {@inheritDoc Element.dispatchEvent} */
+  async dispatchEvent(event: string): Promise<Element> {
+    await this.locator.dispatchEvent(event);
+    return this;
+  }
+
+  // ── State ────────────────────────────────────────────────────
 
   /** {@inheritDoc Element.isVisible} */
   async isVisible(): Promise<boolean> { return this.locator.isVisible(); }
@@ -70,49 +106,43 @@ export class WebElement implements Element {
   /** {@inheritDoc Element.isChecked} */
   async isChecked(): Promise<boolean> { return this.locator.isChecked(); }
 
+  // ── Extraction ───────────────────────────────────────────────
+
+  /** {@inheritDoc Element.raw} */
+  async raw(): Promise<string | null> { return this.selector ?? this.locator.toString(); }
+
   /** {@inheritDoc Element.textContent} */
   async textContent(): Promise<string | null> { return this.locator.textContent(); }
 
-  /**
-   * {@inheritDoc Element.getAttribute}
-   * @param name - Attribute name.
-   */
+  /** {@inheritDoc Element.getAttribute} */
   async getAttribute(name: string): Promise<string | null> { return this.locator.getAttribute(name); }
 
   /** {@inheritDoc Element.inputValue} */
   async inputValue(): Promise<string> { return this.locator.inputValue(); }
 
-  /**
-   * {@inheritDoc Element.locateChild}
-   * @param selector - CSS or Playwright selector for the descendant.
-   */
-  locateChild(selector: string): Element { return new WebElement(this.locator.locator(selector)); }
+  // ── Querying ─────────────────────────────────────────────────
+
+  /** {@inheritDoc Element.locateChild} */
+  locateChild(childSelector: string): Element { return new WebElement(this.locator.locator(childSelector), childSelector, this.defaultTimeout); }
 
   /** {@inheritDoc Element.count} */
   async count(): Promise<number> { return this.locator.count(); }
 
   /** {@inheritDoc Element.all} */
-  async all(): Promise<Element[]> { return (await this.locator.all()).map(l => new WebElement(l)); }
+  async all(): Promise<Element[]> { return (await this.locator.all()).map(l => new WebElement(l, this.selector, this.defaultTimeout)); }
 
   /** {@inheritDoc Element.first} */
-  first(): Element { return new WebElement(this.locator.first()); }
+  first(): Element { return new WebElement(this.locator.first(), this.selector, this.defaultTimeout); }
 
-  /**
-   * {@inheritDoc Element.nth}
-   * @param index - Zero-based position.
-   */
-  nth(index: number): Element { return new WebElement(this.locator.nth(index)); }
+  /** {@inheritDoc Element.nth} */
+  nth(index: number): Element { return new WebElement(this.locator.nth(index), this.selector, this.defaultTimeout); }
 
-  /**
-   * {@inheritDoc Element.filter}
-   * @param options - Filter criteria.
-   */
-  filter(options: { hasText?: string | RegExp }): Element { return new WebElement(this.locator.filter(options)); }
+  /** {@inheritDoc Element.filter} */
+  filter(options: { hasText?: string | RegExp }): Element { return new WebElement(this.locator.filter(options), this.selector, this.defaultTimeout); }
 
-  /**
-   * {@inheritDoc Element.waitFor}
-   * @param options - Optional state and timeout configuration.
-   */
+  // ── Waiting ──────────────────────────────────────────────────
+
+  /** {@inheritDoc Element.waitFor} */
   async waitFor(options?: { state?: string; timeout?: number }): Promise<void> {
     await this.locator.waitFor({ state: options?.state as any, timeout: options?.timeout });
   }

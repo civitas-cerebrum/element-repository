@@ -1,7 +1,14 @@
+import type { ElementChain } from './ElementChain';
+
 /** Discriminator for {@link Element} implementations. */
 export enum ElementType {
   WEB = 'web',
   PLATFORM = 'platform',
+}
+
+/** Optional timeout configuration for element actions. */
+export interface ElementActionOptions {
+  timeout?: number;
 }
 
 /**
@@ -14,55 +21,72 @@ export interface Element {
   /** Discriminator indicating the concrete implementation type. */
   readonly _type: ElementType;
 
+  // ── Fluent chain ────────────────────────────────────────────
+
+  /**
+   * Returns a fluent {@link ElementChain} builder for sequencing actions.
+   * The optional timeout applies to all wait and action calls in the chain.
+   *
+   * @param timeout - Timeout in ms for all operations in this chain.
+   *
+   * @example
+   * ```ts
+   * await element.action(5000).waitForState('visible').click()
+   * await element.action().verifyPresence().verifyText('Submit')
+   * const text = await element.action().getText()
+   * ```
+   */
+  action(timeout?: number): ElementChain;
+
   // ── Interaction ──────────────────────────────────────────────
 
   /** Clicks the element. */
-  click(): Promise<void>;
+  click(options?: ElementActionOptions): Promise<Element>;
 
   /**
    * Clears the input and fills it with the given text.
    * @param text - The value to type into the element.
    */
-  fill(text: string): Promise<void>;
+  fill(text: string, options?: ElementActionOptions): Promise<Element>;
 
   /** Clears the element's value. */
-  clear(): Promise<void>;
+  clear(options?: ElementActionOptions): Promise<Element>;
 
   /** Checks a checkbox or radio button if it is not already checked. */
-  check(): Promise<void>;
+  check(options?: ElementActionOptions): Promise<Element>;
 
   /** Unchecks a checkbox if it is currently checked. */
-  uncheck(): Promise<void>;
+  uncheck(options?: ElementActionOptions): Promise<Element>;
 
   /** Hovers over the element. */
-  hover(): Promise<void>;
+  hover(options?: ElementActionOptions): Promise<Element>;
 
   /** Double-clicks the element. */
-  doubleClick(): Promise<void>;
+  doubleClick(options?: ElementActionOptions): Promise<Element>;
 
   /** Scrolls the element into the visible area of the viewport. */
-  scrollIntoView(): Promise<void>;
+  scrollIntoView(options?: ElementActionOptions): Promise<Element>;
 
   /**
    * Types text one character at a time.
    * @param text  - The characters to type.
    * @param delay - Optional millisecond delay between keystrokes.
    */
-  pressSequentially(text: string, delay?: number): Promise<void>;
+  pressSequentially(text: string, delay?: number, options?: ElementActionOptions): Promise<Element>;
 
   /**
    * Sets the value of a file input.
    * @param filePath - Absolute or relative path to the file.
    * @throws On platform elements where file input is unsupported.
    */
-  setInputFiles(filePath: string): Promise<void>;
+  setInputFiles(filePath: string, options?: ElementActionOptions): Promise<Element>;
 
   /**
    * Dispatches a DOM event on the element.
    * @param event - The event type to dispatch (e.g. `"change"`).
    * @throws On platform elements where DOM events are unsupported.
    */
-  dispatchEvent(event: string): Promise<void>;
+  dispatchEvent(event: string): Promise<Element>;
 
   // ── State ────────────────────────────────────────────────────
 
@@ -76,6 +100,9 @@ export interface Element {
   isChecked(): Promise<boolean>;
 
   // ── Extraction ───────────────────────────────────────────────
+
+  /** Returns the raw underlying selector string. */
+  raw(): Promise<string | null>;
 
   /** Returns the text content of the element, or `null` if empty. */
   textContent(): Promise<string | null>;

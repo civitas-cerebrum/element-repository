@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { ElementRepository } from '../src/repo/ElementRepository';
 import { WebElement, PlatformElement } from '../src/types';
+import { SelectionStrategy } from '../src/enum/Options';
 
 // ---------------------------------------------------------------------------
 // Shared mock data
@@ -65,7 +66,7 @@ function createMockLocator(overrides: Record<string, any> = {}): any {
     locator: (_sel: string) => createMockLocator(),
     count: async () => 3,
     all: async () => [createMockLocator(), createMockLocator()],
-    first: () => createMockLocator(),
+    first: () => self,
     nth: (_i: number) => createMockLocator(),
     filter: (_opts: any) => createMockLocator(),
     waitFor: async (_opts?: any) => {},
@@ -119,12 +120,36 @@ function createMockDriver(elements?: any[]): any {
 }
 
 // ===========================================================================
+// constructor — driver argument
+// ===========================================================================
+
+test.describe('constructor — driver argument', () => {
+  test('stores driver and exposes it via getter', () => {
+    const mockPage = createMockPage();
+    const repo = new ElementRepository(mockPage, webMockData);
+    expect(repo.driver).toBe(mockPage);
+  });
+
+  test('accepts optional timeout as third argument', async () => {
+    let capturedTimeout: number | undefined;
+    const mockPage = {
+      locator: (_sel: string) => createMockLocator({
+        waitFor: async (opts?: any) => { capturedTimeout = opts?.timeout; },
+      }),
+    };
+    const repo = new ElementRepository(mockPage, webMockData, 5000);
+    await repo.get('button', 'TestPage');
+    expect(capturedTimeout).toBe(5000);
+  });
+});
+
+// ===========================================================================
 // setDefaultTimeout
 // ===========================================================================
 
 test.describe('setDefaultTimeout', () => {
   test('changes the internal timeout without throwing', () => {
-    const repo = new ElementRepository(webMockData);
+    const repo = new ElementRepository(createMockPage(), webMockData);
     // Should not throw
     repo.setDefaultTimeout(5000);
     repo.setDefaultTimeout(0);
@@ -138,9 +163,9 @@ test.describe('setDefaultTimeout', () => {
         waitFor: async (opts?: any) => { capturedTimeout = opts?.timeout; },
       }),
     };
-    const repo = new ElementRepository(webMockData, 15000);
+    const repo = new ElementRepository(mockPage, webMockData, 15000);
     repo.setDefaultTimeout(9999);
-    await repo.get(mockPage, 'TestPage', 'button');
+    await repo.get('button', 'TestPage');
     expect(capturedTimeout).toBe(9999);
   });
 });
@@ -151,19 +176,19 @@ test.describe('setDefaultTimeout', () => {
 
 test.describe('getPagePlatform', () => {
   test('returns "web" when platform is not specified', () => {
-    const repo = new ElementRepository(webMockData);
+    const repo = new ElementRepository(createMockPage(), webMockData);
     expect(repo.getPagePlatform('TestPage')).toBe('web');
   });
 
   test('returns explicit platform when set', () => {
-    const repo = new ElementRepository(multiPlatformMockData);
+    const repo = new ElementRepository(createMockDriver(), multiPlatformMockData);
     expect(repo.getPagePlatform('LoginPage')).toBe('web');
     expect(repo.getPagePlatform('LoginPageAndroid')).toBe('android');
     expect(repo.getPagePlatform('LoginPageIOS')).toBe('ios');
   });
 
   test('returns custom platform string as-is', () => {
-    const repo = new ElementRepository({
+    const repo = new ElementRepository(createMockPage(), {
       pages: [
         { name: 'DesktopPage', platform: 'macos', elements: [] },
         { name: 'WinPage', platform: 'windows', elements: [] },
@@ -174,7 +199,7 @@ test.describe('getPagePlatform', () => {
   });
 
   test('throws when page is not found', () => {
-    const repo = new ElementRepository(webMockData);
+    const repo = new ElementRepository(createMockPage(), webMockData);
     expect(() => repo.getPagePlatform('NonExistentPage')).toThrow(
       "ElementRepository: Page 'NonExistentPage' not found."
     );
@@ -187,9 +212,9 @@ test.describe('getPagePlatform', () => {
 
 test.describe('get — platform (android)', () => {
   test('returns a PlatformElement', async () => {
-    const repo = new ElementRepository(multiPlatformMockData);
     const driver = createMockDriver();
-    const el = await repo.get(driver, 'LoginPageAndroid', 'submitButton');
+    const repo = new ElementRepository(driver, multiPlatformMockData);
+    const el = await repo.get('submitButton', 'LoginPageAndroid');
     expect(el).toBeInstanceOf(PlatformElement);
   });
 });
@@ -200,18 +225,18 @@ test.describe('get — platform (android)', () => {
 
 test.describe('getAll', () => {
   test('returns an array of WebElements for web platform', async () => {
-    const repo = new ElementRepository(webMockData);
     const page = createMockPage({ all: async () => [createMockLocator(), createMockLocator()] });
-    const elements = await repo.getAll(page, 'TestPage', 'button');
+    const repo = new ElementRepository(page, webMockData);
+    const elements = await repo.getAll('button', 'TestPage');
     expect(Array.isArray(elements)).toBe(true);
     expect(elements.length).toBeGreaterThanOrEqual(2);
     expect(elements[0]).toBeInstanceOf(WebElement);
   });
 
   test('returns an array of PlatformElements for android platform', async () => {
-    const repo = new ElementRepository(multiPlatformMockData);
     const driver = createMockDriver([createMockDriverElement(), createMockDriverElement()]);
-    const elements = await repo.getAll(driver, 'LoginPageAndroid', 'submitButton');
+    const repo = new ElementRepository(driver, multiPlatformMockData);
+    const elements = await repo.getAll('submitButton', 'LoginPageAndroid');
     expect(Array.isArray(elements)).toBe(true);
     expect(elements.length).toBe(2);
     expect(elements[0]).toBeInstanceOf(PlatformElement);
@@ -225,46 +250,46 @@ test.describe('getAll', () => {
 test.describe('getRandom', () => {
   test('returns a WebElement when elements exist (web)', async () => {
     const page = createMockPage({ all: async () => [createMockLocator(), createMockLocator(), createMockLocator()] });
-    const repo = new ElementRepository(webMockData);
-    const el = await repo.getRandom(page, 'TestPage', 'button');
+    const repo = new ElementRepository(page, webMockData);
+    const el = await repo.getRandom('button', 'TestPage');
     expect(el).not.toBeNull();
     expect(el).toBeInstanceOf(WebElement);
   });
 
   test('returns null when no elements found (web, strict=false)', async () => {
     const page = createMockPage({ all: async () => [] });
-    const repo = new ElementRepository(webMockData);
-    const el = await repo.getRandom(page, 'TestPage', 'button', false);
+    const repo = new ElementRepository(page, webMockData);
+    const el = await repo.getRandom('button', 'TestPage', false);
     expect(el).toBeNull();
   });
 
   test('throws when no elements found (web, strict=true)', async () => {
     const page = createMockPage({ all: async () => [] });
-    const repo = new ElementRepository(webMockData);
-    await expect(repo.getRandom(page, 'TestPage', 'button', true)).rejects.toThrow(
+    const repo = new ElementRepository(page, webMockData);
+    await expect(repo.getRandom('button', 'TestPage', true)).rejects.toThrow(
       "No elements found for 'button' on 'TestPage'"
     );
   });
 
   test('returns a PlatformElement when elements exist (android)', async () => {
-    const repo = new ElementRepository(multiPlatformMockData);
     const driver = createMockDriver([createMockDriverElement(), createMockDriverElement()]);
-    const el = await repo.getRandom(driver, 'LoginPageAndroid', 'submitButton');
+    const repo = new ElementRepository(driver, multiPlatformMockData);
+    const el = await repo.getRandom('submitButton', 'LoginPageAndroid');
     expect(el).not.toBeNull();
     expect(el).toBeInstanceOf(PlatformElement);
   });
 
   test('returns null when no platform elements found (strict=false)', async () => {
-    const repo = new ElementRepository(multiPlatformMockData);
     const driver = createMockDriver([]);
-    const el = await repo.getRandom(driver, 'LoginPageAndroid', 'submitButton', false);
+    const repo = new ElementRepository(driver, multiPlatformMockData);
+    const el = await repo.getRandom('submitButton', 'LoginPageAndroid', false);
     expect(el).toBeNull();
   });
 
   test('throws when no platform elements found (strict=true)', async () => {
-    const repo = new ElementRepository(multiPlatformMockData);
     const driver = createMockDriver([]);
-    await expect(repo.getRandom(driver, 'LoginPageAndroid', 'submitButton', true)).rejects.toThrow(
+    const repo = new ElementRepository(driver, multiPlatformMockData);
+    await expect(repo.getRandom('submitButton', 'LoginPageAndroid', true)).rejects.toThrow(
       "No elements found for 'submitButton' on 'LoginPageAndroid'"
     );
   });
@@ -284,8 +309,8 @@ test.describe('getByText', () => {
     const mockPage = {
       locator: () => baseLocator,
     };
-    const repo = new ElementRepository(webMockData);
-    const el = await repo.getByText(mockPage, 'TestPage', 'button', 'Click me');
+    const repo = new ElementRepository(mockPage, webMockData);
+    const el = await repo.getByText('button', 'TestPage', 'Click me');
     expect(el).not.toBeNull();
     expect(el).toBeInstanceOf(WebElement);
   });
@@ -294,8 +319,8 @@ test.describe('getByText', () => {
     const noMatchLocator = createMockLocator({ textContent: async () => 'Other' });
     const baseLocator = createMockLocator({ all: async () => [noMatchLocator] });
     const mockPage = { locator: () => baseLocator };
-    const repo = new ElementRepository(webMockData);
-    const el = await repo.getByText(mockPage, 'TestPage', 'button', 'Nonexistent Text', false);
+    const repo = new ElementRepository(mockPage, webMockData);
+    const el = await repo.getByText('button', 'TestPage', 'Nonexistent Text', false);
     expect(el).toBeNull();
   });
 
@@ -303,9 +328,9 @@ test.describe('getByText', () => {
     const noMatchLocator = createMockLocator({ textContent: async () => 'Other' });
     const baseLocator = createMockLocator({ all: async () => [noMatchLocator] });
     const mockPage = { locator: () => baseLocator };
-    const repo = new ElementRepository(webMockData);
+    const repo = new ElementRepository(mockPage, webMockData);
     await expect(
-      repo.getByText(mockPage, 'TestPage', 'button', 'Nonexistent Text', true)
+      repo.getByText('button', 'TestPage', 'Nonexistent Text', true)
     ).rejects.toThrow('Element \'button\' on \'TestPage\' with text "Nonexistent Text" not found.');
   });
 
@@ -313,24 +338,24 @@ test.describe('getByText', () => {
     const matchingEl = createMockDriverElement({ getText: async () => 'Submit' });
     const nonMatchingEl = createMockDriverElement({ getText: async () => 'Cancel' });
     const driver = createMockDriver([nonMatchingEl, matchingEl]);
-    const repo = new ElementRepository(multiPlatformMockData);
-    const el = await repo.getByText(driver, 'LoginPageAndroid', 'submitButton', 'Submit');
+    const repo = new ElementRepository(driver, multiPlatformMockData);
+    const el = await repo.getByText('submitButton', 'LoginPageAndroid', 'Submit');
     expect(el).not.toBeNull();
     expect(el).toBeInstanceOf(PlatformElement);
   });
 
   test('returns null when text not found on platform (strict=false)', async () => {
     const driver = createMockDriver([createMockDriverElement({ getText: async () => 'Cancel' })]);
-    const repo = new ElementRepository(multiPlatformMockData);
-    const el = await repo.getByText(driver, 'LoginPageAndroid', 'submitButton', 'Submit', false);
+    const repo = new ElementRepository(driver, multiPlatformMockData);
+    const el = await repo.getByText('submitButton', 'LoginPageAndroid', 'Submit', false);
     expect(el).toBeNull();
   });
 
   test('throws when text not found on platform (strict=true)', async () => {
     const driver = createMockDriver([createMockDriverElement({ getText: async () => 'Cancel' })]);
-    const repo = new ElementRepository(multiPlatformMockData);
+    const repo = new ElementRepository(driver, multiPlatformMockData);
     await expect(
-      repo.getByText(driver, 'LoginPageAndroid', 'submitButton', 'Submit', true)
+      repo.getByText('submitButton', 'LoginPageAndroid', 'Submit', true)
     ).rejects.toThrow('Element \'submitButton\' on \'LoginPageAndroid\' with text "Submit" not found.');
   });
 });
@@ -350,8 +375,8 @@ test.describe('getByAttribute', () => {
       locator: () => baseLocator,
       waitForSelector: async () => {},
     };
-    const repo = new ElementRepository(webMockData);
-    const el = await repo.getByAttribute(mockPage, 'TestPage', 'button', 'class', 'btn-primary');
+    const repo = new ElementRepository(mockPage, webMockData);
+    const el = await repo.getByAttribute('button', 'TestPage', 'class', 'btn-primary');
     expect(el).not.toBeNull();
     expect(el).toBeInstanceOf(WebElement);
   });
@@ -365,8 +390,8 @@ test.describe('getByAttribute', () => {
       locator: () => baseLocator,
       waitForSelector: async () => {},
     };
-    const repo = new ElementRepository(webMockData);
-    const el = await repo.getByAttribute(mockPage, 'TestPage', 'button', 'class', 'primary', { exact: false });
+    const repo = new ElementRepository(mockPage, webMockData);
+    const el = await repo.getByAttribute('button', 'TestPage', 'class', 'primary', { exact: false });
     expect(el).not.toBeNull();
   });
 
@@ -379,8 +404,8 @@ test.describe('getByAttribute', () => {
       locator: () => baseLocator,
       waitForSelector: async () => {},
     };
-    const repo = new ElementRepository(webMockData);
-    const el = await repo.getByAttribute(mockPage, 'TestPage', 'button', 'class', 'nonexistent', { strict: false });
+    const repo = new ElementRepository(mockPage, webMockData);
+    const el = await repo.getByAttribute('button', 'TestPage', 'class', 'nonexistent', { strict: false });
     expect(el).toBeNull();
   });
 
@@ -393,9 +418,9 @@ test.describe('getByAttribute', () => {
       locator: () => baseLocator,
       waitForSelector: async () => {},
     };
-    const repo = new ElementRepository(webMockData);
+    const repo = new ElementRepository(mockPage, webMockData);
     await expect(
-      repo.getByAttribute(mockPage, 'TestPage', 'button', 'class', 'nonexistent', { strict: true })
+      repo.getByAttribute('button', 'TestPage', 'class', 'nonexistent', { strict: true })
     ).rejects.toThrow('Element \'button\' on \'TestPage\' with attribute [class] matching "nonexistent" not found.');
   });
 
@@ -403,9 +428,9 @@ test.describe('getByAttribute', () => {
     const noMatchLocator = createMockLocator({ getAttribute: async (_name: string) => 'unrelated' });
     const baseLocator = createMockLocator({ all: async () => [noMatchLocator] });
     const mockPage = { locator: () => baseLocator, waitForSelector: async () => {} };
-    const repo = new ElementRepository(webMockData);
+    const repo = new ElementRepository(mockPage, webMockData);
     await expect(
-      repo.getByAttribute(mockPage, 'TestPage', 'button', 'class', 'primary', { exact: false, strict: true })
+      repo.getByAttribute('button', 'TestPage', 'class', 'primary', { exact: false, strict: true })
     ).rejects.toThrow('containing');
   });
 
@@ -413,8 +438,8 @@ test.describe('getByAttribute', () => {
     const nullLocator = createMockLocator({ getAttribute: async (_name: string) => null });
     const baseLocator = createMockLocator({ all: async () => [nullLocator] });
     const mockPage = { locator: () => baseLocator, waitForSelector: async () => {} };
-    const repo = new ElementRepository(webMockData);
-    const el = await repo.getByAttribute(mockPage, 'TestPage', 'button', 'data-id', 'x');
+    const repo = new ElementRepository(mockPage, webMockData);
+    const el = await repo.getByAttribute('button', 'TestPage', 'data-id', 'x');
     expect(el).toBeNull();
   });
 
@@ -425,9 +450,9 @@ test.describe('getByAttribute', () => {
       all: async () => [partialLocator, exactLocator],
     });
     const mockPage = { locator: () => baseLocator, waitForSelector: async () => {} };
-    const repo = new ElementRepository(webMockData);
+    const repo = new ElementRepository(mockPage, webMockData);
     // Should prefer exact match even though partial match appears first
-    const el = await repo.getByAttribute(mockPage, 'TestPage', 'button', 'class', 'btn-primary');
+    const el = await repo.getByAttribute('button', 'TestPage', 'class', 'btn-primary');
     expect(el).not.toBeNull();
     const attr = await el!.getAttribute('class');
     expect(attr).toBe('btn-primary');
@@ -439,8 +464,8 @@ test.describe('getByAttribute', () => {
       all: async () => [partialLocator],
     });
     const mockPage = { locator: () => baseLocator, waitForSelector: async () => {} };
-    const repo = new ElementRepository(webMockData);
-    const el = await repo.getByAttribute(mockPage, 'TestPage', 'button', 'class', 'btn-primary');
+    const repo = new ElementRepository(mockPage, webMockData);
+    const el = await repo.getByAttribute('button', 'TestPage', 'class', 'btn-primary');
     expect(el).not.toBeNull();
   });
 });
@@ -454,8 +479,8 @@ test.describe('getByIndex', () => {
     const locators = Array.from({ length: 5 }, () => createMockLocator());
     const baseLocator = createMockLocator({ all: async () => locators });
     const mockPage = { locator: () => baseLocator };
-    const repo = new ElementRepository(webMockData);
-    const el = await repo.getByIndex(mockPage, 'TestPage', 'button', 2);
+    const repo = new ElementRepository(mockPage, webMockData);
+    const el = await repo.getByIndex('button', 'TestPage', 2);
     expect(el).not.toBeNull();
     expect(el).toBeInstanceOf(WebElement);
   });
@@ -463,48 +488,48 @@ test.describe('getByIndex', () => {
   test('returns null when index is out of bounds (web, strict=false)', async () => {
     const baseLocator = createMockLocator({ all: async () => [createMockLocator(), createMockLocator()] });
     const mockPage = { locator: () => baseLocator };
-    const repo = new ElementRepository(webMockData);
-    const el = await repo.getByIndex(mockPage, 'TestPage', 'button', 10, false);
+    const repo = new ElementRepository(mockPage, webMockData);
+    const el = await repo.getByIndex('button', 'TestPage', 10, false);
     expect(el).toBeNull();
   });
 
   test('throws when index is out of bounds (web, strict=true)', async () => {
     const baseLocator = createMockLocator({ all: async () => [createMockLocator(), createMockLocator()] });
     const mockPage = { locator: () => baseLocator };
-    const repo = new ElementRepository(webMockData);
+    const repo = new ElementRepository(mockPage, webMockData);
     await expect(
-      repo.getByIndex(mockPage, 'TestPage', 'button', 10, true)
+      repo.getByIndex('button', 'TestPage', 10, true)
     ).rejects.toThrow("Index 10 out of bounds for 'button' on 'TestPage' (found 2 elements).");
   });
 
   test('returns null when negative index (web, strict=false)', async () => {
     const baseLocator = createMockLocator({ all: async () => [createMockLocator(), createMockLocator(), createMockLocator()] });
     const mockPage = { locator: () => baseLocator };
-    const repo = new ElementRepository(webMockData);
-    const el = await repo.getByIndex(mockPage, 'TestPage', 'button', -1, false);
+    const repo = new ElementRepository(mockPage, webMockData);
+    const el = await repo.getByIndex('button', 'TestPage', -1, false);
     expect(el).toBeNull();
   });
 
   test('returns PlatformElement at valid index (android)', async () => {
     const driver = createMockDriver([createMockDriverElement(), createMockDriverElement(), createMockDriverElement()]);
-    const repo = new ElementRepository(multiPlatformMockData);
-    const el = await repo.getByIndex(driver, 'LoginPageAndroid', 'submitButton', 1);
+    const repo = new ElementRepository(driver, multiPlatformMockData);
+    const el = await repo.getByIndex('submitButton', 'LoginPageAndroid', 1);
     expect(el).not.toBeNull();
     expect(el).toBeInstanceOf(PlatformElement);
   });
 
   test('returns null when platform index out of bounds (strict=false)', async () => {
     const driver = createMockDriver([createMockDriverElement()]);
-    const repo = new ElementRepository(multiPlatformMockData);
-    const el = await repo.getByIndex(driver, 'LoginPageAndroid', 'submitButton', 5, false);
+    const repo = new ElementRepository(driver, multiPlatformMockData);
+    const el = await repo.getByIndex('submitButton', 'LoginPageAndroid', 5, false);
     expect(el).toBeNull();
   });
 
   test('throws when platform index out of bounds (strict=true)', async () => {
     const driver = createMockDriver([createMockDriverElement()]);
-    const repo = new ElementRepository(multiPlatformMockData);
+    const repo = new ElementRepository(driver, multiPlatformMockData);
     await expect(
-      repo.getByIndex(driver, 'LoginPageAndroid', 'submitButton', 5, true)
+      repo.getByIndex('submitButton', 'LoginPageAndroid', 5, true)
     ).rejects.toThrow("Index 5 out of bounds for 'submitButton' on 'LoginPageAndroid' (found 1 elements).");
   });
 });
@@ -517,14 +542,12 @@ test.describe('getVisible', () => {
   test('returns first visible element (web)', async () => {
     const hiddenLocator = createMockLocator({ isVisible: async () => false, all: async () => [] });
     const visibleLocator = createMockLocator({ isVisible: async () => true, all: async () => [] });
-    // getAll calls get() -> page.locator() and then el.all()
-    // We need the base locator's all() to return [hiddenLocator, visibleLocator]
     const baseLocator = createMockLocator({
       all: async () => [hiddenLocator, visibleLocator],
     });
     const mockPage = { locator: () => baseLocator, waitForSelector: async () => {} };
-    const repo = new ElementRepository(webMockData);
-    const el = await repo.getVisible(mockPage, 'TestPage', 'button');
+    const repo = new ElementRepository(mockPage, webMockData);
+    const el = await repo.getVisible('button', 'TestPage');
     expect(el).not.toBeNull();
     expect(el).toBeInstanceOf(WebElement);
   });
@@ -533,8 +556,8 @@ test.describe('getVisible', () => {
     const hiddenLocator = createMockLocator({ isVisible: async () => false, all: async () => [] });
     const baseLocator = createMockLocator({ all: async () => [hiddenLocator] });
     const mockPage = { locator: () => baseLocator, waitForSelector: async () => {} };
-    const repo = new ElementRepository(webMockData);
-    const el = await repo.getVisible(mockPage, 'TestPage', 'button', false);
+    const repo = new ElementRepository(mockPage, webMockData);
+    const el = await repo.getVisible('button', 'TestPage', false);
     expect(el).toBeNull();
   });
 
@@ -542,9 +565,9 @@ test.describe('getVisible', () => {
     const hiddenLocator = createMockLocator({ isVisible: async () => false, all: async () => [] });
     const baseLocator = createMockLocator({ all: async () => [hiddenLocator] });
     const mockPage = { locator: () => baseLocator, waitForSelector: async () => {} };
-    const repo = new ElementRepository(webMockData);
+    const repo = new ElementRepository(mockPage, webMockData);
     await expect(
-      repo.getVisible(mockPage, 'TestPage', 'button', true)
+      repo.getVisible('button', 'TestPage', true)
     ).rejects.toThrow("No visible elements found for 'button' on 'TestPage'.");
   });
 });
@@ -558,8 +581,8 @@ test.describe('getByRole', () => {
     const btnLocator = createMockLocator({ getAttribute: async (name: string) => name === 'role' ? 'button' : null });
     const baseLocator = createMockLocator({ all: async () => [btnLocator] });
     const mockPage = { locator: () => baseLocator, waitForSelector: async () => {} };
-    const repo = new ElementRepository(webMockData);
-    const el = await repo.getByRole(mockPage, 'TestPage', 'button', 'button');
+    const repo = new ElementRepository(mockPage, webMockData);
+    const el = await repo.getByRole('button', 'TestPage', 'button');
     expect(el).not.toBeNull();
     expect(el).toBeInstanceOf(WebElement);
   });
@@ -568,8 +591,8 @@ test.describe('getByRole', () => {
     const linkLocator = createMockLocator({ getAttribute: async (_name: string) => 'link' });
     const baseLocator = createMockLocator({ all: async () => [linkLocator] });
     const mockPage = { locator: () => baseLocator, waitForSelector: async () => {} };
-    const repo = new ElementRepository(webMockData);
-    const el = await repo.getByRole(mockPage, 'TestPage', 'button', 'button', false);
+    const repo = new ElementRepository(mockPage, webMockData);
+    const el = await repo.getByRole('button', 'TestPage', 'button', false);
     expect(el).toBeNull();
   });
 
@@ -577,9 +600,9 @@ test.describe('getByRole', () => {
     const linkLocator = createMockLocator({ getAttribute: async (_name: string) => 'link' });
     const baseLocator = createMockLocator({ all: async () => [linkLocator] });
     const mockPage = { locator: () => baseLocator, waitForSelector: async () => {} };
-    const repo = new ElementRepository(webMockData);
+    const repo = new ElementRepository(mockPage, webMockData);
     await expect(
-      repo.getByRole(mockPage, 'TestPage', 'button', 'button', true)
+      repo.getByRole('button', 'TestPage', 'button', true)
     ).rejects.toThrow('Element \'button\' on \'TestPage\' with attribute [role] equal to "button" not found.');
   });
 });
@@ -603,30 +626,30 @@ test.describe('getSelector — additional strategies', () => {
     }],
   };
 
-  const repo = new ElementRepository(mockData);
+  const repo = new ElementRepository(createMockPage(), mockData);
 
   test('text selector', () => {
-    expect(repo.getSelector('Page', 'byText')).toBe('text=Click here');
+    expect(repo.getSelector('byText', 'Page')).toBe('text=Click here');
   });
 
   test('testid selector', () => {
-    expect(repo.getSelector('Page', 'byTestId')).toBe("[data-testid='submit-btn']");
+    expect(repo.getSelector('byTestId', 'Page')).toBe("[data-testid='submit-btn']");
   });
 
   test('role selector', () => {
-    expect(repo.getSelector('Page', 'byRole')).toBe("[role='navigation']");
+    expect(repo.getSelector('byRole', 'Page')).toBe("[role='navigation']");
   });
 
   test('placeholder selector', () => {
-    expect(repo.getSelector('Page', 'byPlaceholder')).toBe("[placeholder='Enter email']");
+    expect(repo.getSelector('byPlaceholder', 'Page')).toBe("[placeholder='Enter email']");
   });
 
   test('label selector', () => {
-    expect(repo.getSelector('Page', 'byLabel')).toBe("[aria-label='Search']");
+    expect(repo.getSelector('byLabel', 'Page')).toBe("[aria-label='Search']");
   });
 
   test('unknown strategy falls through to raw value', () => {
-    expect(repo.getSelector('Page', 'byDefault')).toBe('custom-value');
+    expect(repo.getSelector('byDefault', 'Page')).toBe('custom-value');
   });
 });
 
@@ -635,28 +658,28 @@ test.describe('getSelector — additional strategies', () => {
 // ===========================================================================
 
 test.describe('Error cases', () => {
-  const repo = new ElementRepository(webMockData);
+  const repo = new ElementRepository(createMockPage(), webMockData);
 
   test('getSelector throws when page not found', () => {
-    expect(() => repo.getSelector('NonExistentPage', 'button')).toThrow(
+    expect(() => repo.getSelector('button', 'NonExistentPage')).toThrow(
       "ElementRepository: Page 'NonExistentPage' not found."
     );
   });
 
   test('getSelector throws when element not found', () => {
-    expect(() => repo.getSelector('TestPage', 'nonExistentElement')).toThrow(
+    expect(() => repo.getSelector('nonExistentElement', 'TestPage')).toThrow(
       "ElementRepository: Element 'nonExistentElement' not found on page 'TestPage'."
     );
   });
 
   test('getSelectorRaw throws when page not found', () => {
-    expect(() => repo.getSelectorRaw('NonExistentPage', 'button')).toThrow(
+    expect(() => repo.getSelectorRaw('button', 'NonExistentPage')).toThrow(
       "ElementRepository: Page 'NonExistentPage' not found."
     );
   });
 
   test('getSelectorRaw throws when element not found', () => {
-    expect(() => repo.getSelectorRaw('TestPage', 'nonExistentElement')).toThrow(
+    expect(() => repo.getSelectorRaw('nonExistentElement', 'TestPage')).toThrow(
       "ElementRepository: Element 'nonExistentElement' not found on page 'TestPage'."
     );
   });
@@ -665,9 +688,74 @@ test.describe('Error cases', () => {
     const badData = {
       pages: [{ name: 'Bad', elements: [{ elementName: 'el', selector: {} }] }],
     };
-    const badRepo = new ElementRepository(badData as any);
-    expect(() => badRepo.getSelector('Bad', 'el')).toThrow(
+    const badRepo = new ElementRepository(createMockPage(), badData as any);
+    expect(() => badRepo.getSelector('el', 'Bad')).toThrow(
       "ElementRepository: Invalid selector for 'el'."
     );
+  });
+});
+
+// ===========================================================================
+// get — with ElementResolutionOptions
+// ===========================================================================
+
+test.describe('get — with ElementResolutionOptions', () => {
+  test('default (no options) returns first element', async () => {
+    const mockPage = createMockPage();
+    const repo = new ElementRepository(mockPage, webMockData);
+    const el = await repo.get('button', 'TestPage');
+    expect(el).toBeInstanceOf(WebElement);
+  });
+
+  test('strategy INDEX returns nth element', async () => {
+    const locators = [createMockLocator(), createMockLocator(), createMockLocator()];
+    const baseLocator = createMockLocator({
+      nth: (i: number) => locators[i],
+      all: async () => locators,
+      first: () => locators[0],
+    });
+    const mockPage = { locator: () => baseLocator };
+    const repo = new ElementRepository(mockPage, webMockData);
+    const el = await repo.get('button', 'TestPage', { strategy: SelectionStrategy.INDEX, index: 2 });
+    expect(el).toBeInstanceOf(WebElement);
+  });
+
+  test('strategy INDEX throws when index is missing', async () => {
+    const mockPage = createMockPage();
+    const repo = new ElementRepository(mockPage, webMockData);
+    await expect(
+      repo.get('button', 'TestPage', { strategy: SelectionStrategy.INDEX })
+    ).rejects.toThrow('options.index is required');
+  });
+
+  test('strategy RANDOM returns an element', async () => {
+    const locators = [createMockLocator(), createMockLocator()];
+    const baseLocator = createMockLocator({
+      all: async () => locators,
+      nth: (i: number) => locators[i],
+      first: () => locators[0],
+    });
+    const mockPage = { locator: () => baseLocator };
+    const repo = new ElementRepository(mockPage, webMockData);
+    const el = await repo.get('button', 'TestPage', { strategy: SelectionStrategy.RANDOM });
+    expect(el).toBeInstanceOf(WebElement);
+  });
+
+  test('strategy TEXT filters by text content', async () => {
+    const matchLocator = createMockLocator({
+      filter: () => createMockLocator({ first: () => createMockLocator() }),
+    });
+    const mockPage = { locator: () => matchLocator };
+    const repo = new ElementRepository(mockPage, webMockData);
+    const el = await repo.get('button', 'TestPage', { strategy: SelectionStrategy.TEXT, value: 'Submit' });
+    expect(el).toBeInstanceOf(WebElement);
+  });
+
+  test('strategy TEXT throws when value is missing', async () => {
+    const mockPage = createMockPage();
+    const repo = new ElementRepository(mockPage, webMockData);
+    await expect(
+      repo.get('button', 'TestPage', { strategy: SelectionStrategy.TEXT })
+    ).rejects.toThrow('options.value is required');
   });
 });
