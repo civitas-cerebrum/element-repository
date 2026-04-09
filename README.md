@@ -4,7 +4,7 @@
 
 A lightweight, robust package that decouples your UI selectors from your test code. By externalizing locators into a central JSON repository, you make your test automation framework cleaner, easier to maintain, and accessible to non-developers. Supports both **Playwright (web)** and **Appium/WebdriverIO (mobile)** through a unified API.
 
-## Installation
+## 📦 Installation
 
 ```bash
 npm i @civitas-cerebrum/element-repository
@@ -13,7 +13,7 @@ npm i @civitas-cerebrum/element-repository
 **Peer Dependencies:**
 For web testing, install `@playwright/test` or `playwright`. For mobile/platform testing, install `webdriverio`.
 
-## What is it good for?
+## 🚀 What is it good for?
 
 * **Zero Hardcoded Selectors:** Keep your Page Objects and Step Definitions completely free of complex DOM queries.
 * **Platform-Agnostic Element API:** A unified `Element` interface with interaction, state, extraction, querying, and waiting methods that work identically across Playwright and WebDriverIO.
@@ -22,7 +22,7 @@ For web testing, install `@playwright/test` or `playwright`. For mobile/platform
 * **Dynamic Parsing:** Automatically converts your JSON configuration into platform-native selectors.
 * **Smart Locators:** Built-in methods for arrays, randomized element selection, text-filtering, attribute-filtering, and visibility checks.
 
-## Configuration
+## 🏗️ Configuration
 
 Create a JSON file in your project to hold your selectors:
 
@@ -120,7 +120,7 @@ The `platform` field on each page object determines which selector format is use
 
 > All strategy keys that contain spaces also accept a camelCase alias (e.g., `"accessibilityId"` instead of `"accessibility id"`).
 
-## Usage
+## 💻 Usage
 
 ### Initialization
 
@@ -226,7 +226,7 @@ const count = await element.action().getCount()
 
 **Waiting:** `waitForState(state)`
 
-## API Reference
+## 🛠️ API Reference
 
 ### ElementRepository
 
@@ -343,7 +343,7 @@ All interaction methods accept an optional `{ timeout?: number }` and return the
 | `waitFor(options?)` | Waits for state: `"visible"`, `"hidden"`, `"attached"`, `"detached"`. |
 | `action(timeout?)` | Returns a fluent `ElementChain` builder. |
 
-### Type Safety
+### 🔧 Type Safety
 
 ```typescript
 import { Element, isWeb, isPlatform } from '@civitas-cerebrum/element-repository';
@@ -361,7 +361,7 @@ if (isPlatform(el)) {
 }
 ```
 
-## Breaking Changes (v0.2.0)
+## ⚠️ Breaking Changes (v0.2.0)
 
 | Change | Migration |
 |---|---|
