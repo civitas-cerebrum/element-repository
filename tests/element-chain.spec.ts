@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { ElementRepository } from '../src/repo/ElementRepository';
 import { WebElement } from '../src/types';
+import { ElementChain } from '../src/types/ElementChain';
 import { SelectionStrategy } from '../src/enum/Options';
 
 // ---------------------------------------------------------------------------
@@ -358,6 +359,181 @@ test.describe('SelectionStrategy.ALL', () => {
     } as any);
     const elements = await repo.getAll('items', 'Page');
     expect(elements.length).toBe(3);
+  });
+});
+
+// ===========================================================================
+// Element methods return Element for chaining
+// ===========================================================================
+
+test.describe('ElementChain — waitForState', () => {
+  test('waitForState() calls waitFor with the specified state', async () => {
+    let waitState: string | undefined;
+    const mockLocator = createMockLocator({
+      waitFor: async (opts?: any) => { waitState = opts?.state; },
+    });
+    const element = new WebElement(mockLocator);
+    await element.action().waitForState('attached');
+    expect(waitState).toBe('attached');
+  });
+});
+
+test.describe('ElementChain — clickIfPresent', () => {
+  test('clickIfPresent() clicks when element is visible', async () => {
+    let clicked = false;
+    const mockLocator = createMockLocator({
+      isVisible: async () => true,
+      click: async () => { clicked = true; },
+    });
+    const element = new WebElement(mockLocator);
+    await element.action().clickIfPresent();
+    expect(clicked).toBe(true);
+  });
+
+  test('clickIfPresent() skips when element is not visible', async () => {
+    let clicked = false;
+    const mockLocator = createMockLocator({
+      isVisible: async () => false,
+      click: async () => { clicked = true; },
+    });
+    const element = new WebElement(mockLocator);
+    await element.action().clickIfPresent();
+    expect(clicked).toBe(false);
+  });
+});
+
+test.describe('ElementChain — scrollIntoView', () => {
+  test('scrollIntoView() waits for attached then scrolls', async () => {
+    let waitState: string | undefined;
+    let scrolled = false;
+    const mockLocator = createMockLocator({
+      waitFor: async (opts?: any) => { waitState = opts?.state; },
+      scrollIntoViewIfNeeded: async () => { scrolled = true; },
+    });
+    const element = new WebElement(mockLocator);
+    await element.action().scrollIntoView();
+    expect(waitState).toBe('attached');
+    expect(scrolled).toBe(true);
+  });
+});
+
+test.describe('ElementChain — verifyChecked', () => {
+  test('verifyChecked() passes when element is checked', async () => {
+    const mockLocator = createMockLocator({
+      isChecked: async () => true,
+    });
+    const element = new WebElement(mockLocator);
+    await element.action().verifyChecked();
+  });
+
+  test('verifyChecked() throws when element is not checked', async () => {
+    const mockLocator = createMockLocator({
+      isChecked: async () => false,
+    });
+    const element = new WebElement(mockLocator);
+    await expect(element.action().verifyChecked()).rejects.toThrow('Expected element to be checked');
+  });
+});
+
+test.describe('ElementChain — isPresent', () => {
+  test('isPresent() returns true when element is visible', async () => {
+    const mockLocator = createMockLocator({
+      isVisible: async () => true,
+    });
+    const element = new WebElement(mockLocator);
+    const result = await element.action().isPresent();
+    expect(result).toBe(true);
+  });
+
+  test('isPresent() returns false when element is not visible', async () => {
+    const mockLocator = createMockLocator({
+      isVisible: async () => false,
+    });
+    const element = new WebElement(mockLocator);
+    const result = await element.action().isPresent();
+    expect(result).toBe(false);
+  });
+});
+
+test.describe('ElementChain — getRaw', () => {
+  test('getRaw() returns the raw selector', async () => {
+    const mockLocator = createMockLocator({
+      waitFor: async () => {},
+      toString: () => '.my-selector',
+    });
+    const element = new WebElement(mockLocator);
+    const raw = await element.action().getRaw();
+    expect(raw).toBe('.my-selector');
+  });
+
+  test('getRaw() returns selector string when provided', async () => {
+    const mockLocator = createMockLocator({
+      waitFor: async () => {},
+    });
+    const element = new WebElement(mockLocator, '#my-id');
+    const raw = await element.action().getRaw();
+    expect(raw).toBe('#my-id');
+  });
+});
+
+test.describe('ElementChain — then', () => {
+  test('awaiting the chain returns the element', async () => {
+    const mockLocator = createMockLocator();
+    const element = new WebElement(mockLocator);
+    const result = await element.action();
+    expect(result).toBe(element);
+  });
+
+  test('then() can be called explicitly with resolve callback', async () => {
+    const mockLocator = createMockLocator();
+    const element = new WebElement(mockLocator);
+    const chain = element.action();
+    const result = await chain.then((el) => el);
+    expect(result).toBe(element);
+  });
+});
+
+// ===========================================================================
+// WebElement.raw
+// ===========================================================================
+
+test.describe('WebElement — raw', () => {
+  test('raw() returns the selector when provided', async () => {
+    const mockLocator = createMockLocator();
+    const element = new WebElement(mockLocator, 'div.container');
+    const raw = await element.raw();
+    expect(raw).toBe('div.container');
+  });
+
+  test('raw() falls back to locator.toString() when no selector', async () => {
+    const mockLocator = createMockLocator({
+      toString: () => 'locator(".fallback")',
+    });
+    const element = new WebElement(mockLocator);
+    const raw = await element.raw();
+    expect(raw).toBe('locator(".fallback")');
+  });
+});
+
+// ===========================================================================
+// PlatformElement — action and raw
+// ===========================================================================
+
+test.describe('PlatformElement — action and raw', () => {
+  test('action() returns an ElementChain', () => {
+    const { PlatformElement } = require('../src/types/PlatformElement');
+    const mockDriver = { $: async () => ({}) };
+    const el = new PlatformElement(mockDriver, '~myAccessibilityId');
+    const chain = el.action();
+    expect(chain).toBeInstanceOf(ElementChain);
+  });
+
+  test('raw() returns the selector', async () => {
+    const { PlatformElement } = require('../src/types/PlatformElement');
+    const mockDriver = { $: async () => ({}) };
+    const el = new PlatformElement(mockDriver, '~loginButton');
+    const raw = await el.raw();
+    expect(raw).toBe('~loginButton');
   });
 });
 
