@@ -98,6 +98,11 @@ export class ElementRepository {
     this.defaultTimeout = timeout;
   }
 
+  /** Temporary untested method to verify CI posts coverage comment on failure. */
+  public untestedMethod(): string {
+    return 'this method has no test coverage';
+  }
+
   /**
    * Creates the platform-appropriate Element wrapper and waits for it to
    * be attached in the DOM / exist in the view hierarchy.
