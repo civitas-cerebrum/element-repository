@@ -1,6 +1,9 @@
 // Export all schema types
 export * from './schema';
 
+// Export enums and options
+export * from './enum/Options';
+
 // Export standalone utilities
 export * from './utils/math';
 

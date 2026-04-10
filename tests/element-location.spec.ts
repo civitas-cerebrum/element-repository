@@ -154,8 +154,8 @@ test.describe('Web element location — get()', () => {
   for (const [elementName, expectedSelector] of Object.entries(expectedSelectors)) {
     test(`${elementName} → page.locator("${expectedSelector}")`, async () => {
       const { page, calls } = createCapturingPage();
-      const repo = new ElementRepository(webMockData);
-      await repo.get(page, 'TestPage', elementName);
+      const repo = new ElementRepository(page, webMockData);
+      await repo.get(elementName, 'TestPage');
 
       expect(calls.locator).toContain(expectedSelector);
     });
@@ -163,8 +163,8 @@ test.describe('Web element location — get()', () => {
 
   test('returns a WebElement wrapping the locator', async () => {
     const { page } = createCapturingPage();
-    const repo = new ElementRepository(webMockData);
-    const el = await repo.get(page, 'TestPage', 'cssBtn');
+    const repo = new ElementRepository(page, webMockData);
+    const el = await repo.get('cssBtn', 'TestPage');
     expect(el).toBeInstanceOf(WebElement);
   });
 });
@@ -176,8 +176,8 @@ test.describe('Web element location — get()', () => {
 test.describe('Web element location — getAll()', () => {
   test('passes formatted selector to page.locator() and returns WebElements', async () => {
     const { page, calls } = createCapturingPage();
-    const repo = new ElementRepository(webMockData);
-    const elements = await repo.getAll(page, 'TestPage', 'xpathLink');
+    const repo = new ElementRepository(page, webMockData);
+    const elements = await repo.getAll('xpathLink', 'TestPage');
 
     expect(calls.locator).toContain('xpath=//a[@href="/about"]');
     expect(elements.length).toBeGreaterThanOrEqual(1);
@@ -192,8 +192,8 @@ test.describe('Web element location — getAll()', () => {
 test.describe('Web element location — getRandom()', () => {
   test('resolves selector and waits before returning element', async () => {
     const { page, calls } = createCapturingPage();
-    const repo = new ElementRepository(webMockData);
-    const el = await repo.getRandom(page, 'TestPage', 'idInput');
+    const repo = new ElementRepository(page, webMockData);
+    const el = await repo.getRandom('idInput', 'TestPage');
 
     expect(calls.locator).toContain('#email-input');
     expect(el).toBeInstanceOf(WebElement);
@@ -207,9 +207,9 @@ test.describe('Web element location — getRandom()', () => {
 test.describe('Web element location — getByText()', () => {
   test('resolves selector then filters by text', async () => {
     const { page, calls } = createCapturingPage();
-    const repo = new ElementRepository(webMockData);
+    const repo = new ElementRepository(page, webMockData);
     // The mock locator's textContent returns 'text', so match on that
-    const el = await repo.getByText(page, 'TestPage', 'cssBtn', 'text');
+    const el = await repo.getByText('cssBtn', 'TestPage', 'text');
 
     expect(calls.locator).toContain('css=button.primary');
     expect(el).toBeInstanceOf(WebElement);
@@ -223,8 +223,8 @@ test.describe('Web element location — getByText()', () => {
 test.describe('Web element location — getByIndex()', () => {
   test('resolves selector then picks nth element', async () => {
     const { page, calls } = createCapturingPage();
-    const repo = new ElementRepository(webMockData);
-    const el = await repo.getByIndex(page, 'TestPage', 'testidBtn', 0);
+    const repo = new ElementRepository(page, webMockData);
+    const el = await repo.getByIndex('testidBtn', 'TestPage', 0);
 
     expect(calls.locator).toContain("[data-testid='submit-btn']");
     expect(el).toBeInstanceOf(WebElement);
@@ -246,8 +246,8 @@ test.describe('Android element location — get()', () => {
   for (const [elementName, expectedSelector] of Object.entries(expectedSelectors)) {
     test(`${elementName} → driver.$("${expectedSelector}")`, async () => {
       const { driver, calls } = createCapturingDriver();
-      const repo = new ElementRepository(androidMockData, undefined, 'android');
-      const el = await repo.get(driver, 'LoginPage', elementName);
+      const repo = new ElementRepository(driver, androidMockData);
+      const el = await repo.get(elementName, 'LoginPage');
       expect(el).toBeInstanceOf(PlatformElement);
 
       // PlatformElement calls driver.$() lazily on interaction
@@ -264,8 +264,8 @@ test.describe('Android element location — get()', () => {
 test.describe('Android element location — getAll()', () => {
   test('passes Appium selector to driver.$$()', async () => {
     const { driver, calls } = createCapturingDriver();
-    const repo = new ElementRepository(androidMockData, undefined, 'android');
-    const elements = await repo.getAll(driver, 'LoginPage', 'byAccessibilityId');
+    const repo = new ElementRepository(driver, androidMockData);
+    const elements = await repo.getAll('byAccessibilityId', 'LoginPage');
 
     expect(calls.$$).toContain('~LoginBtn');
     expect(elements[0]).toBeInstanceOf(PlatformElement);
@@ -279,8 +279,8 @@ test.describe('Android element location — getAll()', () => {
 test.describe('Android element location — getByText()', () => {
   test('passes Appium selector and filters by getText()', async () => {
     const { driver, calls } = createCapturingDriver({ getText: async () => 'Submit' });
-    const repo = new ElementRepository(androidMockData, undefined, 'android');
-    const el = await repo.getByText(driver, 'LoginPage', 'byXpath', 'Submit');
+    const repo = new ElementRepository(driver, androidMockData);
+    const el = await repo.getByText('byXpath', 'LoginPage', 'Submit');
 
     expect(calls.$$).toContain('//android.widget.Button');
     expect(el).toBeInstanceOf(PlatformElement);
@@ -294,8 +294,8 @@ test.describe('Android element location — getByText()', () => {
 test.describe('Android element location — getByIndex()', () => {
   test('passes Appium selector and picks nth element', async () => {
     const { driver, calls } = createCapturingDriver();
-    const repo = new ElementRepository(androidMockData, undefined, 'android');
-    const el = await repo.getByIndex(driver, 'LoginPage', 'byUiAutomator', 0);
+    const repo = new ElementRepository(driver, androidMockData);
+    const el = await repo.getByIndex('byUiAutomator', 'LoginPage', 0);
 
     expect(calls.$$).toContain('android=new UiSelector().text("Go")');
     expect(el).toBeInstanceOf(PlatformElement);
@@ -309,8 +309,8 @@ test.describe('Android element location — getByIndex()', () => {
 test.describe('Android element location — getRandom()', () => {
   test('passes Appium selector and picks random element', async () => {
     const { driver, calls } = createCapturingDriver();
-    const repo = new ElementRepository(androidMockData, undefined, 'android');
-    const el = await repo.getRandom(driver, 'LoginPage', 'byAccessibilityId');
+    const repo = new ElementRepository(driver, androidMockData);
+    const el = await repo.getRandom('byAccessibilityId', 'LoginPage');
 
     expect(calls.$$).toContain('~LoginBtn');
     expect(el).toBeInstanceOf(PlatformElement);
@@ -331,8 +331,8 @@ test.describe('iOS element location — get()', () => {
   for (const [elementName, expectedSelector] of Object.entries(expectedSelectors)) {
     test(`${elementName} → driver.$("${expectedSelector}")`, async () => {
       const { driver, calls } = createCapturingDriver();
-      const repo = new ElementRepository(iosMockData, undefined, 'ios');
-      const el = await repo.get(driver, 'LoginPage', elementName);
+      const repo = new ElementRepository(driver, iosMockData);
+      const el = await repo.get(elementName, 'LoginPage');
       expect(el).toBeInstanceOf(PlatformElement);
 
       // PlatformElement calls driver.$() lazily on interaction
@@ -359,8 +359,8 @@ test.describe('Timeout propagation', () => {
       loc.waitFor = async (opts?: any) => { capturedTimeout = opts?.timeout; };
       return loc;
     };
-    const repo = new ElementRepository(webMockData);
-    await repo.get(page, 'TestPage', 'cssBtn');
+    const repo = new ElementRepository(page, webMockData);
+    await repo.get('cssBtn', 'TestPage');
     expect(capturedTimeout).toBe(15000);
   });
 
@@ -373,8 +373,8 @@ test.describe('Timeout propagation', () => {
         return loc;
       },
     };
-    const repo = new ElementRepository(webMockData, 5000);
-    await repo.get(page, 'TestPage', 'cssBtn');
+    const repo = new ElementRepository(page, webMockData, 5000);
+    await repo.get('cssBtn', 'TestPage');
     expect(capturedTimeout).toBe(5000);
   });
 
@@ -387,9 +387,9 @@ test.describe('Timeout propagation', () => {
         return loc;
       },
     };
-    const repo = new ElementRepository(webMockData);
+    const repo = new ElementRepository(page, webMockData);
     repo.setDefaultTimeout(3000);
-    await repo.get(page, 'TestPage', 'cssBtn');
+    await repo.get('cssBtn', 'TestPage');
     expect(capturedTimeout).toBe(3000);
   });
 });
@@ -421,23 +421,23 @@ test.describe('Platform isolation', () => {
 
   test('web repo resolves web selector', async () => {
     const { page, calls } = createCapturingPage();
-    const repo = new ElementRepository(multiPlatformData);
-    await repo.get(page, 'SharedPage', 'btn');
+    const repo = new ElementRepository(page, multiPlatformData);
+    await repo.get('btn', 'SharedPage');
     expect(calls.locator).toContain('css=button.web');
   });
 
   test('android repo resolves android selector', async () => {
     const { driver, calls } = createCapturingDriver();
-    const repo = new ElementRepository(multiPlatformData);
-    const el = await repo.get(driver, 'SharedPageAndroid', 'btn');
+    const repo = new ElementRepository(driver, multiPlatformData);
+    const el = await repo.get('btn', 'SharedPageAndroid');
     await el.click();
     expect(calls.$).toContain('//android.widget.Button');
   });
 
   test('ios repo resolves ios selector', async () => {
     const { driver, calls } = createCapturingDriver();
-    const repo = new ElementRepository(multiPlatformData);
-    const el = await repo.get(driver, 'SharedPageIOS', 'btn');
+    const repo = new ElementRepository(driver, multiPlatformData);
+    const el = await repo.get('btn', 'SharedPageIOS');
     await el.click();
     expect(calls.$).toContain('~MainBtn');
   });

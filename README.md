@@ -6,8 +6,6 @@ A lightweight, robust package that decouples your UI selectors from your test co
 
 ## 📦 Installation
 
-Install the package via your preferred package manager:
-
 ```bash
 npm i @civitas-cerebrum/element-repository
 ```
@@ -19,13 +17,14 @@ For web testing, install `@playwright/test` or `playwright`. For mobile/platform
 
 * **Zero Hardcoded Selectors:** Keep your Page Objects and Step Definitions completely free of complex DOM queries.
 * **Platform-Agnostic Element API:** A unified `Element` interface with interaction, state, extraction, querying, and waiting methods that work identically across Playwright and WebDriverIO.
-* **Dynamic Parsing:** Automatically converts your JSON configuration into platform-native selectors — CSS, XPath, ID, Text, Test ID, Role, Placeholder, and Label for web; Accessibility ID, UIAutomator, Predicate, Class Chain, and more for mobile.
-* **Smart Locators:** Built-in methods for handling arrays, randomized element selection (great for catalog/PLP testing), text-filtering, attribute-filtering, and visibility checks.
-* **Soft Waiting:** Seamlessly waits for elements to attach and become visible before returning them to prevent flake.
+* **Fluent Action Chains:** Sequence multiple actions on an element with `element.action().waitForState('visible').click()`.
+* **Built-in Verifications:** Assert presence, absence, text, attributes, and counts directly on elements.
+* **Dynamic Parsing:** Automatically converts your JSON configuration into platform-native selectors.
+* **Smart Locators:** Built-in methods for arrays, randomized element selection, text-filtering, attribute-filtering, and visibility checks.
 
 ## 🏗️ Configuration
 
-Create a JSON file in your project to hold your selectors. The file must adhere to the standard schema:
+Create a JSON file in your project to hold your selectors:
 
 **`locators.json`**
 
@@ -107,8 +106,6 @@ The `platform` field on each page object determines which selector format is use
 | `placeholder` | `[placeholder='<value>']` | `"placeholder": "Search..."` |
 | `label` | `[aria-label='<value>']` | `"label": "Close"` |
 
-> **Note:** The `testid` key uses the standard `data-testid` attribute.
-
 #### Non-Web / Mobile (Appium)
 
 | Key | camelCase Alias | Resolves To | Example |
@@ -116,282 +113,263 @@ The `platform` field on each page object determines which selector format is use
 | `accessibility id` | `accessibilityId` | `~<value>` | `"accessibility id": "LoginBtn"` |
 | `xpath` | — | `<value>` (raw) | `"xpath": "//android.widget.Button"` |
 | `id` | — | `#<value>` | `"id": "submit-btn"` |
-| `css` | — | `css=<value>` | `"css": "button.primary"` |
 | `uiautomator` | `androidUIAutomator` | `android=<value>` | `"uiautomator": "new UiSelector().text(\"Go\")"` |
 | `predicate` | `iOSNsPredicateString` | `-ios predicate string:<value>` | `"predicate": "label == \"Login\""` |
 | `class chain` | `iOSClassChain` | `-ios class chain:<value>` | `"class chain": "**/XCUIElementTypeButton"` |
 | `class name` | `className` | `<value>` (raw) | `"class name": "android.widget.EditText"` |
-| `tag name` | `tagName` | `<value>` (raw) | `"tag name": "button"` |
-| `name` | — | `<value>` (raw) | `"name": "username"` |
-| `android data matcher` | `androidDataMatcher` | `-android datamatcher:<value>` | `"androidDataMatcher": "{\"name\":\"Title\"}"` |
-| `android view matcher` | `androidViewMatcher` | `-android viewmatcher:<value>` | `"androidViewMatcher": "{\"id\":\"btn\"}"` |
-| `android view tag` | `androidViewTag` | `-android viewtag:<value>` | `"androidViewTag": "my-tag"` |
-| `text` | — | Platform-specific | `"text": "Submit"` |
 
-> **Note:** The `text` key resolves to `android=new UiSelector().text("...")` on Android, `-ios predicate string:label == "..."` on iOS, and the raw value on other platforms.
->
-> **Note:** All strategy keys that contain spaces also accept a camelCase alias (e.g., `"accessibilityId"` instead of `"accessibility id"`). Both forms produce identical selectors.
+> All strategy keys that contain spaces also accept a camelCase alias (e.g., `"accessibilityId"` instead of `"accessibility id"`).
 
 ## 💻 Usage
 
-You can initialize the `ElementRepository` either by passing the **file path** to your JSON, or by passing the **parsed JSON object** directly.
-
 ### Initialization
+
+The constructor takes the **driver** (Playwright `Page` or WebDriverIO `Browser`) as the first argument:
 
 ```typescript
 import { ElementRepository } from '@civitas-cerebrum/element-repository';
 
-// Option A: Pass the path to your JSON (relative to your project root)
-const repo = new ElementRepository('tests/data/locators.json', 15000);
+// Option A: Pass a file path (relative to project root)
+const repo = new ElementRepository(page, 'tests/data/locators.json');
 
-// Option B: Import the JSON directly (requires resolveJsonModule in tsconfig)
+// Option B: Pass parsed JSON data directly
 import locatorData from '../data/locators.json';
-const repo = new ElementRepository(locatorData, 15000);
+const repo = new ElementRepository(page, locatorData);
 
-// Option C: Platform-specific repository (for mobile/Appium)
-const androidRepo = new ElementRepository('tests/data/locators.json', 15000, 'android');
-const iosRepo = new ElementRepository(locatorData, 15000, 'ios');
+// Option C: With a custom timeout (default: 15000ms)
+const repo = new ElementRepository(page, locatorData, 30000);
+
+// Access the bound driver
+const driver = repo.driver; // returns the Page/Browser passed to the constructor
 ```
-
-The third parameter (`platform`) defaults to `'web'`. When set to a non-web platform, `getSelector()` automatically returns Appium-formatted selectors, and `get()` returns `PlatformElement` wrappers instead of `WebElement`.
 
 ### Retrieving Elements
 
-The repository exposes clean, asynchronous methods that return unified `Element` objects, ready for interaction regardless of the underlying platform.
+All methods use `(elementName, pageName)` order and return unified `Element` objects:
 
 ```typescript
 test('Search and select random product', async ({ page }) => {
-  await page.goto('/');
+  const repo = new ElementRepository(page, 'tests/data/locators.json');
 
-  // 1. Get a standard element
-  const searchInput = await repo.get(page, 'HomePage', 'search-input');
+  // Get a single element (defaults to first match)
+  const searchInput = await repo.get('search-input', 'HomePage');
   await searchInput.fill('Trousers');
 
-  const submitBtn = await repo.get(page, 'HomePage', 'submit-button');
-  await submitBtn.click();
+  // Get with a specific strategy
+  const thirdCard = await repo.get('product-cards', 'ProductList', {
+    strategy: SelectionStrategy.INDEX, index: 2
+  });
 
-  // 2. Select a random element from a list
-  const randomProduct = await repo.getRandom(page, 'ProductList', 'product-cards');
+  // Select a random element from a list
+  const randomProduct = await repo.getRandom('product-cards', 'ProductList');
   await randomProduct?.click();
 
-  // 3. Find a specific element by text within a list
-  const specificProduct = await repo.getByText(page, 'ProductList', 'product-cards', 'Blue Chinos');
+  // Find by text
+  const specificProduct = await repo.getByText('product-cards', 'ProductList', 'Blue Chinos');
   await specificProduct?.click();
 
-  // 4. Find an element by HTML attribute
-  const activeCard = await repo.getByAttribute(page, 'ProductList', 'product-cards', 'data-status', 'active');
-  await activeCard?.click();
+  // Find by HTML attribute
+  const activeCard = await repo.getByAttribute('product-cards', 'ProductList', 'data-status', 'active');
 
-  // 5. Get a specific element by index
-  const thirdProduct = await repo.getByIndex(page, 'ProductList', 'product-cards', 2);
-  await thirdProduct?.click();
+  // Get by index
+  const secondCard = await repo.getByIndex('product-cards', 'ProductList', 1);
 
-  // 6. Get the first visible element (filters out hidden duplicates)
-  const visibleModal = await repo.getVisible(page, 'HomePage', 'modal');
-  await visibleModal?.click();
+  // Get the first visible element
+  const visibleModal = await repo.getVisible('modal', 'HomePage');
 
-  // 7. Filter elements by ARIA role
-  const navLink = await repo.getByRole(page, 'HomePage', 'nav-links', 'link');
-  await navLink?.click();
+  // Filter by ARIA role
+  const navLink = await repo.getByRole('nav-links', 'HomePage', 'link');
 });
 ```
+
+### Fluent Action Chains
+
+Every `Element` exposes an `action(timeout?)` method that returns a thenable `ElementChain` builder. Queue multiple actions and execute them all with a single `await`:
+
+```typescript
+const element = await repo.get('submitButton', 'LoginPage');
+
+// Interaction chain
+await element.action(5000)
+  .waitForState('visible')
+  .click()
+
+// Click without scrolling (for dropdown/flyout items)
+await element.action()
+  .waitForState('attached')
+  .click({ withoutScrolling: true })
+
+// Fill and verify
+await element.action()
+  .fill('hello@test.com')
+  .verifyText('hello@test.com')
+
+// Verification chain
+await element.action(5000)
+  .verifyPresence()
+  .verifyText('Submit')
+  .verifyAttribute('type', 'submit')
+
+// Extraction (terminal — returns value)
+const text = await element.action().getText()
+const href = await element.action().getAttribute('href')
+const count = await element.action().getCount()
+```
+
+#### Available Chain Methods
+
+**Interactions:** `click(options?)`, `clickIfPresent(options?)`, `hover()`, `fill(text)`, `clear()`, `check()`, `uncheck()`, `doubleClick()`, `scrollIntoView()`, `pressSequentially(text, delay?)`, `dispatchEvent(event)`
+
+**Verifications:** `verifyPresence()`, `verifyAbsence()`, `verifyText(expected?)`, `verifyTextContains(text)`, `verifyAttribute(name, value)`, `verifyEnabled()`, `verifyDisabled()`, `verifyChecked()`, `verifyCount(options)`
+
+**Extractions (terminal):** `getText()`, `getAttribute(name)`, `getInputValue()`, `getCount()`, `getRaw()`, `isPresent()`
+
+**Waiting:** `waitForState(state)`
 
 ## 🛠️ API Reference
 
 ### ElementRepository
 
-#### `get(page, pageName, elementName)`
+#### `constructor(driver, dataOrPath, defaultTimeout?)`
 
-Returns a single `Element`. For web, waits for the selector to attach to the DOM based on your configured timeout. For platform, returns a lazy `PlatformElement` that resolves on interaction.
+| Param | Type | Description |
+|-------|------|-------------|
+| `driver` | `any` | Playwright `Page` or WebDriverIO `Browser`/`Driver` instance |
+| `dataOrPath` | `string \| PageRepository` | Path to JSON file or parsed JSON object |
+| `defaultTimeout` | `number` | Default wait timeout in ms (default: `15000`) |
 
-#### `getAll(page, pageName, elementName)`
+#### `get(elementName, pageName, options?)`
 
-Returns an array of `Element` objects. Useful when you need to iterate over multiple elements.
-
-#### `getRandom(page, pageName, elementName, strict?)`
-
-Counts the matching elements and randomly selects one. Safely waits for the specific randomized element to become visible.
-
-#### `getByText(page, pageName, elementName, desiredText, strict?)`
-
-Returns the first `Element` matching the mapped selector that also contains the `desiredText`.
-
-#### `getByAttribute(page, pageName, elementName, attribute, value, options?)`
-
-Returns the first `Element` whose HTML attribute matches the given value. Iterates through all matching elements and checks the specified attribute.
-
-**Options:**
-- `exact` (boolean, default: `true`) — If `true`, requires an exact attribute match. If `false`, matches when the attribute contains the value.
-- `strict` (boolean, default: `false`) — If `true`, throws an error when no matching element is found.
+Returns a single `Element`. Defaults to the first match. Pass `ElementResolutionOptions` to control selection:
 
 ```typescript
-// Exact match (default)
-const active = await repo.getByAttribute(page, 'Dashboard', 'cards', 'data-status', 'active');
+import { SelectionStrategy } from '@civitas-cerebrum/element-repository';
 
-// Partial (contains) match
-const dashLink = await repo.getByAttribute(page, 'Nav', 'links', 'href', '/dashboard', { exact: false });
+await repo.get('button', 'Page')                                                    // first (default)
+await repo.get('button', 'Page', { strategy: SelectionStrategy.INDEX, index: 2 })   // by index
+await repo.get('button', 'Page', { strategy: SelectionStrategy.RANDOM })             // random
+await repo.get('button', 'Page', { strategy: SelectionStrategy.TEXT, value: 'Sub' }) // by text
+await repo.get('button', 'Page', { strategy: SelectionStrategy.ALL })                // un-narrowed (for counts)
 ```
 
-#### `getByIndex(page, pageName, elementName, index, strict?)`
+#### `getAll(elementName, pageName)`
 
-Returns the `Element` at the specified zero-based index from the list of matching elements. Returns `null` (or throws in strict mode) if the index is out of bounds.
+Returns an array of all matching `Element` objects.
 
-```typescript
-const thirdCard = await repo.getByIndex(page, 'ProductList', 'product-cards', 2);
-```
+#### `getRandom(elementName, pageName, strict?)`
 
-#### `getVisible(page, pageName, elementName, strict?)`
+Randomly selects one element from all matches.
 
-Returns the first visible element matching the selector. Unlike `get()`, which returns the locator after a basic wait, this method explicitly filters to only visible elements — useful when hidden duplicates exist in the DOM.
+#### `getByText(elementName, pageName, desiredText, strict?)`
 
-```typescript
-const visibleModal = await repo.getVisible(page, 'Dashboard', 'modal');
-```
+Returns the first element containing the specified text. Tries exact match first, falls back to contains.
 
-#### `getByRole(page, pageName, elementName, role, strict?)`
+#### `getByAttribute(elementName, pageName, attribute, value, options?)`
 
-Filters elements by their explicit `role` HTML attribute and returns the first match.
+Returns the first element whose HTML attribute matches the given value.
 
-```typescript
-const navButton = await repo.getByRole(page, 'Header', 'navItems', 'button');
-```
+**Options:** `exact` (boolean), `strict` (boolean)
 
-#### `getSelector(pageName, elementName)`
+#### `getByIndex(elementName, pageName, index, strict?)`
 
-Returns a platform-appropriate selector string. For web platforms, returns Playwright-formatted selectors (e.g., `"css=input[name='search']"`). For non-web platforms (android, ios), returns Appium-formatted selectors (e.g., `"~LoginBtn"`, `"android=new UiSelector().text(\"Submit\")"`). This is a synchronous method useful for debugging, custom logging, or passing raw selector strings directly into native APIs.
+Returns the element at the specified zero-based index.
 
-```typescript
-// Web
-const webRepo = new ElementRepository(data);
-webRepo.getSelector('LoginPage', 'submitButton'); // "css=button.web-submit"
+#### `getVisible(elementName, pageName, strict?)`
 
-// Android
-const androidRepo = new ElementRepository(data, undefined, 'android');
-androidRepo.getSelector('LoginPage', 'submitButton'); // "~SubmitBtn"
-```
+Returns the first visible element, filtering out hidden duplicates.
 
-#### `getSelectorRaw(pageName, elementName)`
+#### `getByRole(elementName, pageName, role, strict?)`
 
-Returns the raw selector strategy and value as an object, without any platform-specific formatting. Useful when you need the original strategy name and value from the JSON.
+Filters elements by their `role` HTML attribute.
 
-```typescript
-const { strategy, value } = repo.getSelectorRaw('HomePage', 'search-input');
-// { strategy: 'css', value: "input[name='search']" }
-```
+#### `getSelector(elementName, pageName)`
 
-#### `setDefaultTimeout(timeout)`
+Returns a platform-formatted selector string (synchronous).
 
-Updates the default timeout (in milliseconds) for all subsequent element retrievals.
+#### `getSelectorRaw(elementName, pageName)`
+
+Returns `{ strategy, value }` — the raw selector without platform formatting.
+
+#### `getPagePlatform(pageName)`
+
+Returns the platform string for a page (`'web'`, `'android'`, `'ios'`).
 
 #### Strict Mode
 
-All `get*` methods that return `Element | null` accept an optional `strict` parameter (default: `false`):
+All `get*` methods that return `Element | null` accept an optional `strict` parameter:
 
-- **`strict: false`** — logs a warning and returns `null` when no match is found.
+- **`strict: false`** (default) — returns `null` when no match is found.
 - **`strict: true`** — throws an `Error` when no match is found.
-
-```typescript
-// Non-strict (default): returns null on failure
-const card = await repo.getByText(page, 'ProductList', 'product-cards', 'Missing Item');
-// card === null
-
-// Strict: throws an error on failure
-const card = await repo.getByText(page, 'ProductList', 'product-cards', 'Missing Item', true);
-// Error: Element 'product-cards' on 'ProductList' with text "Missing Item" not found.
-```
 
 ### Element Interface
 
-All `get*` methods return an `Element` — a platform-agnostic interface that wraps either a Playwright `Locator` (via `WebElement`) or a WebDriverIO element (via `PlatformElement`). You can interact with elements directly without caring about the underlying driver.
+All `get*` methods return an `Element` — a platform-agnostic interface wrapping either a Playwright `Locator` (`WebElement`) or a WebDriverIO element (`PlatformElement`).
 
 #### Interaction Methods
 
 | Method | Description |
 |--------|-------------|
-| `click()` | Clicks the element. |
-| `fill(text)` | Clears the input and fills it with the given text. |
-| `clear()` | Clears the element's value. |
-| `check()` | Checks a checkbox or radio button. |
-| `uncheck()` | Unchecks a checkbox. |
-| `hover()` | Hovers over the element. |
-| `doubleClick()` | Double-clicks the element. |
-| `scrollIntoView()` | Scrolls the element into the visible area. |
-| `pressSequentially(text, delay?)` | Types text one character at a time. |
-| `setInputFiles(filePath)` | Sets the value of a file input. **Web only.** |
-| `dispatchEvent(event)` | Dispatches a DOM event on the element. **Web only.** |
+| `click(options?)` | Clicks the element. Returns `Promise<Element>`. |
+| `fill(text, options?)` | Clears and fills with text. Returns `Promise<Element>`. |
+| `clear(options?)` | Clears the element's value. Returns `Promise<Element>`. |
+| `check(options?)` | Checks a checkbox/radio. Returns `Promise<Element>`. |
+| `uncheck(options?)` | Unchecks a checkbox. Returns `Promise<Element>`. |
+| `hover(options?)` | Hovers over the element. Returns `Promise<Element>`. |
+| `doubleClick(options?)` | Double-clicks. Returns `Promise<Element>`. |
+| `scrollIntoView(options?)` | Scrolls into view. Returns `Promise<Element>`. |
+| `pressSequentially(text, delay?, options?)` | Types character by character. Returns `Promise<Element>`. |
+| `setInputFiles(filePath, options?)` | Sets file input value. **Web only.** |
+| `dispatchEvent(event)` | Dispatches a DOM event. **Web only.** |
 
-#### State Methods
+All interaction methods accept an optional `{ timeout?: number }` and return the element for simple chaining.
 
-| Method | Description |
-|--------|-------------|
-| `isVisible()` | Returns `true` if the element is visible. |
-| `isEnabled()` | Returns `true` if the element is enabled. |
-| `isChecked()` | Returns `true` if a checkbox/radio is checked. |
-
-#### Extraction Methods
+#### State, Extraction, Querying, and Waiting
 
 | Method | Description |
 |--------|-------------|
-| `textContent()` | Returns the text content, or `null` if empty. |
-| `getAttribute(name)` | Returns the value of an HTML attribute, or `null`. |
-| `inputValue()` | Returns the current value of an input/textarea/select. |
-
-#### Querying Methods
-
-| Method | Description |
-|--------|-------------|
-| `locateChild(selector)` | Locates a descendant element matching the selector. |
-| `count()` | Returns the number of matched elements. |
-| `all()` | Returns an array of all matched elements. |
-| `first()` | Returns the first matched element. |
-| `nth(index)` | Returns the element at the given zero-based index. |
-| `filter({ hasText })` | Filters matched elements by text content. |
-
-#### Waiting
-
-| Method | Description |
-|--------|-------------|
-| `waitFor(options?)` | Waits for the element to reach a state: `"visible"` (default), `"hidden"`, `"attached"`, or `"detached"`. Accepts an optional `timeout` in ms. |
+| `isVisible()` | Returns `true` if visible. |
+| `isEnabled()` | Returns `true` if enabled. |
+| `isChecked()` | Returns `true` if checked. |
+| `raw()` | Returns the selector string. |
+| `textContent()` | Returns text content or `null`. |
+| `getAttribute(name)` | Returns attribute value or `null`. |
+| `inputValue()` | Returns current input value. |
+| `count()` | Returns matched element count. |
+| `all()` | Returns array of all matched elements. |
+| `first()` | Returns the first match. |
+| `nth(index)` | Returns element at index. |
+| `filter({ hasText })` | Filters by text content. |
+| `locateChild(selector)` | Locates a descendant. |
+| `waitFor(options?)` | Waits for state: `"visible"`, `"hidden"`, `"attached"`, `"detached"`. |
+| `action(timeout?)` | Returns a fluent `ElementChain` builder. |
 
 ### 🔧 Type Safety
 
-Use the `ElementType` enum and type guards to narrow to the concrete implementation when you need driver-specific access:
-
 ```typescript
-import { Element, WebElement, PlatformElement, isWeb, isPlatform } from '@civitas-cerebrum/element-repository';
+import { Element, isWeb, isPlatform } from '@civitas-cerebrum/element-repository';
 
-const el = await repo.get(page, 'LoginPage', 'submitButton');
+const el = await repo.get('submitButton', 'LoginPage');
 
 if (isWeb(el)) {
-  // el is WebElement — access the underlying Playwright Locator
-  await el.locator.click();
+  // Access the underlying Playwright Locator
+  await (el as WebElement).locator.click();
 }
 
 if (isPlatform(el)) {
-  // el is PlatformElement — access the WebDriverIO driver and selector
-  console.log(el.selector); // the Appium selector string
-  await el.click();
+  // Access the WebDriverIO selector
+  console.log((el as PlatformElement).selector);
 }
 ```
 
-### 📤 Exports
+## ⚠️ Breaking Changes (v0.2.0)
 
-```typescript
-// Primary class
-export { ElementRepository } from '@civitas-cerebrum/element-repository';
-
-// Element types and type guards
-export { Element, WebElement, PlatformElement, ElementType, isWeb, isPlatform };
-
-// Schema types
-export { Selector, ElementDefinition, PageObject, PageRepository, Page };
-
-// Formatter type
-export type { SelectorFormatter };
-
-// Utility functions
-export { pickRandomIndex, pickRandomMember };
-```
+| Change | Migration |
+|---|---|
+| Constructor requires `driver` as first arg | `new ElementRepository(data)` → `new ElementRepository(page, data)` |
+| Methods drop `driver`/`page` first param | `repo.get(page, 'Page', 'el')` → `repo.get('el', 'Page')` |
+| Param order flipped to `(elementName, pageName)` | Swap args in all calls |
+| Element methods return `Promise<Element>` | Was `Promise<void>` — no action needed unless you depend on `void` |
+| `raw()` returns actual selector string | Was `locator.toString()` — likely an improvement |
 
 ## License
 

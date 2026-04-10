@@ -1,4 +1,5 @@
-import { Element, ElementType } from './Element';
+import { Element, ElementType, ElementActionOptions } from './Element';
+import { ElementChain } from './ElementChain';
 
 /**
  * WebDriverIO-backed {@link Element} implementation for mobile and desktop platforms.
@@ -14,14 +15,20 @@ export class PlatformElement implements Element {
    * @param driver          - The WebDriverIO browser/driver instance.
    * @param selector        - Appium-compatible selector string.
    * @param resolvedElement - Optional already-resolved raw WebDriverIO element
-   *                          (e.g. from `$$`). When set, {@link findOne} returns
-   *                          it directly instead of re-querying the driver.
+   * (e.g. from `$$`). When set, {@link findOne} returns
+   * it directly instead of re-querying the driver.
    */
   constructor(
     public readonly driver: any,
     public readonly selector: string,
     public readonly resolvedElement?: any,
+    private readonly defaultTimeout?: number,
   ) {}
+
+  /** {@inheritDoc Element.action} */
+  action(timeout?: number): ElementChain {
+    return new ElementChain(this, timeout ?? this.defaultTimeout);
+  }
 
   /**
    * Returns the underlying raw element.
@@ -38,80 +45,80 @@ export class PlatformElement implements Element {
     return this.driver.$$(this.selector);
   }
 
-  async click(): Promise<void> { await (await this.findOne()).click(); }
+  // ── Interaction ──────────────────────────────────────────────
 
-  /**
-   * Clears the field and sets the given text.
-   * Uses `clearValue` + `setValue` under the hood.
-   */
-  async fill(text: string): Promise<void> {
+  async click(_options?: ElementActionOptions): Promise<Element> {
+    await (await this.findOne()).click();
+    return this;
+  }
+
+  async fill(text: string, _options?: ElementActionOptions): Promise<Element> {
     const el = await this.findOne();
     await el.clearValue();
     await el.setValue(text);
+    return this;
   }
 
-  async clear(): Promise<void> { await (await this.findOne()).clearValue(); }
+  async clear(_options?: ElementActionOptions): Promise<Element> {
+    await (await this.findOne()).clearValue();
+    return this;
+  }
 
-  /** Checks the element if it is not already selected. */
-  async check(): Promise<void> {
+  async check(_options?: ElementActionOptions): Promise<Element> {
     const el = await this.findOne();
     if (!(await el.isSelected())) await el.click();
+    return this;
   }
 
-  /** Unchecks the element if it is currently selected. */
-  async uncheck(): Promise<void> {
+  async uncheck(_options?: ElementActionOptions): Promise<Element> {
     const el = await this.findOne();
     if (await el.isSelected()) await el.click();
+    return this;
   }
 
-  /** Moves the pointer to the element via `moveTo`. */
-  async hover(): Promise<void> {
-    const el = await this.findOne();
-    await el.moveTo();
+  async hover(_options?: ElementActionOptions): Promise<Element> {
+    await (await this.findOne()).moveTo();
+    return this;
   }
 
-  async doubleClick(): Promise<void> { await (await this.findOne()).doubleClick(); }
+  async doubleClick(_options?: ElementActionOptions): Promise<Element> {
+    await (await this.findOne()).doubleClick();
+    return this;
+  }
 
-  /** Scrolls the element into view using the `mobile: scroll` Appium command. */
-  async scrollIntoView(): Promise<void> {
+  async scrollIntoView(_options?: ElementActionOptions): Promise<Element> {
     const el = await this.findOne();
     await this.driver.execute('mobile: scroll', { element: el.elementId, toVisible: true });
+    return this;
   }
 
-  /**
-   * Types text character-by-character using `addValue`.
-   * @param text  - The characters to type.
-   * @param delay - Millisecond pause between keystrokes (default 50).
-   */
-  async pressSequentially(text: string, delay: number = 50): Promise<void> {
+  async pressSequentially(text: string, delay: number = 50, _options?: ElementActionOptions): Promise<Element> {
     const el = await this.findOne();
     for (const char of text) {
       await el.addValue(char);
       if (delay > 0) await this.driver.pause(delay);
     }
+    return this;
   }
 
-  /**
-   * Not supported on platform elements.
-   * @throws Always throws an `Error`.
-   */
-  async setInputFiles(_filePath: string): Promise<void> {
+  async setInputFiles(_filePath: string, _options?: ElementActionOptions): Promise<Element> {
     throw new Error('setInputFiles is not supported on platform elements.');
   }
 
-  /**
-   * Not supported on platform elements.
-   * @throws Always throws an `Error`.
-   */
-  async dispatchEvent(_event: string): Promise<void> {
+  async dispatchEvent(_event: string): Promise<Element> {
     throw new Error('dispatchEvent is not supported on platform elements.');
   }
+
+  // ── State ────────────────────────────────────────────────────
 
   async isVisible(): Promise<boolean> { return (await this.findOne()).isDisplayed(); }
   async isEnabled(): Promise<boolean> { return (await this.findOne()).isEnabled(); }
   async isChecked(): Promise<boolean> { return (await this.findOne()).isSelected(); }
 
-  /** Returns trimmed text content, or `null` if empty. */
+  // ── Extraction ───────────────────────────────────────────────
+
+  async raw(): Promise<string | null> { return this.selector; }
+
   async textContent(): Promise<string | null> {
     const text = await (await this.findOne()).getText();
     return text?.trim() ?? null;
@@ -121,37 +128,30 @@ export class PlatformElement implements Element {
     return (await this.findOne()).getAttribute(name);
   }
 
-  /** Returns the input value via `getValue`, falling back to the `value` attribute. */
   async inputValue(): Promise<string> {
     const el = await this.findOne();
     try { return await el.getValue(); } catch { return (await el.getAttribute('value')) ?? ''; }
   }
 
+  // ── Querying ─────────────────────────────────────────────────
+
   locateChild(selector: string): Element {
-    return new PlatformElement(this.driver, selector);
+    return new PlatformElement(this.driver, selector, undefined, this.defaultTimeout);
   }
 
   async count(): Promise<number> { return (await this.findAll()).length; }
 
   async all(): Promise<Element[]> {
     const elements = await this.findAll();
-    return elements.map(el => new PlatformElement(this.driver, this.selector, el));
+    return elements.map(el => new PlatformElement(this.driver, this.selector, el, this.defaultTimeout));
   }
 
-  /** Returns `this` — platform elements don't support index-based narrowing. */
   first(): Element { return this; }
-
-  /** Returns `this` — platform elements don't support index-based narrowing. */
   nth(_index: number): Element { return this; }
-
-  /** Returns `this` — platform elements don't support text-based filtering. */
   filter(_options: { hasText?: string | RegExp }): Element { return this; }
 
-  /**
-   * Waits for the element to reach the specified state.
-   * Supports `"visible"` (default), `"hidden"`, `"attached"`, and `"detached"`.
-   * @param options - State and timeout configuration.
-   */
+  // ── Waiting ──────────────────────────────────────────────────
+
   async waitFor(options?: { state?: string; timeout?: number }): Promise<void> {
     const el = await this.findOne();
     const timeout = options?.timeout ?? 30000;
