@@ -5,3 +5,4 @@
 /docs
 src/.DS_Store
 *.md
+test-coverage-report.txt
