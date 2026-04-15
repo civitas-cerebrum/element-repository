@@ -1,6 +1,15 @@
+/** A regex pattern with optional flags, used for text or accessible-name matching. */
+export interface RegexPattern {
+  regex: string;
+  flags?: string;
+}
+
+/** A selector value: either a plain string or a regex pattern object. */
+export type SelectorValue = string | RegexPattern;
+
 /** Strategy-to-value mapping for a single selector (e.g. `{ css: "button.primary" }`). */
 export interface Selector {
-  [key: string]: string;
+  [key: string]: SelectorValue;
 }
 
 /** A named element within a page, paired with its locator strategy. */
@@ -9,13 +18,27 @@ export interface ElementDefinition {
   selector: Selector;
 }
 
+/** A frame selector using css or xpath to locate the iframe. */
+export interface FrameSelector {
+  css?: string;
+  xpath?: string;
+}
+
 /**
  * A page block in the JSON repository.
  * Groups related elements under a name and an optional platform discriminator.
+ *
+ * When `frame` is specified, all elements on this page are resolved inside
+ * the given iframe. Supports single frames, frame disambiguation via
+ * `frameIndex`, and nested frames (array of FrameSelector).
  */
 export interface PageObject {
   name: string;
   platform?: string;
+  /** Iframe scope — elements on this page live inside this frame. */
+  frame?: FrameSelector | FrameSelector[];
+  /** Disambiguate when multiple frames match: `'first'`, `'last'`, or a zero-based index. */
+  frameIndex?: 'first' | 'last' | number;
   elements: ElementDefinition[];
 }
 

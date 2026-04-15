@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
-import { PageRepository, PageObject } from '../schema/repository';
+import { PageRepository, PageObject, RegexPattern, SelectorValue } from '../schema/repository';
 import { pickRandomIndex } from '../utils/math';
 import { Element, WebElement, PlatformElement } from '../types';
 import {
@@ -110,9 +110,161 @@ export class ElementRepository {
    * @param options     Optional element resolution options.
    * @returns A promise that resolves to the located Element.
    */
-  private async resolveElement(elementName: string, pageName: string, options?: ElementResolutionOptions): Promise<Element> {
-    const selector = this.getSelector(elementName, pageName);
+  /** Returns `true` when the given selector value is a regex pattern object. */
+  private static isRegex(value: SelectorValue): value is RegexPattern {
+    return typeof value === 'object' && value !== null && 'regex' in value;
+  }
+
+  /**
+   * Returns a Playwright locator for enhanced selector types (role+name, regex text,
+   * iframe-scoped). Returns `null` when the selector uses only standard types.
+   */
+  private resolveEnhancedLocator(elementName: string, pageName: string): any | null {
     const pageObj = this.findPage(pageName);
+    if (!pageObj || !ElementRepository.isWebPlatform(pageObj)) return null;
+
+    const elementDef = pageObj.elements.find(e => e.elementName === elementName);
+    if (!elementDef) return null;
+
+    const selector = elementDef.selector;
+    const hasFrame = pageObj.frame !== undefined;
+    const hasRoleWithName = selector.role !== undefined && selector.name !== undefined;
+    const hasRegexText = selector.text !== undefined && ElementRepository.isRegex(selector.text);
+
+    // Only use enhanced resolution when needed
+    if (!hasFrame && !hasRoleWithName && !hasRegexText) return null;
+
+    // Determine scope (page or frame)
+    let scope: any = this._driver;
+    if (hasFrame) {
+      scope = this.resolveFrameScope(pageObj);
+    }
+
+    // Role + accessible name → page.getByRole()
+    if (hasRoleWithName) {
+      const role = selector.role as string;
+      const nameValue = selector.name;
+      const roleOptions: Record<string, any> = {};
+
+      if (typeof nameValue === 'string') {
+        roleOptions.name = nameValue;
+      } else if (ElementRepository.isRegex(nameValue)) {
+        roleOptions.name = new RegExp(nameValue.regex, nameValue.flags);
+      }
+
+      if (selector.exact !== undefined) {
+        roleOptions.exact = String(selector.exact) === 'true';
+      }
+
+      return scope.getByRole(role, roleOptions);
+    }
+
+    // Regex text → text=/pattern/flags
+    if (hasRegexText) {
+      const textSpec = selector.text as RegexPattern;
+      return scope.locator(`text=/${textSpec.regex}/${textSpec.flags ?? ''}`);
+    }
+
+    // Frame-scoped with standard selector — build locator inside frame
+    if (hasFrame) {
+      const strategy = Object.keys(selector)[0];
+      const value = selector[strategy] as string;
+      const formatters = this.getFormattersForPlatform(pageObj.platform ?? 'web');
+      const formatter = formatters[strategy.toLowerCase()];
+      const formatted = formatter ? formatter(value) : value;
+      return scope.locator(formatted);
+    }
+
+    return null;
+  }
+
+  /**
+   * Resolves the FrameLocator scope for a frame-scoped page.
+   * Supports single frames, frame disambiguation, and nested frames.
+   */
+  private resolveFrameScope(pageObj: PageObject): any {
+    const frameSpec = pageObj.frame!;
+
+    if (Array.isArray(frameSpec)) {
+      // Nested frames: chain frameLocator calls
+      let scope: any = this._driver;
+      for (const frame of frameSpec) {
+        const sel = frame.css ?? (frame.xpath ? `xpath=${frame.xpath}` : '');
+        scope = scope.frameLocator(sel);
+      }
+      return scope;
+    }
+
+    // Single frame
+    const sel = frameSpec.css ?? (frameSpec.xpath ? `xpath=${frameSpec.xpath}` : '');
+    let frameLocator = this._driver.frameLocator(sel);
+
+    // Frame disambiguation
+    if (pageObj.frameIndex !== undefined) {
+      const idx = pageObj.frameIndex;
+      if (idx === 'first') frameLocator = frameLocator.first();
+      else if (idx === 'last') frameLocator = frameLocator.last();
+      else if (typeof idx === 'number') frameLocator = frameLocator.nth(idx);
+    }
+
+    return frameLocator;
+  }
+
+  private async resolveElement(elementName: string, pageName: string, options?: ElementResolutionOptions): Promise<Element> {
+    const pageObj = this.findPage(pageName);
+
+    // Try enhanced resolution first (role+name, regex text, iframe)
+    const enhancedLocator = this.resolveEnhancedLocator(elementName, pageName);
+    if (enhancedLocator && ElementRepository.isWebPlatform(pageObj!)) {
+      const selectorDesc = `enhanced:${elementName}@${pageName}`;
+
+      if (options?.strategy) {
+        switch (options.strategy) {
+          case SelectionStrategy.INDEX: {
+            if (options.index === undefined || options.index === null) {
+              throw new Error('options.index is required when using SelectionStrategy.INDEX');
+            }
+            const baseElement = new WebElement(enhancedLocator, selectorDesc, this.defaultTimeout);
+            const allElements = await baseElement.all();
+            if (options.index < 0 || options.index >= allElements.length) {
+              throw new Error(`Index ${options.index} out of bounds for '${elementName}' on '${pageName}' (found ${allElements.length} elements).`);
+            }
+            return allElements[options.index];
+          }
+          case SelectionStrategy.RANDOM: {
+            const baseElement = new WebElement(enhancedLocator, selectorDesc, this.defaultTimeout);
+            const allElements = await baseElement.all();
+            if (allElements.length === 0) {
+              throw new Error(`No elements found for '${elementName}' on '${pageName}'`);
+            }
+            return allElements[pickRandomIndex(allElements.length)];
+          }
+          case SelectionStrategy.ALL: {
+            const element = new WebElement(enhancedLocator, selectorDesc, this.defaultTimeout);
+            await element.waitFor({ state: 'attached', timeout: this.defaultTimeout }).catch(() => {});
+            return element;
+          }
+          case SelectionStrategy.TEXT: {
+            if (!options.value) {
+              throw new Error('options.value is required when using SelectionStrategy.TEXT');
+            }
+            const filtered = enhancedLocator.filter({ hasText: options.value });
+            const element = new WebElement(filtered.first(), selectorDesc, this.defaultTimeout);
+            await element.waitFor({ state: 'attached', timeout: this.defaultTimeout }).catch(() => {});
+            return element;
+          }
+          default:
+            break;
+        }
+      }
+
+      const element = new WebElement(enhancedLocator.first(), selectorDesc, this.defaultTimeout);
+      await element.waitFor({ state: 'attached', timeout: this.defaultTimeout }).catch(() => {});
+      return element;
+    }
+
+    // Standard resolution path
+    const selector = this.getSelector(elementName, pageName);
 
     // When a strategy is specified, handle it before the default path
     if (options?.strategy) {
@@ -386,10 +538,17 @@ export class ElementRepository {
       throw new Error(`ElementRepository: Invalid selector for '${elementName}'.`);
     }
 
-    const strategy = Object.keys(selector)[0] as string;
-    const value = selector[strategy] as string;
+    // Find the first key with a plain string value (skip enhanced keys like 'name' with objects)
+    for (const key of Object.keys(selector)) {
+      if (typeof selector[key] === 'string') {
+        return { strategy: key, value: selector[key] as string };
+      }
+    }
 
-    return { strategy, value };
+    // Fallback: return first key (may be an object for enhanced selectors resolved elsewhere)
+    const strategy = Object.keys(selector)[0] as string;
+    const value = selector[strategy];
+    return { strategy, value: typeof value === 'string' ? value : JSON.stringify(value) };
   }
 
   /**
