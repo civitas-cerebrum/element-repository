@@ -119,9 +119,43 @@ export class ElementRepository {
    * Returns a Playwright locator for enhanced selector types (role+name, regex text,
    * iframe-scoped). Returns `null` when the selector uses only standard types.
    */
+  /**
+   * Maps ARIA roles to Android class names for UiSelector queries.
+   */
+  private static readonly ROLE_TO_ANDROID_CLASS: Record<string, string> = {
+    button: 'android.widget.Button',
+    textbox: 'android.widget.EditText',
+    switch: 'android.widget.Switch',
+    checkbox: 'android.widget.CheckBox',
+    radio: 'android.widget.RadioButton',
+    link: 'android.widget.TextView',
+    dialog: 'android.app.Dialog',
+    combobox: 'android.widget.Spinner',
+    slider: 'android.widget.SeekBar',
+    tab: 'android.widget.TabWidget',
+    img: 'android.widget.ImageView',
+  };
+
+  /**
+   * Maps ARIA roles to iOS element types for predicate string queries.
+   */
+  private static readonly ROLE_TO_IOS_TYPE: Record<string, string> = {
+    button: 'XCUIElementTypeButton',
+    textbox: 'XCUIElementTypeTextField',
+    switch: 'XCUIElementTypeSwitch',
+    checkbox: 'XCUIElementTypeButton',
+    radio: 'XCUIElementTypeButton',
+    link: 'XCUIElementTypeLink',
+    dialog: 'XCUIElementTypeAlert',
+    combobox: 'XCUIElementTypePicker',
+    slider: 'XCUIElementTypeSlider',
+    tab: 'XCUIElementTypeTab',
+    img: 'XCUIElementTypeImage',
+  };
+
   private resolveEnhancedLocator(elementName: string, pageName: string): any | null {
     const pageObj = this.findPage(pageName);
-    if (!pageObj || !ElementRepository.isWebPlatform(pageObj)) return null;
+    if (!pageObj) return null;
 
     const elementDef = pageObj.elements.find(e => e.elementName === elementName);
     if (!elementDef) return null;
@@ -134,45 +168,112 @@ export class ElementRepository {
     // Only use enhanced resolution when needed
     if (!hasFrame && !hasRoleWithName && !hasRegexText) return null;
 
-    // Determine scope (page or frame)
-    let scope: any = this._driver;
-    if (hasFrame) {
-      scope = this.resolveFrameScope(pageObj);
+    const platform = pageObj.platform ?? 'web';
+
+    // ── Web (Playwright) ──────────────────────────────────────────
+    if (ElementRepository.isWebPlatform(pageObj)) {
+      let scope: any = this._driver;
+      if (hasFrame) {
+        scope = this.resolveFrameScope(pageObj);
+      }
+
+      if (hasRoleWithName) {
+        const role = selector.role as string;
+        const nameValue = selector.name;
+        const roleOptions: Record<string, any> = {};
+        if (typeof nameValue === 'string') {
+          roleOptions.name = nameValue;
+        } else if (ElementRepository.isRegex(nameValue)) {
+          roleOptions.name = new RegExp(nameValue.regex, nameValue.flags);
+        }
+        if (selector.exact !== undefined) {
+          roleOptions.exact = String(selector.exact) === 'true';
+        }
+        return scope.getByRole(role, roleOptions);
+      }
+
+      if (hasRegexText) {
+        const textSpec = selector.text as RegexPattern;
+        return scope.locator(`text=/${textSpec.regex}/${textSpec.flags ?? ''}`);
+      }
+
+      if (hasFrame) {
+        const strategy = Object.keys(selector)[0];
+        const value = selector[strategy] as string;
+        const formatters = this.getFormattersForPlatform('web');
+        const formatter = formatters[strategy.toLowerCase()];
+        const formatted = formatter ? formatter(value) : value;
+        return scope.locator(formatted);
+      }
+
+      return null;
     }
 
-    // Role + accessible name → page.getByRole()
+    // ── Non-web (Appium: Android / iOS) ───────────────────────────
+    // Frames don't exist in native apps — skip frame logic
     if (hasRoleWithName) {
-      const role = selector.role as string;
-      const nameValue = selector.name;
-      const roleOptions: Record<string, any> = {};
-
-      if (typeof nameValue === 'string') {
-        roleOptions.name = nameValue;
-      } else if (ElementRepository.isRegex(nameValue)) {
-        roleOptions.name = new RegExp(nameValue.regex, nameValue.flags);
-      }
-
-      if (selector.exact !== undefined) {
-        roleOptions.exact = String(selector.exact) === 'true';
-      }
-
-      return scope.getByRole(role, roleOptions);
+      return this.resolveRoleForMobile(platform, selector);
     }
 
-    // Regex text → text=/pattern/flags
     if (hasRegexText) {
-      const textSpec = selector.text as RegexPattern;
-      return scope.locator(`text=/${textSpec.regex}/${textSpec.flags ?? ''}`);
+      return this.resolveRegexTextForMobile(platform, selector);
     }
 
-    // Frame-scoped with standard selector — build locator inside frame
-    if (hasFrame) {
-      const strategy = Object.keys(selector)[0];
-      const value = selector[strategy] as string;
-      const formatters = this.getFormattersForPlatform(pageObj.platform ?? 'web');
-      const formatter = formatters[strategy.toLowerCase()];
-      const formatted = formatter ? formatter(value) : value;
-      return scope.locator(formatted);
+    return null;
+  }
+
+  /**
+   * Resolves a role + name selector for Android or iOS using platform-native locator strategies.
+   * Returns a selector string that the PlatformElement can use.
+   */
+  private resolveRoleForMobile(platform: string, selector: Record<string, SelectorValue>): string | null {
+    const role = selector.role as string;
+    const nameValue = selector.name;
+    const nameStr = typeof nameValue === 'string' ? nameValue : null;
+    const nameRegex = ElementRepository.isRegex(nameValue) ? nameValue : null;
+
+    if (platform === 'android') {
+      const className = ElementRepository.ROLE_TO_ANDROID_CLASS[role];
+      if (!className) return null;
+
+      let uiSelector = `new UiSelector().className("${className}")`;
+      if (nameStr) {
+        uiSelector += `.text("${nameStr}")`;
+      } else if (nameRegex) {
+        uiSelector += `.textMatches("${nameRegex.regex}")`;
+      }
+      return `android=${uiSelector}`;
+    }
+
+    if (platform === 'ios') {
+      const iosType = ElementRepository.ROLE_TO_IOS_TYPE[role];
+      if (!iosType) return null;
+
+      let predicate = `type == '${iosType}'`;
+      if (nameStr) {
+        predicate += ` AND label == '${nameStr}'`;
+      } else if (nameRegex) {
+        predicate += ` AND label MATCHES '${nameRegex.regex}'`;
+      }
+      return `-ios predicate string:${predicate}`;
+    }
+
+    return null;
+  }
+
+  /**
+   * Resolves a regex text selector for Android or iOS.
+   * Returns a selector string that the PlatformElement can use.
+   */
+  private resolveRegexTextForMobile(platform: string, selector: Record<string, SelectorValue>): string | null {
+    const textSpec = selector.text as RegexPattern;
+
+    if (platform === 'android') {
+      return `android=new UiSelector().textMatches("${textSpec.regex}")`;
+    }
+
+    if (platform === 'ios') {
+      return `-ios predicate string:label MATCHES '${textSpec.regex}'`;
     }
 
     return null;
@@ -214,53 +315,71 @@ export class ElementRepository {
     const pageObj = this.findPage(pageName);
 
     // Try enhanced resolution first (role+name, regex text, iframe)
-    const enhancedLocator = this.resolveEnhancedLocator(elementName, pageName);
-    if (enhancedLocator && ElementRepository.isWebPlatform(pageObj!)) {
-      const selectorDesc = `enhanced:${elementName}@${pageName}`;
+    const enhanced = this.resolveEnhancedLocator(elementName, pageName);
+    if (enhanced !== null) {
+      // For web: enhanced is a Playwright Locator object
+      // For mobile: enhanced is a selector string
+      if (ElementRepository.isWebPlatform(pageObj!)) {
+        const selectorDesc = `enhanced:${elementName}@${pageName}`;
 
-      if (options?.strategy) {
-        switch (options.strategy) {
-          case SelectionStrategy.INDEX: {
-            if (options.index === undefined || options.index === null) {
-              throw new Error('options.index is required when using SelectionStrategy.INDEX');
+        if (options?.strategy) {
+          switch (options.strategy) {
+            case SelectionStrategy.INDEX: {
+              if (options.index === undefined || options.index === null) {
+                throw new Error('options.index is required when using SelectionStrategy.INDEX');
+              }
+              const baseElement = new WebElement(enhanced, selectorDesc, this.defaultTimeout);
+              const allElements = await baseElement.all();
+              if (options.index < 0 || options.index >= allElements.length) {
+                throw new Error(`Index ${options.index} out of bounds for '${elementName}' on '${pageName}' (found ${allElements.length} elements).`);
+              }
+              return allElements[options.index];
             }
-            const baseElement = new WebElement(enhancedLocator, selectorDesc, this.defaultTimeout);
-            const allElements = await baseElement.all();
-            if (options.index < 0 || options.index >= allElements.length) {
-              throw new Error(`Index ${options.index} out of bounds for '${elementName}' on '${pageName}' (found ${allElements.length} elements).`);
+            case SelectionStrategy.RANDOM: {
+              const baseElement = new WebElement(enhanced, selectorDesc, this.defaultTimeout);
+              const allElements = await baseElement.all();
+              if (allElements.length === 0) {
+                throw new Error(`No elements found for '${elementName}' on '${pageName}'`);
+              }
+              return allElements[pickRandomIndex(allElements.length)];
             }
-            return allElements[options.index];
-          }
-          case SelectionStrategy.RANDOM: {
-            const baseElement = new WebElement(enhancedLocator, selectorDesc, this.defaultTimeout);
-            const allElements = await baseElement.all();
-            if (allElements.length === 0) {
-              throw new Error(`No elements found for '${elementName}' on '${pageName}'`);
+            case SelectionStrategy.ALL: {
+              const element = new WebElement(enhanced, selectorDesc, this.defaultTimeout);
+              await element.waitFor({ state: 'attached', timeout: this.defaultTimeout }).catch(() => {});
+              return element;
             }
-            return allElements[pickRandomIndex(allElements.length)];
-          }
-          case SelectionStrategy.ALL: {
-            const element = new WebElement(enhancedLocator, selectorDesc, this.defaultTimeout);
-            await element.waitFor({ state: 'attached', timeout: this.defaultTimeout }).catch(() => {});
-            return element;
-          }
-          case SelectionStrategy.TEXT: {
-            if (!options.value) {
-              throw new Error('options.value is required when using SelectionStrategy.TEXT');
+            case SelectionStrategy.TEXT: {
+              if (!options.value) {
+                throw new Error('options.value is required when using SelectionStrategy.TEXT');
+              }
+              const filtered = enhanced.filter({ hasText: options.value });
+              const element = new WebElement(filtered.first(), selectorDesc, this.defaultTimeout);
+              await element.waitFor({ state: 'attached', timeout: this.defaultTimeout }).catch(() => {});
+              return element;
             }
-            const filtered = enhancedLocator.filter({ hasText: options.value });
-            const element = new WebElement(filtered.first(), selectorDesc, this.defaultTimeout);
-            await element.waitFor({ state: 'attached', timeout: this.defaultTimeout }).catch(() => {});
-            return element;
+            default:
+              break;
           }
-          default:
-            break;
         }
-      }
 
-      const element = new WebElement(enhancedLocator.first(), selectorDesc, this.defaultTimeout);
-      await element.waitFor({ state: 'attached', timeout: this.defaultTimeout }).catch(() => {});
-      return element;
+        const element = new WebElement(enhanced.first(), selectorDesc, this.defaultTimeout);
+        await element.waitFor({ state: 'attached', timeout: this.defaultTimeout }).catch(() => {});
+        return element;
+      } else {
+        // Mobile: enhanced is a selector string — use it as the selector
+        // and fall through to the standard resolution path below
+        const mobileSelector = enhanced as string;
+        const baseElement = new PlatformElement(this._driver, mobileSelector, undefined, this.defaultTimeout);
+
+        if (options?.strategy === SelectionStrategy.ALL) {
+          await baseElement.waitFor({ state: 'attached', timeout: this.defaultTimeout }).catch(() => {});
+          return baseElement;
+        }
+
+        const element = baseElement.first();
+        await element.waitFor({ state: 'attached', timeout: this.defaultTimeout }).catch(() => {});
+        return element;
+      }
     }
 
     // Standard resolution path
