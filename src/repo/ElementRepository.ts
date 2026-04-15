@@ -3,12 +3,14 @@ import * as path from 'path';
 
 import { PageRepository, PageObject } from '../schema/repository';
 import { pickRandomIndex } from '../utils/math';
-import { Element, WebElement, PlatformElement } from '../types';
+import { Element } from '../types';
 import {
   SelectorFormatter,
   WEB_FORMATTERS, APPIUM_FORMATTERS, ANDROID_FORMATTERS, IOS_FORMATTERS,
 } from './formatters';
 import { ElementResolutionOptions, SelectionStrategy } from '../enum/Options';
+import { EnhancedResolver } from './EnhancedResolver';
+import { StrategyResolver } from './StrategyResolver';
 
 /**
  * Platform-agnostic element lookup engine backed by a JSON repository.
@@ -65,17 +67,11 @@ export class ElementRepository {
   }
 
   /**
-   * Finds a page by name.
-   * @param pageName The name of the page block in the JSON repository.
-   * @returns The matching PageObject, or undefined if not found.
+   * Updates the default timeout for all subsequent element retrievals.
+   * @param timeout The new timeout in milliseconds.
    */
-  private findPage(pageName: string): PageObject | undefined {
-    return this.pageData.pages.find((p) => p.name === pageName);
-  }
-
-  /** Returns `true` when the given page is configured for the `'web'` platform. */
-  private static isWebPlatform(page: PageObject): boolean {
-    return (page.platform ?? 'web') === 'web';
+  public setDefaultTimeout(timeout: number): void {
+    this.defaultTimeout = timeout;
   }
 
   /**
@@ -90,87 +86,49 @@ export class ElementRepository {
     return page.platform ?? 'web';
   }
 
-  /**
-   * Updates the default timeout for all subsequent element retrievals.
-   * @param timeout The new timeout in milliseconds.
-   */
-  public setDefaultTimeout(timeout: number): void {
-    this.defaultTimeout = timeout;
-  }
+  // ══════════════════════════════════════════════════════════════
+  // Element Resolution
+  // ══════════════════════════════════════════════════════════════
 
   /**
    * Creates the platform-appropriate Element wrapper and waits for it to
    * be attached in the DOM / exist in the view hierarchy.
    *
-   * This is the **only** place that branches on {@link isWebPlatform} for
-   * element construction, keeping every public API method platform-agnostic.
+   * Resolution order:
+   * 1. Enhanced selectors (role+name, regex text, iframe) via {@link EnhancedResolver}
+   * 2. Standard selectors (css, xpath, id, text, etc.) via {@link StrategyResolver}
    *
    * @param elementName The specific element name to look up.
-   * @param pageName    The name of the page block in the JSON repository.
-   * @param options     Optional element resolution options.
+   * @param pageName The name of the page block in the JSON repository.
+   * @param options Optional element resolution options (strategy, index, value, etc.).
    * @returns A promise that resolves to the located Element.
+   * @throws Error if the page is not found.
    */
   private async resolveElement(elementName: string, pageName: string, options?: ElementResolutionOptions): Promise<Element> {
-    const selector = this.getSelector(elementName, pageName);
     const pageObj = this.findPage(pageName);
+    if (!pageObj) throw new Error(`ElementRepository: Page '${pageName}' not found.`);
 
-    // When a strategy is specified, handle it before the default path
-    if (options?.strategy) {
-      switch (options.strategy) {
-        case SelectionStrategy.INDEX: {
-          if (options.index === undefined || options.index === null) {
-            throw new Error('options.index is required when using SelectionStrategy.INDEX');
-          }
-          const baseElement = ElementRepository.isWebPlatform(pageObj!)
-            ? new WebElement(this._driver.locator(selector), selector, this.defaultTimeout)
-            : new PlatformElement(this._driver, selector, undefined, this.defaultTimeout);
-          const allElements = await baseElement.all();
-          if (options.index < 0 || options.index >= allElements.length) {
-            throw new Error(`Index ${options.index} out of bounds for '${elementName}' on '${pageName}' (found ${allElements.length} elements).`);
-          }
-          return allElements[options.index];
-        }
-        case SelectionStrategy.RANDOM: {
-          const baseElement = ElementRepository.isWebPlatform(pageObj!)
-            ? new WebElement(this._driver.locator(selector), selector, this.defaultTimeout)
-            : new PlatformElement(this._driver, selector, undefined, this.defaultTimeout);
-          const allElements = await baseElement.all();
-          if (allElements.length === 0) {
-            throw new Error(`No elements found for '${elementName}' on '${pageName}'`);
-          }
-          return allElements[pickRandomIndex(allElements.length)];
-        }
-        case SelectionStrategy.TEXT: {
-          if (!options.value) {
-            throw new Error('options.value is required when using SelectionStrategy.TEXT');
-          }
-          const baseLocator = this._driver.locator(selector);
-          const filtered = baseLocator.filter({ hasText: options.value });
-          const element = ElementRepository.isWebPlatform(pageObj!)
-            ? new WebElement(filtered.first(), selector, this.defaultTimeout)
-            : new PlatformElement(this._driver, selector, undefined, this.defaultTimeout);
-          await element.waitFor({ state: 'attached', timeout: this.defaultTimeout }).catch(() => {});
-          return element;
-        }
-        case SelectionStrategy.ALL: {
-          const element = ElementRepository.isWebPlatform(pageObj!)
-            ? new WebElement(this._driver.locator(selector), selector, this.defaultTimeout)
-            : new PlatformElement(this._driver, selector, undefined, this.defaultTimeout);
-          await element.waitFor({ state: 'attached', timeout: this.defaultTimeout }).catch(() => {});
-          return element;
-        }
-        default:
-          break;
+    // Try enhanced resolution first (role+name, regex text, iframe)
+    const enhanced = EnhancedResolver.resolve(
+      this._driver, pageObj, elementName, this.getFormattersForPlatform(pageObj.platform ?? 'web'),
+    );
+
+    if (enhanced !== null) {
+      if (EnhancedResolver.isWebPlatform(pageObj)) {
+        return StrategyResolver.fromLocator(enhanced, elementName, pageName, this.defaultTimeout, options);
+      } else {
+        return StrategyResolver.fromMobileSelector(this._driver, enhanced as string, this.defaultTimeout, options);
       }
     }
 
-    const baseElement = ElementRepository.isWebPlatform(pageObj!)
-      ? new WebElement(this._driver.locator(selector), selector, this.defaultTimeout)
-      : new PlatformElement(this._driver, selector, undefined, this.defaultTimeout);
-    const element = baseElement.first();
-    await element.waitFor({ state: 'attached', timeout: this.defaultTimeout }).catch(() => {});
-    return element;
+    // Standard resolution path
+    const selector = this.getSelector(elementName, pageName);
+    return StrategyResolver.fromSelector(this._driver, selector, pageObj, elementName, pageName, this.defaultTimeout, options);
   }
+
+  // ══════════════════════════════════════════════════════════════
+  // Public Query API
+  // ══════════════════════════════════════════════════════════════
 
   /**
    * Retrieves a single Element based on the externalized JSON mapping.
@@ -276,22 +234,17 @@ export class ElementRepository {
       for (const element of allElements) {
         const attrValue = await element.getAttribute(attribute);
         if (attrValue === null) continue;
-
-        const matches = exact ? attrValue === value : attrValue.includes(value);
-        if (matches) return element;
+        if (exact ? attrValue === value : attrValue.includes(value)) return element;
       }
     } else {
       // Default: try exact match first, then fall back to contains
       for (const element of allElements) {
         const attrValue = await element.getAttribute(attribute);
-        if (attrValue === null) continue;
         if (attrValue === value) return element;
       }
-
       for (const element of allElements) {
         const attrValue = await element.getAttribute(attribute);
-        if (attrValue === null) continue;
-        if (attrValue.includes(value)) return element;
+        if (attrValue !== null && attrValue.includes(value)) return element;
       }
     }
 
@@ -310,12 +263,7 @@ export class ElementRepository {
    * @param strict If true, throws an error if the index is out of bounds. Defaults to false.
    * @returns A promise that resolves to the Element at the given index, or null if out of bounds.
    */
-  public async getByIndex(
-    elementName: string,
-    pageName: string,
-    index: number,
-    strict: boolean = false
-  ): Promise<Element | null> {
+  public async getByIndex(elementName: string, pageName: string, index: number, strict: boolean = false): Promise<Element | null> {
     const allElements = await this.getAll(elementName, pageName);
     if (index < 0 || index >= allElements.length) {
       const msg = `Index ${index} out of bounds for '${elementName}' on '${pageName}' (found ${allElements.length} elements).`;
@@ -333,17 +281,11 @@ export class ElementRepository {
    * @param strict If true, throws an error if no visible element is found. Defaults to false.
    * @returns A promise that resolves to a visible Element, or null if none are visible.
    */
-  public async getVisible(
-    elementName: string,
-    pageName: string,
-    strict: boolean = false
-  ): Promise<Element | null> {
+  public async getVisible(elementName: string, pageName: string, strict: boolean = false): Promise<Element | null> {
     const allElements = await this.getAll(elementName, pageName);
-
     for (const element of allElements) {
       if (await element.isVisible()) return element;
     }
-
     const msg = `No visible elements found for '${elementName}' on '${pageName}'.`;
     if (strict) throw new Error(msg);
     console.warn(msg);
@@ -358,17 +300,18 @@ export class ElementRepository {
    * @param strict If true, throws an error if no matching element is found. Defaults to false.
    * @returns A promise that resolves to the matched Element, or null if not found.
    */
-  public async getByRole(
-    elementName: string,
-    pageName: string,
-    role: string,
-    strict: boolean = false
-  ): Promise<Element | null> {
+  public async getByRole(elementName: string, pageName: string, role: string, strict: boolean = false): Promise<Element | null> {
     return this.getByAttribute(elementName, pageName, 'role', role, { exact: true, strict });
   }
 
+  // ══════════════════════════════════════════════════════════════
+  // Selector Access
+  // ══════════════════════════════════════════════════════════════
+
   /**
    * Returns the raw selector strategy and value without Playwright-specific formatting.
+   * Skips enhanced keys (object values like regex patterns) and returns the first
+   * key with a plain string value.
    * @param elementName The specific element name to look up.
    * @param pageName The name of the page block in the JSON repository.
    * @returns An object with `strategy` (e.g. 'css', 'xpath', 'id') and `value` (the raw selector value).
@@ -386,10 +329,17 @@ export class ElementRepository {
       throw new Error(`ElementRepository: Invalid selector for '${elementName}'.`);
     }
 
-    const strategy = Object.keys(selector)[0] as string;
-    const value = selector[strategy] as string;
+    // Find the first key with a plain string value (skip enhanced keys like 'name' with objects)
+    for (const key of Object.keys(selector)) {
+      if (typeof selector[key] === 'string') {
+        return { strategy: key, value: selector[key] as string };
+      }
+    }
 
-    return { strategy, value };
+    // Fallback: return first key (may be an object for enhanced selectors resolved elsewhere)
+    const strategy = Object.keys(selector)[0] as string;
+    const value = selector[strategy];
+    return { strategy, value: typeof value === 'string' ? value : JSON.stringify(value) };
   }
 
   /**
@@ -418,9 +368,24 @@ export class ElementRepository {
     return formatter ? formatter(value) : value;
   }
 
+  // ══════════════════════════════════════════════════════════════
+  // Internal Helpers
+  // ══════════════════════════════════════════════════════════════
+
+  /**
+   * Finds a page by name.
+   * @param pageName The name of the page block in the JSON repository.
+   * @returns The matching PageObject, or undefined if not found.
+   */
+  private findPage(pageName: string): PageObject | undefined {
+    return this.pageData.pages.find((p) => p.name === pageName);
+  }
+
   /**
    * Returns the {@link SelectorFormatter} lookup table for the given platform.
    * Falls back to the base {@link APPIUM_FORMATTERS} for unrecognised non-web platforms.
+   * @param platform The platform string (e.g. `'web'`, `'android'`, `'ios'`).
+   * @returns The formatter record for the specified platform.
    */
   private getFormattersForPlatform(platform: string): Record<string, SelectorFormatter> {
     if (platform === 'web') return WEB_FORMATTERS;
