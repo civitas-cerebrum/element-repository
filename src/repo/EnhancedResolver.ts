@@ -13,6 +13,9 @@ export class EnhancedResolver {
 
   /**
    * Maps ARIA roles to Android widget class names for UiSelector queries.
+   *
+   * Used when resolving `{ "role": "button", "name": "Log in" }` on Android
+   * to produce `android=new UiSelector().className("android.widget.Button").text("Log in")`.
    */
   private static readonly ROLE_TO_ANDROID_CLASS: Record<string, string> = {
     button: 'android.widget.Button',
@@ -30,6 +33,9 @@ export class EnhancedResolver {
 
   /**
    * Maps ARIA roles to iOS element types for predicate string queries.
+   *
+   * Used when resolving `{ "role": "button", "name": "Log in" }` on iOS
+   * to produce `-ios predicate string:type == 'XCUIElementTypeButton' AND label == 'Log in'`.
    */
   private static readonly ROLE_TO_IOS_TYPE: Record<string, string> = {
     button: 'XCUIElementTypeButton',
@@ -45,19 +51,39 @@ export class EnhancedResolver {
     img: 'XCUIElementTypeImage',
   };
 
-  /** Returns `true` when the given selector value is a regex pattern object. */
+  /**
+   * Returns `true` when the given selector value is a regex pattern object
+   * (i.e., `{ regex: string; flags?: string }`).
+   * @param value The selector value to check.
+   * @returns `true` if the value is a {@link RegexPattern}.
+   */
   static isRegex(value: SelectorValue): value is RegexPattern {
     return typeof value === 'object' && value !== null && 'regex' in value;
   }
 
-  /** Returns `true` when the given page uses the `'web'` platform. */
+  /**
+   * Returns `true` when the given page uses the `'web'` platform (Playwright).
+   * Defaults to `'web'` when no platform is specified.
+   * @param page The page object from the JSON repository.
+   * @returns `true` if the page targets the web platform.
+   */
   static isWebPlatform(page: PageObject): boolean {
     return (page.platform ?? 'web') === 'web';
   }
 
   /**
-   * Attempts to resolve an enhanced selector. Returns a Playwright Locator (web),
-   * a selector string (mobile), or `null` if standard resolution should be used.
+   * Attempts to resolve an enhanced selector for the given element.
+   *
+   * Enhanced selectors include:
+   * - **Role + accessible name:** `{ "role": "button", "name": "Log in" }`
+   * - **Regex text patterns:** `{ "text": { "regex": "pattern", "flags": "i" } }`
+   * - **Iframe-scoped pages:** Pages with a `"frame"` property
+   *
+   * @param driver The Playwright `Page` or WebDriverIO `Browser`/`Driver` instance.
+   * @param pageObj The page definition from the JSON repository.
+   * @param elementName The specific element name to look up within the page.
+   * @param formatters The selector formatter lookup table for the page's platform.
+   * @returns A Playwright Locator (web), a selector string (mobile), or `null` if standard resolution should be used.
    */
   static resolve(
     driver: any,
@@ -93,7 +119,7 @@ export class EnhancedResolver {
         return scope.locator(`text=/${textSpec.regex}/${textSpec.flags ?? ''}`);
       }
 
-      // Frame-scoped with standard selector
+      // Frame-scoped with standard selector — build locator inside frame
       if (hasFrame) {
         const strategy = Object.keys(selector)[0];
         const value = selector[strategy] as string;
@@ -106,6 +132,7 @@ export class EnhancedResolver {
     }
 
     // ── Non-web (Appium: Android / iOS) ───────────────────────────
+    // Frames don't exist in native apps — skip frame logic
     if (hasRoleWithName) {
       return EnhancedResolver.resolveRoleForMobile(platform, selector);
     }
@@ -119,6 +146,13 @@ export class EnhancedResolver {
 
   // ── Web helpers ─────────────────────────────────────────────────
 
+  /**
+   * Resolves a role + accessible name selector for web using Playwright's
+   * `getByRole()` API. Supports both plain string names and regex patterns.
+   * @param scope The Playwright Page or FrameLocator to query within.
+   * @param selector The raw selector object from the element definition.
+   * @returns A Playwright Locator targeting the matching role element.
+   */
   private static resolveRoleForWeb(scope: any, selector: Record<string, SelectorValue>): any {
     const role = selector.role as string;
     const nameValue = selector.name;
@@ -138,13 +172,18 @@ export class EnhancedResolver {
   }
 
   /**
-   * Resolves the FrameLocator scope for a frame-scoped page.
-   * Supports single frames, frame disambiguation, and nested frames.
+   * Resolves the FrameLocator scope for a frame-scoped page definition.
+   * Supports single frames, frame disambiguation (first/last/index), and
+   * nested frame chains (array of frame selectors).
+   * @param driver The Playwright Page instance.
+   * @param pageObj The page definition containing the `frame` property.
+   * @returns A Playwright FrameLocator scoped to the target iframe.
    */
   static resolveFrameScope(driver: any, pageObj: PageObject): any {
     const frameSpec = pageObj.frame!;
 
     if (Array.isArray(frameSpec)) {
+      // Nested frames: chain frameLocator calls
       let scope: any = driver;
       for (const frame of frameSpec) {
         const sel = frame.css ?? (frame.xpath ? `xpath=${frame.xpath}` : '');
@@ -153,9 +192,11 @@ export class EnhancedResolver {
       return scope;
     }
 
+    // Single frame
     const sel = frameSpec.css ?? (frameSpec.xpath ? `xpath=${frameSpec.xpath}` : '');
     let frameLocator = driver.frameLocator(sel);
 
+    // Frame disambiguation
     if (pageObj.frameIndex !== undefined) {
       const idx = pageObj.frameIndex;
       if (idx === 'first') frameLocator = frameLocator.first();
@@ -168,6 +209,17 @@ export class EnhancedResolver {
 
   // ── Mobile helpers ──────────────────────────────────────────────
 
+  /**
+   * Resolves a role + name selector for Android or iOS using platform-native
+   * locator strategies.
+   *
+   * - **Android:** `android=new UiSelector().className("...").text("...")`
+   * - **iOS:** `-ios predicate string:type == '...' AND label == '...'`
+   *
+   * @param platform The platform string (`'android'` or `'ios'`).
+   * @param selector The raw selector object from the element definition.
+   * @returns A platform-native selector string, or `null` if the role is not mapped.
+   */
   private static resolveRoleForMobile(
     platform: string,
     selector: Record<string, SelectorValue>,
@@ -198,6 +250,16 @@ export class EnhancedResolver {
     return null;
   }
 
+  /**
+   * Resolves a regex text selector for Android or iOS.
+   *
+   * - **Android:** `android=new UiSelector().textMatches("pattern")`
+   * - **iOS:** `-ios predicate string:label MATCHES 'pattern'`
+   *
+   * @param platform The platform string (`'android'` or `'ios'`).
+   * @param selector The raw selector object from the element definition.
+   * @returns A platform-native selector string, or `null` if the platform is not supported.
+   */
   private static resolveRegexTextForMobile(
     platform: string,
     selector: Record<string, SelectorValue>,

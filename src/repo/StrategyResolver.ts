@@ -8,15 +8,25 @@ import { EnhancedResolver } from './EnhancedResolver';
  * Creates platform-appropriate Element wrappers and applies selection
  * strategies (FIRST, INDEX, RANDOM, TEXT, ALL).
  *
- * This module handles the mechanical work of constructing WebElement or
- * PlatformElement instances from a locator/selector and applying the
- * requested strategy on top.
+ * This module handles the mechanical work of constructing {@link WebElement}
+ * or {@link PlatformElement} instances from a locator/selector and applying
+ * the requested strategy on top. All methods are stateless and static.
  */
 export class StrategyResolver {
 
   /**
    * Creates an Element from a Playwright Locator (web enhanced path)
    * and applies the requested selection strategy.
+   *
+   * Used when the {@link EnhancedResolver} produces a Playwright Locator
+   * for web-platform enhanced selectors (role+name, regex text, iframe).
+   *
+   * @param locator The Playwright Locator produced by enhanced resolution.
+   * @param elementName The element name (used for error messages).
+   * @param pageName The page name (used for error messages).
+   * @param timeout The wait timeout in milliseconds.
+   * @param options Optional element resolution options (strategy, index, value).
+   * @returns A promise that resolves to the located Element.
    */
   static async fromLocator(
     locator: any,
@@ -74,8 +84,19 @@ export class StrategyResolver {
 
   /**
    * Creates an Element from a selector string and applies the requested
-   * selection strategy. Branches on platform to produce WebElement or
-   * PlatformElement.
+   * selection strategy. Branches on platform to produce {@link WebElement}
+   * (Playwright) or {@link PlatformElement} (WebDriverIO/Appium).
+   *
+   * Used for the standard resolution path when no enhanced selector is needed.
+   *
+   * @param driver The Playwright `Page` or WebDriverIO `Browser`/`Driver` instance.
+   * @param selector The formatted selector string (e.g. `css=button.primary`, `#submit`).
+   * @param pageObj The page definition from the JSON repository (used for platform detection).
+   * @param elementName The element name (used for error messages).
+   * @param pageName The page name (used for error messages).
+   * @param timeout The wait timeout in milliseconds.
+   * @param options Optional element resolution options (strategy, index, value).
+   * @returns A promise that resolves to the located Element.
    */
   static async fromSelector(
     driver: any,
@@ -146,7 +167,14 @@ export class StrategyResolver {
   }
 
   /**
-   * Creates a PlatformElement from a mobile selector string (enhanced path).
+   * Creates a {@link PlatformElement} from a mobile selector string produced
+   * by the {@link EnhancedResolver} (e.g., a UiSelector or iOS predicate string).
+   *
+   * @param driver The WebDriverIO `Browser`/`Driver` instance.
+   * @param selector The platform-native selector string (e.g. `android=new UiSelector()...`).
+   * @param timeout The wait timeout in milliseconds.
+   * @param options Optional element resolution options (only ALL strategy is supported).
+   * @returns A promise that resolves to the located Element.
    */
   static async fromMobileSelector(
     driver: any,

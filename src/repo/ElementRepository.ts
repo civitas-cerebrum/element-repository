@@ -23,6 +23,11 @@ import { StrategyResolver } from './StrategyResolver';
 export class ElementRepository {
   private pageData: PageRepository;
   private defaultTimeout: number;
+
+  /**
+   * The Playwright `Page` or WebDriverIO `Browser`/`Driver` instance used for
+   * element interactions.
+   */
   private _driver: any;
 
   /**
@@ -53,18 +58,27 @@ export class ElementRepository {
     this.defaultTimeout = defaultTimeout;
   }
 
-  /** The Playwright `Page` or WebDriverIO `Browser`/`Driver` instance. */
+  /**
+   * The Playwright `Page` or WebDriverIO `Browser`/`Driver` instance provided
+   * at construction time.
+   */
   public get driver(): any {
     return this._driver;
   }
 
-  /** Updates the default timeout for all subsequent element retrievals. */
+  /**
+   * Updates the default timeout for all subsequent element retrievals.
+   * @param timeout The new timeout in milliseconds.
+   */
   public setDefaultTimeout(timeout: number): void {
     this.defaultTimeout = timeout;
   }
 
   /**
    * Returns the platform string for the given page, or `'web'` if not specified.
+   * @param pageName The name of the page block in the JSON repository.
+   * @returns The platform string (e.g. `'web'`, `'android'`, `'ios'`).
+   * @throws Error if the page is not found.
    */
   public getPagePlatform(pageName: string): string {
     const page = this.findPage(pageName);
@@ -76,6 +90,20 @@ export class ElementRepository {
   // Element Resolution
   // ══════════════════════════════════════════════════════════════
 
+  /**
+   * Creates the platform-appropriate Element wrapper and waits for it to
+   * be attached in the DOM / exist in the view hierarchy.
+   *
+   * Resolution order:
+   * 1. Enhanced selectors (role+name, regex text, iframe) via {@link EnhancedResolver}
+   * 2. Standard selectors (css, xpath, id, text, etc.) via {@link StrategyResolver}
+   *
+   * @param elementName The specific element name to look up.
+   * @param pageName The name of the page block in the JSON repository.
+   * @param options Optional element resolution options (strategy, index, value, etc.).
+   * @returns A promise that resolves to the located Element.
+   * @throws Error if the page is not found.
+   */
   private async resolveElement(elementName: string, pageName: string, options?: ElementResolutionOptions): Promise<Element> {
     const pageObj = this.findPage(pageName);
     if (!pageObj) throw new Error(`ElementRepository: Page '${pageName}' not found.`);
@@ -102,18 +130,35 @@ export class ElementRepository {
   // Public Query API
   // ══════════════════════════════════════════════════════════════
 
-  /** Retrieves a single Element based on the externalized JSON mapping. */
+  /**
+   * Retrieves a single Element based on the externalized JSON mapping.
+   * @param elementName The specific element name to look up.
+   * @param pageName The name of the page block in the JSON repository.
+   * @param options Optional element resolution options.
+   * @returns A promise that resolves to an Element.
+   */
   public async get(elementName: string, pageName: string, options?: ElementResolutionOptions): Promise<Element> {
     return this.resolveElement(elementName, pageName, options);
   }
 
-  /** Retrieves an array of Elements matching the mapped selector. */
+  /**
+   * Retrieves an array of Elements matching the mapped selector.
+   * @param elementName The specific element name to look up.
+   * @param pageName The name of the page block in the JSON repository.
+   * @returns A promise that resolves to an array of Elements.
+   */
   public async getAll(elementName: string, pageName: string): Promise<Element[]> {
     const el = await this.resolveElement(elementName, pageName, { strategy: SelectionStrategy.ALL });
     return el.all();
   }
 
-  /** Randomly selects one element from a list of elements matching the given selector. */
+  /**
+   * Randomly selects one element from a list of elements matching the given selector.
+   * @param elementName The specific element name to look up.
+   * @param pageName The name of the page block in the JSON repository.
+   * @param strict If true, throws an error if no elements are found. Defaults to false.
+   * @returns A promise that resolves to a randomly selected Element, or null if none are found.
+   */
   public async getRandom(elementName: string, pageName: string, strict: boolean = false): Promise<Element | null> {
     const allElements = await this.getAll(elementName, pageName);
     if (allElements.length === 0) {
@@ -127,16 +172,26 @@ export class ElementRepository {
 
   /**
    * Filters an element list and returns the first element matching the specified text.
-   * Matching: exact match first, then contains fallback.
+   *
+   * Matching strategy: first attempts an exact match (trimmed), then falls back
+   * to a contains match if no exact match is found.
+   *
+   * @param elementName The specific element name to look up.
+   * @param pageName The name of the page block in the JSON repository.
+   * @param desiredText The string of text to search for within the elements.
+   * @param strict If true, throws an error if the element is not found. Defaults to false.
+   * @returns A promise that resolves to the matched Element, or null if not found.
    */
   public async getByText(elementName: string, pageName: string, desiredText: string, strict: boolean = false): Promise<Element | null> {
     const allElements = await this.getAll(elementName, pageName);
 
+    // First pass: exact match
     for (const element of allElements) {
       const text = await element.textContent();
       if (text?.trim() === desiredText) return element;
     }
 
+    // Second pass: contains match
     for (const element of allElements) {
       const text = await element.textContent();
       if (text?.trim().includes(desiredText)) return element;
@@ -150,7 +205,19 @@ export class ElementRepository {
 
   /**
    * Filters elements by a specific HTML attribute value.
-   * Matching: when `exact` is unset, tries exact then contains. When set, uses only that mode.
+   *
+   * Matching strategy: when `exact` is not specified, first attempts an exact
+   * match, then falls back to a contains match. When `exact` is explicitly set,
+   * only that matching mode is used.
+   *
+   * @param elementName The specific element name to look up.
+   * @param pageName The name of the page block in the JSON repository.
+   * @param attribute The HTML attribute name to filter by.
+   * @param value The attribute value to match against.
+   * @param options Optional configuration.
+   * @param options.exact If true, requires an exact attribute match. If false, matches when the attribute contains the value. If omitted, tries exact first then falls back to contains.
+   * @param options.strict If true, throws an error when no matching element is found. Defaults to false.
+   * @returns A promise that resolves to the matched Element, or null if not found.
    */
   public async getByAttribute(
     elementName: string,
@@ -162,6 +229,7 @@ export class ElementRepository {
     const { exact, strict = false } = options;
     const allElements = await this.getAll(elementName, pageName);
 
+    // When exact is explicitly set, use only that matching mode
     if (exact !== undefined) {
       for (const element of allElements) {
         const attrValue = await element.getAttribute(attribute);
@@ -169,6 +237,7 @@ export class ElementRepository {
         if (exact ? attrValue === value : attrValue.includes(value)) return element;
       }
     } else {
+      // Default: try exact match first, then fall back to contains
       for (const element of allElements) {
         const attrValue = await element.getAttribute(attribute);
         if (attrValue === value) return element;
@@ -186,7 +255,14 @@ export class ElementRepository {
     return null;
   }
 
-  /** Returns the nth matching element from a list of elements. */
+  /**
+   * Returns the nth matching element from a list of elements.
+   * @param elementName The specific element name to look up.
+   * @param pageName The name of the page block in the JSON repository.
+   * @param index The zero-based index of the element to retrieve.
+   * @param strict If true, throws an error if the index is out of bounds. Defaults to false.
+   * @returns A promise that resolves to the Element at the given index, or null if out of bounds.
+   */
   public async getByIndex(elementName: string, pageName: string, index: number, strict: boolean = false): Promise<Element | null> {
     const allElements = await this.getAll(elementName, pageName);
     if (index < 0 || index >= allElements.length) {
@@ -198,7 +274,13 @@ export class ElementRepository {
     return allElements[index];
   }
 
-  /** Returns the first visible element matching the selector. */
+  /**
+   * Returns the first visible element matching the selector.
+   * @param elementName The specific element name to look up.
+   * @param pageName The name of the page block in the JSON repository.
+   * @param strict If true, throws an error if no visible element is found. Defaults to false.
+   * @returns A promise that resolves to a visible Element, or null if none are visible.
+   */
   public async getVisible(elementName: string, pageName: string, strict: boolean = false): Promise<Element | null> {
     const allElements = await this.getAll(elementName, pageName);
     for (const element of allElements) {
@@ -210,7 +292,14 @@ export class ElementRepository {
     return null;
   }
 
-  /** Filters elements by their ARIA role attribute and returns the first match. */
+  /**
+   * Filters elements by their ARIA role attribute and returns the first match.
+   * @param elementName The specific element name to look up.
+   * @param pageName The name of the page block in the JSON repository.
+   * @param role The ARIA role value to filter by (e.g., 'button', 'link', 'tab').
+   * @param strict If true, throws an error if no matching element is found. Defaults to false.
+   * @returns A promise that resolves to the matched Element, or null if not found.
+   */
   public async getByRole(elementName: string, pageName: string, role: string, strict: boolean = false): Promise<Element | null> {
     return this.getByAttribute(elementName, pageName, 'role', role, { exact: true, strict });
   }
@@ -220,8 +309,13 @@ export class ElementRepository {
   // ══════════════════════════════════════════════════════════════
 
   /**
-   * Returns the raw selector strategy and value without platform-specific formatting.
-   * Skips enhanced keys (objects) and returns the first plain string value.
+   * Returns the raw selector strategy and value without Playwright-specific formatting.
+   * Skips enhanced keys (object values like regex patterns) and returns the first
+   * key with a plain string value.
+   * @param elementName The specific element name to look up.
+   * @param pageName The name of the page block in the JSON repository.
+   * @returns An object with `strategy` (e.g. 'css', 'xpath', 'id') and `value` (the raw selector value).
+   * @throws Error if the page, element, or selector is not found.
    */
   public getSelectorRaw(elementName: string, pageName: string): { strategy: string; value: string } {
     const page = this.findPage(pageName);
@@ -235,12 +329,14 @@ export class ElementRepository {
       throw new Error(`ElementRepository: Invalid selector for '${elementName}'.`);
     }
 
+    // Find the first key with a plain string value (skip enhanced keys like 'name' with objects)
     for (const key of Object.keys(selector)) {
       if (typeof selector[key] === 'string') {
         return { strategy: key, value: selector[key] as string };
       }
     }
 
+    // Fallback: return first key (may be an object for enhanced selectors resolved elsewhere)
     const strategy = Object.keys(selector)[0] as string;
     const value = selector[strategy];
     return { strategy, value: typeof value === 'string' ? value : JSON.stringify(value) };
@@ -248,6 +344,21 @@ export class ElementRepository {
 
   /**
    * Returns a platform-appropriate selector string based on the page's platform field.
+   *
+   * **Web (Playwright) selector keys:** css, xpath, id, text, testid, role, placeholder, label
+   *
+   * **Non-web (Appium) selector keys:** accessibility id, xpath, id, css, uiautomator,
+   * predicate, class chain, class name, tag name, name, android data matcher,
+   * android view matcher, android view tag, text
+   *
+   * All space-separated keys also accept camelCase aliases (e.g., `accessibilityId`,
+   * `androidUIAutomator`, `iOSNsPredicateString`, `iOSClassChain`, `className`,
+   * `tagName`, `androidDataMatcher`, `androidViewMatcher`, `androidViewTag`).
+   *
+   * @param elementName The specific element name to look up.
+   * @param pageName The name of the page block in the JSON repository.
+   * @returns A selector string formatted for Playwright (web) or Appium (non-web).
+   * @throws Error if the page, element, or selector is not found.
    */
   public getSelector(elementName: string, pageName: string): string {
     const { strategy, value } = this.getSelectorRaw(elementName, pageName);
@@ -261,10 +372,21 @@ export class ElementRepository {
   // Internal Helpers
   // ══════════════════════════════════════════════════════════════
 
+  /**
+   * Finds a page by name.
+   * @param pageName The name of the page block in the JSON repository.
+   * @returns The matching PageObject, or undefined if not found.
+   */
   private findPage(pageName: string): PageObject | undefined {
     return this.pageData.pages.find((p) => p.name === pageName);
   }
 
+  /**
+   * Returns the {@link SelectorFormatter} lookup table for the given platform.
+   * Falls back to the base {@link APPIUM_FORMATTERS} for unrecognised non-web platforms.
+   * @param platform The platform string (e.g. `'web'`, `'android'`, `'ios'`).
+   * @returns The formatter record for the specified platform.
+   */
   private getFormattersForPlatform(platform: string): Record<string, SelectorFormatter> {
     if (platform === 'web') return WEB_FORMATTERS;
     if (platform === 'android') return ANDROID_FORMATTERS;
