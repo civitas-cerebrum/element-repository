@@ -159,25 +159,6 @@ export class PlatformElement implements Element {
     catch { throw new Error(`getCssProperty("${property}") requires a web or hybrid context`); }
   }
 
-  /**
-   * Returns the standard Appium attribute set as a map. Keys that aren't
-   * present for the current platform are omitted.
-   */
-  async getAllAttributes(): Promise<Record<string, string>> {
-    const el = await this.findOne();
-    const candidates = ['text', 'content-desc', 'resource-id', 'class', 'name', 'label', 'value', 'enabled', 'displayed', 'bounds'];
-    const out: Record<string, string> = {};
-    await Promise.all(candidates.map(async (key) => {
-      try {
-        const v = await el.getAttribute(key);
-        if (v !== null && v !== undefined && v !== '') out[key] = String(v);
-      } catch {
-        // attribute not supported on this platform — skip
-      }
-    }));
-    return out;
-  }
-
   async getTagName(): Promise<string> {
     const el = await this.findOne();
     try { return await el.getTagName(); } catch { return ''; }

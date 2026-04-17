@@ -124,15 +124,6 @@ export interface Element {
   getCssProperty(property: string): Promise<string>;
 
   /**
-   * Returns the element's attributes as a plain object.
-   * On web, iterates the DOM `attributes` collection.
-   * On platform elements, returns the standard Appium attribute set
-   * (`text`, `content-desc`, `resource-id`, `class`, `enabled`, `displayed`,
-   * `bounds`) — keys absent on a given platform are omitted.
-   */
-  getAllAttributes(): Promise<Record<string, string>>;
-
-  /**
    * Returns the element's bounding box in CSS pixels, or `null` if the element
    * is not rendered. Coordinates are relative to the viewport.
    */
