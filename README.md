@@ -318,10 +318,13 @@ All `get*` methods return an `Element` — a platform-agnostic interface wrappin
 | `doubleClick(options?)` | Double-clicks. Returns `Promise<Element>`. |
 | `scrollIntoView(options?)` | Scrolls into view. Returns `Promise<Element>`. |
 | `pressSequentially(text, delay?, options?)` | Types character by character. Returns `Promise<Element>`. |
+| `dragTo(target, options?)` | Drags onto another element. Both web and platform supported. |
 | `setInputFiles(filePath, options?)` | Sets file input value. **Web only.** |
 | `dispatchEvent(event)` | Dispatches a DOM event. **Web only.** |
 
 All interaction methods accept an optional `{ timeout?: number }` and return the element for simple chaining.
+
+> **Presence-detection preamble:** every action method internally waits for the element to be attached before performing the operation. Failures from a never-attached element surface as a clean "not attached" error rather than an opaque driver error. Adds ~1–5ms in the happy path; provides genuine stability on Appium where auto-wait isn't built in.
 
 #### State, Extraction, Querying, and Waiting
 
@@ -330,10 +333,15 @@ All interaction methods accept an optional `{ timeout?: number }` and return the
 | `isVisible()` | Returns `true` if visible. |
 | `isEnabled()` | Returns `true` if enabled. |
 | `isChecked()` | Returns `true` if checked. |
+| `exists()` | Returns `true` if the element is in the DOM / element tree (regardless of visibility). |
 | `raw()` | Returns the selector string. |
 | `textContent()` | Returns text content or `null`. |
-| `getAttribute(name)` | Returns attribute value or `null`. |
+| `getAttribute(name)` | Returns one attribute value or `null`. Both platforms. |
 | `inputValue()` | Returns current input value. |
+| `getCssProperty(name)` | Returns a computed CSS value. Web: `getComputedStyle`; Appium: `getCSSValue` for hybrid web contexts. |
+| `boundingBox()` | Returns `{ x, y, width, height } \| null` — viewport-relative layout box. |
+| `screenshot(options?)` | Captures an element-level screenshot. Returns `Promise<Buffer>`. |
+| `getTagName()` | Returns the element tag/class name (e.g. `"button"`, `"android.widget.Button"`). |
 | `count()` | Returns matched element count. |
 | `all()` | Returns array of all matched elements. |
 | `first()` | Returns the first match. |
@@ -342,6 +350,23 @@ All interaction methods accept an optional `{ timeout?: number }` and return the
 | `locateChild(selector)` | Locates a descendant. |
 | `waitFor(options?)` | Waits for state: `"visible"`, `"hidden"`, `"attached"`, `"detached"`. |
 | `action(timeout?)` | Returns a fluent `ElementChain` builder. |
+
+#### WebElement-only methods
+
+These only exist on `WebElement` because the underlying concept is web-exclusive. Cast to `WebElement` to use:
+
+| Method | Why web-only |
+|--------|-------------|
+| `getAllAttributes()` | DOM attribute enumeration via `el.attributes` — Appium has no equivalent enumeration API. Use `getAttribute(name)` for known keys on platform elements. |
+| `selectOption(values, options?)` | HTML `<select>` is web-only — mobile pickers use entirely different widgets. |
+| `rightClick(options?)` | Mouse context-menu click — mobile uses long-press, which is a different gesture. |
+
+```typescript
+import { WebElement } from '@civitas-cerebrum/element-repository';
+
+const el = await repo.get('select-input', 'CheckoutPage');
+const selected = await (el as WebElement).selectOption({ value: 'US' });
+```
 
 ### 🔧 Type Safety
 
