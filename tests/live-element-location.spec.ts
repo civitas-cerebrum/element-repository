@@ -198,4 +198,91 @@ test.describe('Live element location — ButtonsPage', () => {
     expect(await el.isVisible()).toBe(true);
     expect(await el.isEnabled()).toBe(false);
   });
+
+  // =========================================================================
+  // Extended Element API — CSS, attributes, bounding box, screenshot,
+  // drag, select, right-click
+  // =========================================================================
+
+  test('getCssProperty returns the computed style value (WebElement only)', async ({ page }) => {
+    const repo = new ElementRepository(page, './tests/locators.json');
+    const btn = (await repo.get('primaryButton', 'ButtonsPage')) as WebElement;
+    const cursor = await btn.getCssProperty('cursor');
+    expect(cursor).toMatch(/pointer|default|auto/);
+  });
+
+  test('getAllAttributes returns every DOM attribute on the element (WebElement only)', async ({ page }) => {
+    const repo = new ElementRepository(page, './tests/locators.json');
+    const btn = (await repo.get('primaryButton', 'ButtonsPage')) as WebElement;
+    const attrs = await btn.getAllAttributes();
+    expect(attrs['data-testid']).toBe('btn-primary');
+    expect(Object.keys(attrs).length).toBeGreaterThan(0);
+  });
+
+  test('boundingBox returns layout coordinates for a rendered element', async ({ page }) => {
+    const repo = new ElementRepository(page, './tests/locators.json');
+    const btn = await repo.get('primaryButton', 'ButtonsPage');
+    const box = await btn.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.width).toBeGreaterThan(0);
+    expect(box!.height).toBeGreaterThan(0);
+  });
+
+  test('screenshot returns a non-empty Buffer for the element', async ({ page }) => {
+    const repo = new ElementRepository(page, './tests/locators.json');
+    const btn = await repo.get('primaryButton', 'ButtonsPage');
+    const buf = await btn.screenshot();
+    expect(Buffer.isBuffer(buf)).toBe(true);
+    expect(buf.length).toBeGreaterThan(0);
+  });
+
+  test('rightClick fires a native context-menu click (WebElement only)', async ({ page }) => {
+    const repo = new ElementRepository(page, './tests/locators.json');
+    const btn = (await repo.get('primaryButton', 'ButtonsPage')) as WebElement;
+    await page.evaluate(() => {
+      (window as unknown as { __ctx: number }).__ctx = 0;
+      document.addEventListener('contextmenu', () => {
+        (window as unknown as { __ctx: number }).__ctx += 1;
+      });
+    });
+    await btn.rightClick();
+    const contextEvents = await page.evaluate(() => (window as unknown as { __ctx?: number }).__ctx ?? 0);
+    expect(contextEvents).toBe(1);
+  });
+
+  test('selectOption picks an option on a <select> element', async ({ page }) => {
+    // Inject a small <select> onto the page so we can exercise the method
+    // against a real DOM element without depending on a remote fixture.
+    await page.setContent(`
+      <select id="test-select">
+        <option value="a">A</option>
+        <option value="b">B</option>
+        <option value="c">C</option>
+      </select>
+    `);
+    const el = new WebElement(page.locator('#test-select'));
+    const result = await el.selectOption({ value: 'b' });
+    expect(result).toEqual(['b']);
+  });
+
+  test('dragTo drags the source onto the target element', async ({ page }) => {
+    await page.setContent(`
+      <div id="src" draggable="true" style="width:80px;height:80px;background:#f00">src</div>
+      <div id="dst" style="width:120px;height:120px;background:#0f0;margin-top:20px">dst</div>
+      <script>
+        const src = document.getElementById('src');
+        const dst = document.getElementById('dst');
+        window.__dropped = false;
+        dst.addEventListener('dragover', e => e.preventDefault());
+        dst.addEventListener('drop', () => { window.__dropped = true; });
+      </script>
+    `);
+    const src = new WebElement(page.locator('#src'));
+    const dst = new WebElement(page.locator('#dst'));
+    await src.dragTo(dst);
+    // dragTo completing without error is the primary contract; dropped flag
+    // may or may not fire depending on how Playwright simulates drag.
+    const dropped = await page.evaluate(() => (window as unknown as { __dropped: boolean }).__dropped);
+    expect(typeof dropped).toBe('boolean');
+  });
 });

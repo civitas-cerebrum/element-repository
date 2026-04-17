@@ -81,10 +81,6 @@ export class PlatformElement implements Element {
     return this;
   }
 
-  async rightClick(_options?: ElementActionOptions): Promise<Element> {
-    throw new Error('rightClick() is not supported on platform elements — use long-press gestures');
-  }
-
   async doubleClick(_options?: ElementActionOptions): Promise<Element> {
     await (await this.findOne()).doubleClick();
     return this;
@@ -137,16 +133,6 @@ export class PlatformElement implements Element {
     try { return await el.getValue(); } catch { return (await el.getAttribute('value')) ?? ''; }
   }
 
-  async getCssProperty(property: string): Promise<string> {
-    const el = await this.findOne();
-    try { return await el.getCSSValue(property); }
-    catch { throw new Error(`getCssProperty("${property}") is not supported on this platform driver`); }
-  }
-
-  async getAllAttributes(): Promise<Record<string, string>> {
-    throw new Error('getAllAttributes() is not supported on platform elements — use getAttribute(name) for known keys');
-  }
-
   async boundingBox(): Promise<{ x: number; y: number; width: number; height: number } | null> {
     const el = await this.findOne();
     try {
@@ -166,14 +152,6 @@ export class PlatformElement implements Element {
     } catch {
       throw new Error('screenshot() is not supported on this platform driver');
     }
-  }
-
-  async dragTo(_target: Element, _options?: { timeout?: number; sourcePosition?: { x: number; y: number }; targetPosition?: { x: number; y: number } }): Promise<Element> {
-    throw new Error('dragTo() is not supported on platform elements — use touch gestures through the platform driver directly');
-  }
-
-  async selectOption(_values: unknown, _options?: ElementActionOptions): Promise<string[]> {
-    throw new Error('selectOption() is not supported on platform elements — use platform-specific picker interactions');
   }
 
   // ── Querying ─────────────────────────────────────────────────
