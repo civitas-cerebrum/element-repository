@@ -64,6 +64,9 @@ export interface Element {
   /** Double-clicks the element. */
   doubleClick(options?: ElementActionOptions): Promise<Element>;
 
+  /** Right-clicks the element (context menu). */
+  rightClick(options?: ElementActionOptions): Promise<Element>;
+
   /** Scrolls the element into the visible area of the viewport. */
   scrollIntoView(options?: ElementActionOptions): Promise<Element>;
 
@@ -115,6 +118,63 @@ export interface Element {
 
   /** Returns the current value of an `<input>`, `<textarea>`, or `<select>`. */
   inputValue(): Promise<string>;
+
+  /**
+   * Returns the computed value of a CSS property (e.g. `"color"`, `"font-size"`).
+   * @throws On platform elements where computed CSS is unavailable.
+   */
+  getCssProperty(property: string): Promise<string>;
+
+  /**
+   * Returns all HTML attributes on the element as a plain object.
+   * Keys are attribute names, values are the attribute values.
+   * @throws On platform elements where DOM attribute iteration is unavailable.
+   */
+  getAllAttributes(): Promise<Record<string, string>>;
+
+  /**
+   * Returns the element's bounding box in CSS pixels, or `null` if the element
+   * is not rendered. Coordinates are relative to the viewport.
+   * @throws On platform elements where layout boxes are unavailable.
+   */
+  boundingBox(): Promise<{ x: number; y: number; width: number; height: number } | null>;
+
+  /**
+   * Captures a screenshot of the element.
+   * @param options - Optional. `path` to save to disk; returned buffer always.
+   * @throws On platform elements where element screenshot is unsupported.
+   */
+  screenshot(options?: { path?: string }): Promise<Buffer>;
+
+  /**
+   * Drags this element onto the target element.
+   * @param target - The element to drop onto.
+   * @param options - Optional. `sourcePosition` / `targetPosition` for fine-grained drag points.
+   * @throws On platform elements where native drag is unavailable.
+   */
+  dragTo(
+    target: Element,
+    options?: {
+      timeout?: number;
+      sourcePosition?: { x: number; y: number };
+      targetPosition?: { x: number; y: number };
+    },
+  ): Promise<Element>;
+
+  /**
+   * Selects one or more options in a `<select>` element.
+   * Accepts value, label, index, or a combination via the options shape.
+   * Returns the array of values actually selected.
+   * @throws On platform elements where HTML select is unavailable.
+   */
+  selectOption(
+    values:
+      | string
+      | string[]
+      | { value?: string; label?: string; index?: number }
+      | Array<{ value?: string; label?: string; index?: number }>,
+    options?: ElementActionOptions,
+  ): Promise<string[]>;
 
   // ── Querying ─────────────────────────────────────────────────
 

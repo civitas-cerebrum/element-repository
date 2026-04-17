@@ -71,6 +71,12 @@ export class WebElement implements Element {
     return this;
   }
 
+  /** {@inheritDoc Element.rightClick} */
+  async rightClick(options?: ElementActionOptions): Promise<Element> {
+    await this.locator.click({ button: 'right', timeout: options?.timeout });
+    return this;
+  }
+
   /** {@inheritDoc Element.scrollIntoView} */
   async scrollIntoView(options?: ElementActionOptions): Promise<Element> {
     await this.locator.scrollIntoViewIfNeeded({ timeout: options?.timeout });
@@ -119,6 +125,65 @@ export class WebElement implements Element {
 
   /** {@inheritDoc Element.inputValue} */
   async inputValue(): Promise<string> { return this.locator.inputValue(); }
+
+  /** {@inheritDoc Element.getCssProperty} */
+  async getCssProperty(property: string): Promise<string> {
+    return this.locator.evaluate(
+      (el, prop) => window.getComputedStyle(el as globalThis.Element).getPropertyValue(prop),
+      property,
+    );
+  }
+
+  /** {@inheritDoc Element.getAllAttributes} */
+  async getAllAttributes(): Promise<Record<string, string>> {
+    return this.locator.evaluate((el: globalThis.Element) => {
+      const out: Record<string, string> = {};
+      for (const attr of Array.from(el.attributes)) out[attr.name] = attr.value;
+      return out;
+    });
+  }
+
+  /** {@inheritDoc Element.boundingBox} */
+  async boundingBox(): Promise<{ x: number; y: number; width: number; height: number } | null> {
+    return this.locator.boundingBox();
+  }
+
+  /** {@inheritDoc Element.screenshot} */
+  async screenshot(options?: { path?: string }): Promise<Buffer> {
+    return await this.locator.screenshot({ path: options?.path }) as Buffer;
+  }
+
+  /** {@inheritDoc Element.dragTo} */
+  async dragTo(
+    target: Element,
+    options?: {
+      timeout?: number;
+      sourcePosition?: { x: number; y: number };
+      targetPosition?: { x: number; y: number };
+    },
+  ): Promise<Element> {
+    const targetLocator = (target as WebElement).locator;
+    await this.locator.dragTo(targetLocator, {
+      timeout: options?.timeout,
+      sourcePosition: options?.sourcePosition,
+      targetPosition: options?.targetPosition,
+    });
+    return this;
+  }
+
+  /** {@inheritDoc Element.selectOption} */
+  async selectOption(
+    values:
+      | string
+      | string[]
+      | { value?: string; label?: string; index?: number }
+      | Array<{ value?: string; label?: string; index?: number }>,
+    options?: ElementActionOptions,
+  ): Promise<string[]> {
+    return this.locator.selectOption(values as Parameters<Locator['selectOption']>[0], {
+      timeout: options?.timeout,
+    });
+  }
 
   // ── Querying ─────────────────────────────────────────────────
 
