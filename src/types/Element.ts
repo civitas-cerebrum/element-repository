@@ -148,7 +148,7 @@ export interface Element {
   getTagName(): Promise<string>;
 
   /** Returns `true` if the element exists in the DOM / element tree (regardless of visibility). */
-  isExisting(): Promise<boolean>;
+  exists(): Promise<boolean>;
 
   /**
    * Drags this element onto another element.

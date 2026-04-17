@@ -47,53 +47,69 @@ export class PlatformElement implements Element {
 
   // ── Interaction ──────────────────────────────────────────────
 
-  async click(_options?: ElementActionOptions): Promise<Element> {
-    await (await this.findOne()).click();
+  /**
+   * Waits for the underlying Appium element to exist before any action fires.
+   * Gives each action a predictable presence-detection preamble so failures
+   * surface as "element never attached" rather than an opaque driver error.
+   */
+  private async ensureAttached(timeout?: number): Promise<any> {
+    const el = await this.findOne();
+    try { await el.waitForExist({ timeout: timeout ?? this.defaultTimeout ?? 30000 }); }
+    catch { /* swallow — downstream action call will surface a clearer error */ }
+    return el;
+  }
+
+  async click(options?: ElementActionOptions): Promise<Element> {
+    const el = await this.ensureAttached(options?.timeout);
+    await el.click();
     return this;
   }
 
-  async fill(text: string, _options?: ElementActionOptions): Promise<Element> {
-    const el = await this.findOne();
+  async fill(text: string, options?: ElementActionOptions): Promise<Element> {
+    const el = await this.ensureAttached(options?.timeout);
     await el.clearValue();
     await el.setValue(text);
     return this;
   }
 
-  async clear(_options?: ElementActionOptions): Promise<Element> {
-    await (await this.findOne()).clearValue();
+  async clear(options?: ElementActionOptions): Promise<Element> {
+    const el = await this.ensureAttached(options?.timeout);
+    await el.clearValue();
     return this;
   }
 
-  async check(_options?: ElementActionOptions): Promise<Element> {
-    const el = await this.findOne();
+  async check(options?: ElementActionOptions): Promise<Element> {
+    const el = await this.ensureAttached(options?.timeout);
     if (!(await el.isSelected())) await el.click();
     return this;
   }
 
-  async uncheck(_options?: ElementActionOptions): Promise<Element> {
-    const el = await this.findOne();
+  async uncheck(options?: ElementActionOptions): Promise<Element> {
+    const el = await this.ensureAttached(options?.timeout);
     if (await el.isSelected()) await el.click();
     return this;
   }
 
-  async hover(_options?: ElementActionOptions): Promise<Element> {
-    await (await this.findOne()).moveTo();
+  async hover(options?: ElementActionOptions): Promise<Element> {
+    const el = await this.ensureAttached(options?.timeout);
+    await el.moveTo();
     return this;
   }
 
-  async doubleClick(_options?: ElementActionOptions): Promise<Element> {
-    await (await this.findOne()).doubleClick();
+  async doubleClick(options?: ElementActionOptions): Promise<Element> {
+    const el = await this.ensureAttached(options?.timeout);
+    await el.doubleClick();
     return this;
   }
 
-  async scrollIntoView(_options?: ElementActionOptions): Promise<Element> {
-    const el = await this.findOne();
+  async scrollIntoView(options?: ElementActionOptions): Promise<Element> {
+    const el = await this.ensureAttached(options?.timeout);
     await this.driver.execute('mobile: scroll', { element: el.elementId, toVisible: true });
     return this;
   }
 
-  async pressSequentially(text: string, delay: number = 50, _options?: ElementActionOptions): Promise<Element> {
-    const el = await this.findOne();
+  async pressSequentially(text: string, delay: number = 50, options?: ElementActionOptions): Promise<Element> {
+    const el = await this.ensureAttached(options?.timeout);
     for (const char of text) {
       await el.addValue(char);
       if (delay > 0) await this.driver.pause(delay);
@@ -167,16 +183,17 @@ export class PlatformElement implements Element {
     try { return await el.getTagName(); } catch { return ''; }
   }
 
-  async isExisting(): Promise<boolean> {
+  async exists(): Promise<boolean> {
     try { return await (await this.findOne()).isExisting(); } catch { return false; }
   }
 
   async dragTo(
     target: Element,
-    _options?: { timeout?: number; sourcePosition?: { x: number; y: number }; targetPosition?: { x: number; y: number } },
+    options?: { timeout?: number; sourcePosition?: { x: number; y: number }; targetPosition?: { x: number; y: number } },
   ): Promise<Element> {
-    const src = await this.findOne();
-    const targetEl = await (target as PlatformElement).findOne();
+    const src = await this.ensureAttached(options?.timeout);
+    const targetPlatform = target as PlatformElement;
+    const targetEl = await targetPlatform.ensureAttached(options?.timeout);
     try { await src.dragAndDrop(targetEl); }
     catch { throw new Error('dragTo() failed — the underlying driver may not support drag on this platform'); }
     return this;

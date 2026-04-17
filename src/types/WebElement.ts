@@ -29,74 +29,96 @@ export class WebElement implements Element {
 
   // ── Interaction ──────────────────────────────────────────────
 
+  /**
+   * Waits for the element to be attached to the DOM before any action
+   * fires. Resolves quickly in the common case; gives every action a
+   * predictable presence-detection preamble, so failures are "element
+   * never attached" rather than opaque action errors.
+   */
+  private async ensureAttached(timeout?: number): Promise<void> {
+    await this.locator.waitFor({ state: 'attached', timeout });
+  }
+
   /** {@inheritDoc Element.click} */
   async click(options?: ElementActionOptions): Promise<Element> {
+    await this.ensureAttached(options?.timeout);
     await this.locator.click({ timeout: options?.timeout });
     return this;
   }
 
   /** {@inheritDoc Element.fill} */
   async fill(text: string, options?: ElementActionOptions): Promise<Element> {
+    await this.ensureAttached(options?.timeout);
     await this.locator.fill(text, { timeout: options?.timeout });
     return this;
   }
 
   /** {@inheritDoc Element.clear} */
   async clear(options?: ElementActionOptions): Promise<Element> {
+    await this.ensureAttached(options?.timeout);
     await this.locator.clear({ timeout: options?.timeout });
     return this;
   }
 
   /** {@inheritDoc Element.check} */
   async check(options?: ElementActionOptions): Promise<Element> {
+    await this.ensureAttached(options?.timeout);
     await this.locator.check({ timeout: options?.timeout });
     return this;
   }
 
   /** {@inheritDoc Element.uncheck} */
   async uncheck(options?: ElementActionOptions): Promise<Element> {
+    await this.ensureAttached(options?.timeout);
     await this.locator.uncheck({ timeout: options?.timeout });
     return this;
   }
 
   /** {@inheritDoc Element.hover} */
   async hover(options?: ElementActionOptions): Promise<Element> {
+    await this.ensureAttached(options?.timeout);
     await this.locator.hover({ timeout: options?.timeout });
     return this;
   }
 
   /** {@inheritDoc Element.doubleClick} */
   async doubleClick(options?: ElementActionOptions): Promise<Element> {
+    await this.ensureAttached(options?.timeout);
     await this.locator.dblclick({ timeout: options?.timeout });
     return this;
   }
 
   /** {@inheritDoc Element.rightClick} */
   async rightClick(options?: ElementActionOptions): Promise<Element> {
+    await this.ensureAttached(options?.timeout);
     await this.locator.click({ button: 'right', timeout: options?.timeout });
     return this;
   }
 
   /** {@inheritDoc Element.scrollIntoView} */
   async scrollIntoView(options?: ElementActionOptions): Promise<Element> {
+    await this.ensureAttached(options?.timeout);
     await this.locator.scrollIntoViewIfNeeded({ timeout: options?.timeout });
     return this;
   }
 
   /** {@inheritDoc Element.pressSequentially} */
   async pressSequentially(text: string, delay?: number, options?: ElementActionOptions): Promise<Element> {
+    await this.ensureAttached(options?.timeout);
     await this.locator.pressSequentially(text, { delay, timeout: options?.timeout });
     return this;
   }
 
   /** {@inheritDoc Element.setInputFiles} */
   async setInputFiles(filePath: string, options?: ElementActionOptions): Promise<Element> {
+    await this.ensureAttached(options?.timeout);
     await this.locator.setInputFiles(filePath, { timeout: options?.timeout });
     return this;
   }
 
   /** {@inheritDoc Element.dispatchEvent} */
   async dispatchEvent(event: string): Promise<Element> {
+    await this.ensureAttached();
     await this.locator.dispatchEvent(event);
     return this;
   }
@@ -158,8 +180,8 @@ export class WebElement implements Element {
     return this.locator.evaluate((el: globalThis.Element) => el.tagName.toLowerCase());
   }
 
-  /** {@inheritDoc Element.isExisting} */
-  async isExisting(): Promise<boolean> {
+  /** {@inheritDoc Element.exists} */
+  async exists(): Promise<boolean> {
     return (await this.locator.count()) > 0;
   }
 
@@ -172,7 +194,9 @@ export class WebElement implements Element {
       targetPosition?: { x: number; y: number };
     },
   ): Promise<Element> {
+    await this.ensureAttached(options?.timeout);
     const targetLocator = (target as WebElement).locator;
+    await targetLocator.waitFor({ state: 'attached', timeout: options?.timeout });
     await this.locator.dragTo(targetLocator, {
       timeout: options?.timeout,
       sourcePosition: options?.sourcePosition,
@@ -190,6 +214,7 @@ export class WebElement implements Element {
       | Array<{ value?: string; label?: string; index?: number }>,
     options?: ElementActionOptions,
   ): Promise<string[]> {
+    await this.ensureAttached(options?.timeout);
     return this.locator.selectOption(values as Parameters<Locator['selectOption']>[0], {
       timeout: options?.timeout,
     });

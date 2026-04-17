@@ -272,13 +272,13 @@ test.describe('Live element location — ButtonsPage', () => {
     expect(tag).toBe('button');
   });
 
-  test('isExisting reports true for present elements, false for missing selectors', async ({ page }) => {
+  test('exists reports true for present elements, false for missing selectors', async ({ page }) => {
     const repo = new ElementRepository(page, './tests/locators.json');
     const present = await repo.get('primaryButton', 'ButtonsPage');
-    expect(await present.isExisting()).toBe(true);
+    expect(await present.exists()).toBe(true);
 
     const missing = new WebElement(page.locator('#absolutely-not-in-the-dom'));
-    expect(await missing.isExisting()).toBe(false);
+    expect(await missing.exists()).toBe(false);
   });
 
   test('dragTo drags the source onto the target element', async ({ page }) => {
