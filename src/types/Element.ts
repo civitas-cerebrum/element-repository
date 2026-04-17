@@ -117,6 +117,22 @@ export interface Element {
   inputValue(): Promise<string>;
 
   /**
+   * Returns the computed/effective value of a style property.
+   * On web, delegates to `getComputedStyle()`; on platform elements,
+   * delegates to the driver's CSS-value accessor (hybrid web contexts).
+   */
+  getCssProperty(property: string): Promise<string>;
+
+  /**
+   * Returns the element's attributes as a plain object.
+   * On web, iterates the DOM `attributes` collection.
+   * On platform elements, returns the standard Appium attribute set
+   * (`text`, `content-desc`, `resource-id`, `class`, `enabled`, `displayed`,
+   * `bounds`) — keys absent on a given platform are omitted.
+   */
+  getAllAttributes(): Promise<Record<string, string>>;
+
+  /**
    * Returns the element's bounding box in CSS pixels, or `null` if the element
    * is not rendered. Coordinates are relative to the viewport.
    */
@@ -127,6 +143,25 @@ export interface Element {
    * @param options - Optional. `path` to save to disk; returned buffer always.
    */
   screenshot(options?: { path?: string }): Promise<Buffer>;
+
+  /** Returns the element's tag/class name (e.g. `"button"`, `"android.widget.Button"`). */
+  getTagName(): Promise<string>;
+
+  /** Returns `true` if the element exists in the DOM / element tree (regardless of visibility). */
+  isExisting(): Promise<boolean>;
+
+  /**
+   * Drags this element onto another element.
+   * Web uses HTML5 drag-and-drop; platform drivers use touch-based drag.
+   */
+  dragTo(
+    target: Element,
+    options?: {
+      timeout?: number;
+      sourcePosition?: { x: number; y: number };
+      targetPosition?: { x: number; y: number };
+    },
+  ): Promise<Element>;
 
   // ── Querying ─────────────────────────────────────────────────
 

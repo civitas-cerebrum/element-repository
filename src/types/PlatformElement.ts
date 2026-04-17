@@ -133,6 +133,55 @@ export class PlatformElement implements Element {
     try { return await el.getValue(); } catch { return (await el.getAttribute('value')) ?? ''; }
   }
 
+  /**
+   * Reads a computed CSS value via the driver's CSS accessor. Works in
+   * hybrid web contexts; throws on pure native contexts where there's no CSS.
+   */
+  async getCssProperty(property: string): Promise<string> {
+    const el = await this.findOne();
+    try { return await el.getCSSValue(property); }
+    catch { throw new Error(`getCssProperty("${property}") requires a web or hybrid context`); }
+  }
+
+  /**
+   * Returns the standard Appium attribute set as a map. Keys that aren't
+   * present for the current platform are omitted.
+   */
+  async getAllAttributes(): Promise<Record<string, string>> {
+    const el = await this.findOne();
+    const candidates = ['text', 'content-desc', 'resource-id', 'class', 'name', 'label', 'value', 'enabled', 'displayed', 'bounds'];
+    const out: Record<string, string> = {};
+    await Promise.all(candidates.map(async (key) => {
+      try {
+        const v = await el.getAttribute(key);
+        if (v !== null && v !== undefined && v !== '') out[key] = String(v);
+      } catch {
+        // attribute not supported on this platform — skip
+      }
+    }));
+    return out;
+  }
+
+  async getTagName(): Promise<string> {
+    const el = await this.findOne();
+    try { return await el.getTagName(); } catch { return ''; }
+  }
+
+  async isExisting(): Promise<boolean> {
+    try { return await (await this.findOne()).isExisting(); } catch { return false; }
+  }
+
+  async dragTo(
+    target: Element,
+    _options?: { timeout?: number; sourcePosition?: { x: number; y: number }; targetPosition?: { x: number; y: number } },
+  ): Promise<Element> {
+    const src = await this.findOne();
+    const targetEl = await (target as PlatformElement).findOne();
+    try { await src.dragAndDrop(targetEl); }
+    catch { throw new Error('dragTo() failed — the underlying driver may not support drag on this platform'); }
+    return this;
+  }
+
   async boundingBox(): Promise<{ x: number; y: number; width: number; height: number } | null> {
     const el = await this.findOne();
     try {

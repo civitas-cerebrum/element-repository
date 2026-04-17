@@ -153,6 +153,16 @@ export class WebElement implements Element {
     return await this.locator.screenshot({ path: options?.path }) as Buffer;
   }
 
+  /** {@inheritDoc Element.getTagName} */
+  async getTagName(): Promise<string> {
+    return this.locator.evaluate((el: globalThis.Element) => el.tagName.toLowerCase());
+  }
+
+  /** {@inheritDoc Element.isExisting} */
+  async isExisting(): Promise<boolean> {
+    return (await this.locator.count()) > 0;
+  }
+
   /** {@inheritDoc Element.dragTo} */
   async dragTo(
     target: Element,

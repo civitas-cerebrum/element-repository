@@ -204,16 +204,16 @@ test.describe('Live element location — ButtonsPage', () => {
   // drag, select, right-click
   // =========================================================================
 
-  test('getCssProperty returns the computed style value (WebElement only)', async ({ page }) => {
+  test('getCssProperty returns the computed style value', async ({ page }) => {
     const repo = new ElementRepository(page, './tests/locators.json');
-    const btn = (await repo.get('primaryButton', 'ButtonsPage')) as WebElement;
+    const btn = await repo.get('primaryButton', 'ButtonsPage');
     const cursor = await btn.getCssProperty('cursor');
     expect(cursor).toMatch(/pointer|default|auto/);
   });
 
-  test('getAllAttributes returns every DOM attribute on the element (WebElement only)', async ({ page }) => {
+  test('getAllAttributes returns every DOM attribute on the element', async ({ page }) => {
     const repo = new ElementRepository(page, './tests/locators.json');
-    const btn = (await repo.get('primaryButton', 'ButtonsPage')) as WebElement;
+    const btn = await repo.get('primaryButton', 'ButtonsPage');
     const attrs = await btn.getAllAttributes();
     expect(attrs['data-testid']).toBe('btn-primary');
     expect(Object.keys(attrs).length).toBeGreaterThan(0);
@@ -263,6 +263,22 @@ test.describe('Live element location — ButtonsPage', () => {
     const el = new WebElement(page.locator('#test-select'));
     const result = await el.selectOption({ value: 'b' });
     expect(result).toEqual(['b']);
+  });
+
+  test('getTagName returns the element tag', async ({ page }) => {
+    const repo = new ElementRepository(page, './tests/locators.json');
+    const btn = await repo.get('primaryButton', 'ButtonsPage');
+    const tag = await btn.getTagName();
+    expect(tag).toBe('button');
+  });
+
+  test('isExisting reports true for present elements, false for missing selectors', async ({ page }) => {
+    const repo = new ElementRepository(page, './tests/locators.json');
+    const present = await repo.get('primaryButton', 'ButtonsPage');
+    expect(await present.isExisting()).toBe(true);
+
+    const missing = new WebElement(page.locator('#absolutely-not-in-the-dom'));
+    expect(await missing.isExisting()).toBe(false);
   });
 
   test('dragTo drags the source onto the target element', async ({ page }) => {
