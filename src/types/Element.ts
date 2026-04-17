@@ -116,6 +116,44 @@ export interface Element {
   /** Returns the current value of an `<input>`, `<textarea>`, or `<select>`. */
   inputValue(): Promise<string>;
 
+  /**
+   * Returns the computed/effective value of a style property.
+   * On web, delegates to `getComputedStyle()`; on platform elements,
+   * delegates to the driver's CSS-value accessor (hybrid web contexts).
+   */
+  getCssProperty(property: string): Promise<string>;
+
+  /**
+   * Returns the element's bounding box in CSS pixels, or `null` if the element
+   * is not rendered. Coordinates are relative to the viewport.
+   */
+  boundingBox(): Promise<{ x: number; y: number; width: number; height: number } | null>;
+
+  /**
+   * Captures a screenshot of the element.
+   * @param options - Optional. `path` to save to disk; returned buffer always.
+   */
+  screenshot(options?: { path?: string }): Promise<Buffer>;
+
+  /** Returns the element's tag/class name (e.g. `"button"`, `"android.widget.Button"`). */
+  getTagName(): Promise<string>;
+
+  /** Returns `true` if the element exists in the DOM / element tree (regardless of visibility). */
+  exists(): Promise<boolean>;
+
+  /**
+   * Drags this element onto another element.
+   * Web uses HTML5 drag-and-drop; platform drivers use touch-based drag.
+   */
+  dragTo(
+    target: Element,
+    options?: {
+      timeout?: number;
+      sourcePosition?: { x: number; y: number };
+      targetPosition?: { x: number; y: number };
+    },
+  ): Promise<Element>;
+
   // ── Querying ─────────────────────────────────────────────────
 
   /**
