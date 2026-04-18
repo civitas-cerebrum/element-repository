@@ -108,9 +108,92 @@ export class ElementRepository {
     const pageObj = this.findPage(pageName);
     if (!pageObj) throw new Error(`ElementRepository: Page '${pageName}' not found.`);
 
-    // Try enhanced resolution first (role+name, regex text, iframe)
+    const elementDef = pageObj.elements.find((e) => e.elementName === elementName);
+    if (!elementDef) throw new Error(`ElementRepository: Element '${elementName}' not found on page '${pageName}'.`);
+
+    // Walk the fallback chain: resolve from the primary selector entry; if it
+    // matches zero elements within the probe timeout, walk into
+    // `selector.fallback` recursively. The primary is always attempted even
+    // without a fallback — backwards-compatible with pre-0.1.6 behaviour.
+    return this.resolveWithFallback(pageObj, elementName, elementDef.selector, pageName, options);
+  }
+
+  /**
+   * Resolves `selector` for `elementName`; walks `selector.fallback`
+   * recursively when the primary does not attach within the probe timeout.
+   * Returns the resolved `Element` (matched or terminal fallback).
+   *
+   * **Probe timeout = `this.defaultTimeout`** (the repository's configured
+   * element timeout — 15s by default, user-overridable via the
+   * `ElementRepository` constructor). This matches the single-selector
+   * resolution budget: an element that would have appeared within the
+   * standard element timeout still has the full budget to do so before
+   * fallback kicks in. On slow-loading pages (SPA hydration, XHR-gated
+   * content), the primary is never walked past prematurely.
+   *
+   * **No-fallback path is unchanged** — elements without a `fallback` key
+   * skip the probe entirely and return the lazy locator, preserving
+   * pre-0.1.6 behaviour where the full element timeout is applied at
+   * action time (`element.click()`, `element.fill()`, etc.).
+   *
+   * Trade-off: an N-step fallback chain where no node matches can take up
+   * to `N × defaultTimeout` before returning the terminal element. In
+   * practice fallbacks are defined to cover real DOM variants, so the
+   * first or second level matches on pages where the primary doesn't.
+   */
+  private async resolveWithFallback(
+    pageObj: PageObject,
+    elementName: string,
+    selector: { [key: string]: unknown },
+    pageName: string,
+    options: ElementResolutionOptions | undefined,
+  ): Promise<Element> {
+    const element = await this.resolveFromSingleSelector(pageObj, elementName, selector, pageName, options);
+
+    const fallback = (selector as { fallback?: Record<string, unknown> }).fallback;
+    if (!fallback) {
+      // No fallback — return the lazy locator. The full element timeout
+      // applies at action time via `element.waitFor(...)`, preserving the
+      // pre-fallback-chain behaviour exactly.
+      return element;
+    }
+
+    // Wait for the primary to attach, using the repo's configured element
+    // timeout as the probe budget. `waitFor` resolves the moment the
+    // element appears — the timeout only caps the wait, it does not delay
+    // the common (primary-attaches-quickly) case. Throws on timeout or
+    // detachment, which triggers the fallback walk.
+    try {
+      await element.waitFor({ state: 'attached', timeout: this.defaultTimeout });
+      return element;
+    } catch {
+      return this.resolveWithFallback(pageObj, elementName, fallback, pageName, options);
+    }
+  }
+
+  /**
+   * Resolves a single `selector` entry (one node of the fallback chain) into
+   * an `Element` using the existing enhanced / standard resolution paths. Does
+   * not look at `selector.fallback` — that walk is owned by `resolveWithFallback`.
+   */
+  private async resolveFromSingleSelector(
+    pageObj: PageObject,
+    elementName: string,
+    selector: { [key: string]: unknown },
+    pageName: string,
+    options: ElementResolutionOptions | undefined,
+  ): Promise<Element> {
+    // Try enhanced resolution first (role+name, regex text, iframe), feeding
+    // it a synthetic element definition that exposes only the current node of
+    // the fallback chain so the resolver doesn't accidentally see a nested
+    // fallback key.
+    const syntheticPage: PageObject = {
+      ...pageObj,
+      elements: [{ elementName, selector: this.stripFallback(selector) as PageObject['elements'][number]['selector'] }],
+    };
+
     const enhanced = EnhancedResolver.resolve(
-      this._driver, pageObj, elementName, this.getFormattersForPlatform(pageObj.platform ?? 'web'),
+      this._driver, syntheticPage, elementName, this.getFormattersForPlatform(pageObj.platform ?? 'web'),
     );
 
     if (enhanced !== null) {
@@ -121,9 +204,39 @@ export class ElementRepository {
       }
     }
 
-    // Standard resolution path
-    const selector = this.getSelector(elementName, pageName);
-    return StrategyResolver.fromSelector(this._driver, selector, pageObj, elementName, pageName, this.defaultTimeout, options);
+    // Standard resolution path — format via platform selector formatter.
+    const formatted = this.formatSingleSelector(pageObj, selector);
+    return StrategyResolver.fromSelector(this._driver, formatted, pageObj, elementName, pageName, this.defaultTimeout, options);
+  }
+
+  /** Returns a copy of `selector` with the `fallback` key stripped. */
+  private stripFallback(selector: { [key: string]: unknown }): { [key: string]: unknown } {
+    const copy: { [key: string]: unknown } = {};
+    for (const key of Object.keys(selector)) {
+      if (key !== 'fallback') copy[key] = selector[key];
+    }
+    return copy;
+  }
+
+  /**
+   * Platform-formats the first string-valued strategy of a single selector
+   * node. Mirrors `getSelector` but operates on an arbitrary selector object
+   * instead of a repo lookup — used by the fallback walker.
+   */
+  private formatSingleSelector(pageObj: PageObject, selector: { [key: string]: unknown }): string {
+    const stripped = this.stripFallback(selector);
+    for (const key of Object.keys(stripped)) {
+      if (typeof stripped[key] === 'string') {
+        const formatters = this.getFormattersForPlatform(pageObj.platform ?? 'web');
+        const formatter = formatters[key.toLowerCase()];
+        return formatter ? formatter(stripped[key] as string) : (stripped[key] as string);
+      }
+    }
+    // No plain-string strategy — fall back to the first key (enhanced
+    // selectors would have been picked up earlier).
+    const firstKey = Object.keys(stripped)[0];
+    const value = stripped[firstKey];
+    return typeof value === 'string' ? value : JSON.stringify(value);
   }
 
   // ══════════════════════════════════════════════════════════════
