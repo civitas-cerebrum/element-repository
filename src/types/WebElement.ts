@@ -12,13 +12,22 @@ export class WebElement implements Element {
   readonly _type = ElementType.WEB;
 
   /**
-   * @param locator - The Playwright locator this element wraps.
-   * @param selector - The original selector string used to create this element.
+   * @param locator - The Playwright locator this element wraps. Exposed
+   *                  publicly as a deliberate **escape hatch**: consumer
+   *                  packages (element-interactions, singularity-engine)
+   *                  may reach through this to compose Playwright-specific
+   *                  expectations (`expect(element.locator).toHaveText(...)`)
+   *                  that the shared `Element` contract doesn't cover. Prefer
+   *                  the `Element` methods and `selector` for everything else.
+   * @param selector - The original selector string used to create this element,
+   *                   in Playwright-native form (e.g. `css=button.primary`).
+   *                   May be `undefined` when the element was constructed from
+   *                   a pre-built locator.
    * @param defaultTimeout - Default timeout in ms inherited from the repository.
    */
   constructor(
     public readonly locator: Locator,
-    private readonly selector?: string,
+    public readonly selector?: string,
     private readonly defaultTimeout?: number,
   ) {}
 

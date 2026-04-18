@@ -1,20 +1,17 @@
 import { Element } from './Element';
 
 /**
- * Assertion error thrown by {@link ElementChain} verification methods.
- */
-export class ElementAssertionError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'ElementAssertionError';
-  }
-}
-
-/**
  * Thenable fluent builder for performing sequenced actions on an {@link Element}.
  *
  * Created via `element.action(timeout?)`. Methods queue actions synchronously;
  * the full queue is executed in order when the chain is `await`ed.
+ *
+ * `ElementChain` is an **action sequencer**, not a verification engine. It
+ * exposes interaction primitives (click, fill, hover, etc.) and terminal
+ * extractions (getText, getAttribute). Smart verification logic — retry
+ * semantics, matcher composition, error formatting — belongs in consumer
+ * packages (`@civitas-cerebrum/element-interactions`,
+ * `@civitas-cerebrum/singularity-engine`).
  *
  * @example
  * ```ts
@@ -25,11 +22,6 @@ export class ElementAssertionError extends Error {
  *
  * // Extraction (terminal — returns value)
  * const text = await element.action().getText()
- *
- * // Verification chain
- * await element.action(5000)
- *   .verifyPresence()
- *   .verifyText('Submit')
  * ```
  */
 export class ElementChain implements PromiseLike<Element> {
@@ -162,115 +154,7 @@ export class ElementChain implements PromiseLike<Element> {
     return this;
   }
 
-  // ── Verifications ────────────────────────────────────────────
-
-  /** Assert the element is visible. */
-  verifyPresence(): this {
-    this.queue.push(async () => {
-      await this.element.waitFor({ state: 'visible', timeout: this.timeout });
-    });
-    return this;
-  }
-
-  /** Assert the element is hidden or detached. */
-  verifyAbsence(): this {
-    this.queue.push(async () => {
-      await this.element.waitFor({ state: 'hidden', timeout: this.timeout });
-    });
-    return this;
-  }
-
-  /**
-   * Assert text content. If no expected text is given, asserts the element is not empty.
-   * @param expected - Exact text to match. Omit to assert non-empty.
-   */
-  verifyText(expected?: string): this {
-    this.queue.push(async () => {
-      await this.element.waitFor({ state: 'attached', timeout: this.timeout });
-      const actual = await this.element.textContent();
-      if (expected === undefined) {
-        if (!actual || actual.trim().length === 0) {
-          throw new ElementAssertionError(`Expected element to have text content, but it was empty.`);
-        }
-      } else if (actual?.trim() !== expected) {
-        throw new ElementAssertionError(`Expected text "${expected}", but got "${actual?.trim() ?? ''}".`);
-      }
-    });
-    return this;
-  }
-
-  /** Assert text content contains the given substring. */
-  verifyTextContains(expected: string): this {
-    this.queue.push(async () => {
-      await this.element.waitFor({ state: 'attached', timeout: this.timeout });
-      const actual = await this.element.textContent();
-      if (!actual || !actual.includes(expected)) {
-        throw new ElementAssertionError(`Expected text to contain "${expected}", but got "${actual?.trim() ?? ''}".`);
-      }
-    });
-    return this;
-  }
-
-  /** Assert the element has the specified attribute value. */
-  verifyAttribute(name: string, expectedValue: string): this {
-    this.queue.push(async () => {
-      await this.element.waitFor({ state: 'attached', timeout: this.timeout });
-      const actual = await this.element.getAttribute(name);
-      if (actual !== expectedValue) {
-        throw new ElementAssertionError(`Expected attribute "${name}" to be "${expectedValue}", but got "${actual}".`);
-      }
-    });
-    return this;
-  }
-
-  /** Assert the element is enabled. */
-  verifyEnabled(): this {
-    this.queue.push(async () => {
-      if (!(await this.element.isEnabled())) {
-        throw new ElementAssertionError(`Expected element to be enabled, but it was disabled.`);
-      }
-    });
-    return this;
-  }
-
-  /** Assert the element is disabled. */
-  verifyDisabled(): this {
-    this.queue.push(async () => {
-      if (await this.element.isEnabled()) {
-        throw new ElementAssertionError(`Expected element to be disabled, but it was enabled.`);
-      }
-    });
-    return this;
-  }
-
-  /** Assert the element is checked. */
-  verifyChecked(): this {
-    this.queue.push(async () => {
-      if (!(await this.element.isChecked())) {
-        throw new ElementAssertionError(`Expected element to be checked, but it was not.`);
-      }
-    });
-    return this;
-  }
-
-  /** Assert the element count satisfies the given condition. */
-  verifyCount(options: { exactly?: number; greaterThan?: number; lessThan?: number }): this {
-    this.queue.push(async () => {
-      const actual = await this.element.count();
-      if (options.exactly !== undefined && actual !== options.exactly) {
-        throw new ElementAssertionError(`Expected count to be exactly ${options.exactly}, but got ${actual}.`);
-      }
-      if (options.greaterThan !== undefined && actual <= options.greaterThan) {
-        throw new ElementAssertionError(`Expected count > ${options.greaterThan}, but got ${actual}.`);
-      }
-      if (options.lessThan !== undefined && actual >= options.lessThan) {
-        throw new ElementAssertionError(`Expected count < ${options.lessThan}, but got ${actual}.`);
-      }
-    });
-    return this;
-  }
-
-  /** Assert the element is visible (boolean check, no throw). */
+  /** Check whether the element is currently visible. Terminal — executes the queue first. */
   async isPresent(): Promise<boolean> {
     await this.execute();
     return this.element.isVisible();
