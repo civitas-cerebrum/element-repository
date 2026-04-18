@@ -1,4 +1,4 @@
-import { PageObject, RegexPattern, SelectorValue } from '../schema/repository';
+import { PageObject, RegexPattern, Selector, SelectorValue } from '../schema/repository';
 import { SelectorFormatter } from './formatters';
 
 /**
@@ -97,7 +97,7 @@ export class EnhancedResolver {
     const selector = elementDef.selector;
     const hasFrame = pageObj.frame !== undefined;
     const hasRoleWithName = selector.role !== undefined && selector.name !== undefined;
-    const hasRegexText = selector.text !== undefined && EnhancedResolver.isRegex(selector.text);
+    const hasRegexText = selector.text !== undefined && EnhancedResolver.isRegex(selector.text as SelectorValue);
 
     if (!hasFrame && !hasRoleWithName && !hasRegexText) return null;
 
@@ -153,15 +153,16 @@ export class EnhancedResolver {
    * @param selector The raw selector object from the element definition.
    * @returns A Playwright Locator targeting the matching role element.
    */
-  private static resolveRoleForWeb(scope: any, selector: Record<string, SelectorValue>): any {
+  private static resolveRoleForWeb(scope: any, selector: Selector): any {
     const role = selector.role as string;
     const nameValue = selector.name;
     const roleOptions: Record<string, any> = {};
 
     if (typeof nameValue === 'string') {
       roleOptions.name = nameValue;
-    } else if (EnhancedResolver.isRegex(nameValue)) {
-      roleOptions.name = new RegExp(nameValue.regex, nameValue.flags);
+    } else if (nameValue !== undefined && EnhancedResolver.isRegex(nameValue as SelectorValue)) {
+      const regex = nameValue as RegexPattern;
+      roleOptions.name = new RegExp(regex.regex, regex.flags);
     }
 
     if (selector.exact !== undefined) {
@@ -222,12 +223,12 @@ export class EnhancedResolver {
    */
   private static resolveRoleForMobile(
     platform: string,
-    selector: Record<string, SelectorValue>,
+    selector: Selector,
   ): string | null {
     const role = selector.role as string;
     const nameValue = selector.name;
     const nameStr = typeof nameValue === 'string' ? nameValue : null;
-    const nameRegex = EnhancedResolver.isRegex(nameValue) ? nameValue : null;
+    const nameRegex = nameValue !== undefined && EnhancedResolver.isRegex(nameValue as SelectorValue) ? (nameValue as RegexPattern) : null;
 
     if (platform === 'android') {
       const className = EnhancedResolver.ROLE_TO_ANDROID_CLASS[role];
@@ -262,7 +263,7 @@ export class EnhancedResolver {
    */
   private static resolveRegexTextForMobile(
     platform: string,
-    selector: Record<string, SelectorValue>,
+    selector: Selector,
   ): string | null {
     const textSpec = selector.text as RegexPattern;
 

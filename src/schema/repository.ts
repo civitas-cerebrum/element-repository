@@ -7,9 +7,24 @@ export interface RegexPattern {
 /** A selector value: either a plain string or a regex pattern object. */
 export type SelectorValue = string | RegexPattern;
 
-/** Strategy-to-value mapping for a single selector (e.g. `{ css: "button.primary" }`). */
+/**
+ * Strategy-to-value mapping for a single selector (e.g. `{ css: "button.primary" }`).
+ *
+ * An optional `fallback` field chains another `Selector` to try when the
+ * primary resolves to zero elements. Chains are recursive —
+ * `selector.fallback.fallback.fallback` is legal. Used to consolidate
+ * per-country / per-brand / per-variant DOM differences into a single entry.
+ *
+ * @example
+ * // CSS primary, role+name fallback
+ * { css: "[data-qa='login-button']",
+ *   fallback: { role: "button", name: { regex: "Log in|Anmelden", flags: "i" } } }
+ */
 export interface Selector {
-  [key: string]: SelectorValue;
+  /** A recursive fallback selector tried when the primary matches zero elements. */
+  fallback?: Selector;
+  /** Strategy-to-value entries (css, xpath, id, text, role, name, testid, etc.). */
+  [key: string]: SelectorValue | Selector | undefined;
 }
 
 /** A named element within a page, paired with its locator strategy. */

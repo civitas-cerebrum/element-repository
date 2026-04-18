@@ -260,3 +260,149 @@ test.describe('ElementRepository — enhanced selector integration', () => {
     expect(element).toBeDefined();
   });
 });
+
+test.describe('ElementRepository — selector fallback chains', () => {
+
+  /**
+   * Mock page whose `locator(selector)` returns a locator reporting `count()`
+   * from a predefined map — used to simulate primary-misses-fallback-hits
+   * without a live browser.
+   */
+  function createMockPageWithCounts(counts: Record<string, number>) {
+    const makeLocator = (sel: string): any => {
+      const loc: any = {
+        selector: sel,
+        // waitFor('attached') resolves iff count > 0; otherwise throws to
+        // simulate Playwright's timeout — the fallback walker interprets
+        // the throw as "primary did not attach, walk fallback".
+        waitFor: async (opts?: { state?: string; timeout?: number }) => {
+          if ((opts?.state ?? 'attached') === 'attached' && (counts[sel] ?? 0) === 0) {
+            throw new Error(`Timeout ${opts?.timeout ?? 1000}ms exceeded`);
+          }
+        },
+        isVisible: async () => (counts[sel] ?? 0) > 0,
+        textContent: async () => 'Mock',
+        getAttribute: async () => null,
+        count: async () => counts[sel] ?? 0,
+      };
+      loc.first = () => loc;
+      loc.filter = () => loc;
+      loc.all = async () => [loc];
+      return loc;
+    };
+    return {
+      locator: (sel: string) => makeLocator(sel),
+      getByRole: (role: string, options?: any) => makeLocator(`role=${role}[name=${options?.name}]`),
+    } as any;
+  }
+
+  test('primary matches → fallback ignored', async () => {
+    const page = createMockPageWithCounts({ "css=[data-qa='login-button']": 1 });
+    const data = {
+      pages: [{
+        name: 'LoginPage',
+        elements: [{
+          elementName: 'loginBtn',
+          selector: {
+            css: "[data-qa='login-button']",
+            fallback: { css: "#login-alt" },
+          },
+        }],
+      }],
+    };
+    const repo = new ElementRepository(page, data);
+    const element = await repo.get('loginBtn', 'LoginPage');
+    expect(element).toBeDefined();
+    expect(await element.count()).toBe(1);
+  });
+
+  test('primary matches zero → walks into fallback', async () => {
+    const page = createMockPageWithCounts({
+      "css=[data-qa='primary']": 0,
+      "css=[data-qa='fallback']": 1,
+    });
+    const data = {
+      pages: [{
+        name: 'LoginPage',
+        elements: [{
+          elementName: 'loginBtn',
+          selector: {
+            css: "[data-qa='primary']",
+            fallback: { css: "[data-qa='fallback']" },
+          },
+        }],
+      }],
+    };
+    const repo = new ElementRepository(page, data);
+    const element = await repo.get('loginBtn', 'LoginPage');
+    // Resolved element is the fallback — count==1 only on the fallback selector.
+    expect(await element.count()).toBe(1);
+  });
+
+  test('recursive chain — walks past multiple empty fallbacks', async () => {
+    const page = createMockPageWithCounts({
+      "css=[data-qa='one']": 0,
+      "css=[data-qa='two']": 0,
+      "css=[data-qa='three']": 1,
+    });
+    const data = {
+      pages: [{
+        name: 'ChainPage',
+        elements: [{
+          elementName: 'target',
+          selector: {
+            css: "[data-qa='one']",
+            fallback: {
+              css: "[data-qa='two']",
+              fallback: { css: "[data-qa='three']" },
+            },
+          },
+        }],
+      }],
+    };
+    const repo = new ElementRepository(page, data);
+    const element = await repo.get('target', 'ChainPage');
+    expect(await element.count()).toBe(1);
+  });
+
+  test('no fallback key → pre-0.1.6 single-selector behaviour preserved', async () => {
+    const page = createMockPageWithCounts({ "css=[data-qa='plain']": 1 });
+    const data = {
+      pages: [{
+        name: 'PlainPage',
+        elements: [{
+          elementName: 'target',
+          selector: { css: "[data-qa='plain']" },
+        }],
+      }],
+    };
+    const repo = new ElementRepository(page, data);
+    const element = await repo.get('target', 'PlainPage');
+    expect(element).toBeDefined();
+  });
+
+  test('terminal fallback — all nodes match zero → returns last fallback (caller handles)', async () => {
+    const page = createMockPageWithCounts({
+      "css=[data-qa='one']": 0,
+      "css=[data-qa='two']": 0,
+    });
+    const data = {
+      pages: [{
+        name: 'EmptyPage',
+        elements: [{
+          elementName: 'target',
+          selector: {
+            css: "[data-qa='one']",
+            fallback: { css: "[data-qa='two']" },
+          },
+        }],
+      }],
+    };
+    const repo = new ElementRepository(page, data);
+    const element = await repo.get('target', 'EmptyPage');
+    // Both match zero; the terminal fallback is returned. Count remains 0 —
+    // callers get a locator that will fail downstream actions rather than a
+    // thrown resolution error, preserving the usual "element not found" UX.
+    expect(await element.count()).toBe(0);
+  });
+});

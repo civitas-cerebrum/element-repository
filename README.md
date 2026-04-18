@@ -139,6 +139,37 @@ The `platform` field on each page object determines which selector format is use
 
 > All strategy keys that contain spaces also accept a camelCase alias (e.g., `"accessibilityId"` instead of `"accessibility id"`).
 
+### Selector Fallback Chains
+
+Add a nested `fallback` selector to handle DOM variations (per country, per brand, per renderer) without duplicating repo entries. When the primary matches zero elements within a short probe timeout (100ms), resolution walks into `fallback` — recursively.
+
+```json
+{
+  "elementName": "loginButton",
+  "selector": {
+    "css": "[data-qa='login-button']",
+    "fallback": {
+      "role": "button",
+      "name": { "regex": "Log in|Iniciar sesión|Anmelden|Inloggen", "flags": "i" }
+    }
+  }
+}
+```
+
+**Rules:**
+- Primary attaches within the repo's `defaultTimeout` (15s default) → fallback is never consulted. `waitFor` resolves the moment the element appears, so the common case pays no timeout cost.
+- Primary does not attach within `defaultTimeout` → walk into `selector.fallback`.
+- Entries without a `fallback` key skip the probe entirely — the lazy locator uses the element-interactions' action-time timeout (30–60s) just like before.
+- Chains are recursive: `fallback.fallback.fallback` is legal.
+- Fallbacks can mix strategies freely — CSS primary with role+name fallback, id primary with xpath fallback, etc.
+
+**Worst-case latency** on an N-level chain where no node matches: `N × defaultTimeout`. In practice fallbacks cover real DOM variants, so the first or second level matches on pages where the primary doesn't.
+
+**Common uses:**
+- **Multi-country DOM variants** — one entry serves every country instead of country-specific repo files.
+- **Brand-specific primary + generic fallback** — prefer a brand-specific `data-qa`, degrade to a role selector.
+- **Graceful degradation** — test works on both old and new DOM during progressive rollout.
+
 ## 💻 Usage
 
 ### Initialization
