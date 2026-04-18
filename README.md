@@ -361,7 +361,7 @@ if (isPlatform(el)) {
 }
 ```
 
-## ⚠️ Breaking Changes (v0.2.0)
+## ⚠️ Breaking Changes (v0.1.0)
 
 | Change | Migration |
 |---|---|
