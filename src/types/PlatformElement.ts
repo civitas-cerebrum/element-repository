@@ -159,12 +159,24 @@ export class PlatformElement implements Element {
 
   async inputValue(): Promise<string> {
     const el = await this.findOne();
-    try { return await el.getValue(); } catch { /* fall through to attribute */ }
-    // UiAutomator2 doesn't expose a `value` attribute on EditTexts — `text`
-    // is the equivalent. XCUITest exposes `value`. Pick per platform so
-    // both backends resolve the input value cleanly.
-    const attr = this.isAndroid() ? 'text' : 'value';
-    return (await el.getAttribute(attr)) ?? '';
+    if (this.isAndroid()) {
+      // UiAutomator2 doesn't expose a `value` attribute — `text` is the
+      // equivalent. Also: when the EditText is empty, `text` returns the
+      // hint string. Use `showing-hint` to detect that case and return ''.
+      const showingHint = (await el.getAttribute('showing-hint').catch(() => 'false')) === 'true';
+      if (showingHint) return '';
+      return (await el.getAttribute('text')) ?? '';
+    }
+    // XCUITest reports the placeholder as the element value when the
+    // UITextField is empty. Always fetch placeholder + value in parallel
+    // so we can normalize an empty field to '' no matter which path
+    // (`getValue()` or `getAttribute('value')`) produced the raw value.
+    const [rawValue, placeholder] = await Promise.all([
+      (async () => { try { return await el.getValue(); } catch { return (await el.getAttribute('value')) ?? ''; } })(),
+      el.getAttribute('placeholderValue').catch(() => null),
+    ]);
+    if (placeholder !== null && rawValue === placeholder) return '';
+    return rawValue ?? '';
   }
 
   /** Returns true when the underlying driver is Android (UiAutomator2). */
