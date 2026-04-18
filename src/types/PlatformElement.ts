@@ -110,6 +110,19 @@ export class PlatformElement implements Element {
 
   async pressSequentially(text: string, delay: number = 50, options?: ElementActionOptions): Promise<Element> {
     const el = await this.ensureAttached(options?.timeout);
+    if (this.isAndroid()) {
+      // Android UiAutomator2: per-char `el.addValue(char)` reliably drops
+      // leading characters because each call re-seeds the IME compose buffer
+      // and TextWatchers reset the selection. Focus the element, then send
+      // keys through the system IME via `driver.keys()` — that path
+      // appends cleanly.
+      try { await el.click(); } catch { /* element may already be focused */ }
+      for (const char of text) {
+        await this.driver.keys(char);
+        if (delay > 0) await this.driver.pause(delay);
+      }
+      return this;
+    }
     for (const char of text) {
       await el.addValue(char);
       if (delay > 0) await this.driver.pause(delay);
@@ -146,7 +159,19 @@ export class PlatformElement implements Element {
 
   async inputValue(): Promise<string> {
     const el = await this.findOne();
-    try { return await el.getValue(); } catch { return (await el.getAttribute('value')) ?? ''; }
+    try { return await el.getValue(); } catch { /* fall through to attribute */ }
+    // UiAutomator2 doesn't expose a `value` attribute on EditTexts — `text`
+    // is the equivalent. XCUITest exposes `value`. Pick per platform so
+    // both backends resolve the input value cleanly.
+    const attr = this.isAndroid() ? 'text' : 'value';
+    return (await el.getAttribute(attr)) ?? '';
+  }
+
+  /** Returns true when the underlying driver is Android (UiAutomator2). */
+  private isAndroid(): boolean {
+    const platform = (this.driver.capabilities as Record<string, unknown> | undefined)
+      ?.platformName;
+    return typeof platform === 'string' && platform.toLowerCase() === 'android';
   }
 
   /**
