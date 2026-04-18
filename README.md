@@ -18,9 +18,28 @@ For web testing, install `@playwright/test` or `playwright`. For mobile/platform
 * **Zero Hardcoded Selectors:** Keep your Page Objects and Step Definitions completely free of complex DOM queries.
 * **Platform-Agnostic Element API:** A unified `Element` interface with interaction, state, extraction, querying, and waiting methods that work identically across Playwright and WebDriverIO.
 * **Fluent Action Chains:** Sequence multiple actions on an element with `element.action().waitForState('visible').click()`.
-* **Built-in Verifications:** Assert presence, absence, text, attributes, and counts directly on elements.
 * **Dynamic Parsing:** Automatically converts your JSON configuration into platform-native selectors.
 * **Smart Locators:** Built-in methods for arrays, randomized element selection, text-filtering, attribute-filtering, and visibility checks.
+
+## 📐 Package Contract
+
+This package owns **element acquisition + primitive operations only**. Everything with retry, fallback, options-driven variants, composition, matcher trees, or assertion framing belongs in consumer packages.
+
+**What lives here:**
+- Locating elements from a JSON repository
+- The `Element` interface and its two backends (`WebElement` for Playwright, `PlatformElement` for Appium)
+- `ElementChain` — a fluent action sequencer over `Element` primitives
+- Thin one-call wrappers over the underlying `Locator` / WebdriverIO element (click, fill, hover, check, scrollIntoView, etc.)
+
+**What lives in consumers:**
+- Verification DSLs, assertion error formatting, retry-on-mismatch semantics
+- Pointer-interception auto-retry, force-click fallbacks, `{ withoutScrolling, ifPresent }` modifiers
+- Listed-element composition (text/regex/withDescendant filtering)
+- Matcher trees (`steps.expect(...).text.toBe(...)`), VisibleChain, Steps API facades
+
+**Rule of thumb — classify by implementation, not by name.** A method whose body is a single wrapped primitive call is a primitive and stays here (even if it sounds verification-y — e.g., `ElementChain.isPresent()` is just `element.isVisible()` after queue execution). A method that retries, composes, or formats assertion errors is smart and moves to a consumer.
+
+See `@civitas-cerebrum/element-interactions` (web) and `@civitas-cerebrum/singularity-engine` (web + mobile + desktop) for the smart layer.
 
 ## 🏗️ Configuration
 

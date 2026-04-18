@@ -21,6 +21,19 @@ export interface Element {
   /** Discriminator indicating the concrete implementation type. */
   readonly _type: ElementType;
 
+  /**
+   * The raw selector string this element was resolved from. Returned in
+   * platform-native form (e.g., `css=<value>` on Playwright,
+   * `~<accessibility id>` on Appium). Absent when the element was
+   * constructed from a pre-built locator rather than a string selector.
+   *
+   * Consumers use this when they need to compose platform-specific queries
+   * (e.g., Playwright's `expect(page.locator(selector))` or Appium's
+   * `driver.$(selector)`) without reaching through implementation-specific
+   * properties.
+   */
+  readonly selector?: string;
+
   // ── Fluent chain ────────────────────────────────────────────
 
   /**
@@ -32,7 +45,7 @@ export interface Element {
    * @example
    * ```ts
    * await element.action(5000).waitForState('visible').click()
-   * await element.action().verifyPresence().verifyText('Submit')
+   * await element.action().fill('hello').click()
    * const text = await element.action().getText()
    * ```
    */
