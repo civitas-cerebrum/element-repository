@@ -110,6 +110,19 @@ export class PlatformElement implements Element {
 
   async pressSequentially(text: string, delay: number = 50, options?: ElementActionOptions): Promise<Element> {
     const el = await this.ensureAttached(options?.timeout);
+    if (this.isAndroid()) {
+      // Android UiAutomator2: per-char `el.addValue(char)` reliably drops
+      // leading characters because each call re-seeds the IME compose buffer
+      // and TextWatchers reset the selection. Focus the element, then send
+      // keys through the system IME via `driver.keys()` — that path
+      // appends cleanly.
+      try { await el.click(); } catch { /* element may already be focused */ }
+      for (const char of text) {
+        await this.driver.keys(char);
+        if (delay > 0) await this.driver.pause(delay);
+      }
+      return this;
+    }
     for (const char of text) {
       await el.addValue(char);
       if (delay > 0) await this.driver.pause(delay);
@@ -146,7 +159,38 @@ export class PlatformElement implements Element {
 
   async inputValue(): Promise<string> {
     const el = await this.findOne();
-    try { return await el.getValue(); } catch { return (await el.getAttribute('value')) ?? ''; }
+    if (this.isAndroid()) {
+      // UiAutomator2 doesn't expose a `value` attribute — `text` is the
+      // equivalent. When the EditText is empty, `text` returns the hint
+      // string (UiAutomator2's `showing-hint` / `showingHintText` attribute
+      // names are listed as supported but `getAttribute` on them returns
+      // "unknown attribute" on uiautomator2 6.7.8 — a driver bug). Detect
+      // the empty-field case by comparing `text` to `hint`: when they
+      // match, the field is empty and the hint is being rendered as text.
+      const [text, hint] = await Promise.all([
+        el.getAttribute('text').catch(() => null),
+        el.getAttribute('hint').catch(() => null),
+      ]);
+      if (text && hint && text === hint) return '';
+      return text ?? '';
+    }
+    // XCUITest reports the placeholder as the element value when the
+    // UITextField is empty. Always fetch placeholder + value in parallel
+    // so we can normalize an empty field to '' no matter which path
+    // (`getValue()` or `getAttribute('value')`) produced the raw value.
+    const [rawValue, placeholder] = await Promise.all([
+      (async () => { try { return await el.getValue(); } catch { return (await el.getAttribute('value')) ?? ''; } })(),
+      el.getAttribute('placeholderValue').catch(() => null),
+    ]);
+    if (placeholder !== null && rawValue === placeholder) return '';
+    return rawValue ?? '';
+  }
+
+  /** Returns true when the underlying driver is Android (UiAutomator2). */
+  private isAndroid(): boolean {
+    const platform = (this.driver.capabilities as Record<string, unknown> | undefined)
+      ?.platformName;
+    return typeof platform === 'string' && platform.toLowerCase() === 'android';
   }
 
   /**
