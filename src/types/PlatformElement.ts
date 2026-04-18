@@ -161,11 +161,18 @@ export class PlatformElement implements Element {
     const el = await this.findOne();
     if (this.isAndroid()) {
       // UiAutomator2 doesn't expose a `value` attribute — `text` is the
-      // equivalent. Also: when the EditText is empty, `text` returns the
-      // hint string. Use `showing-hint` to detect that case and return ''.
-      const showingHint = (await el.getAttribute('showing-hint').catch(() => 'false')) === 'true';
-      if (showingHint) return '';
-      return (await el.getAttribute('text')) ?? '';
+      // equivalent. When the EditText is empty, `text` returns the hint
+      // string (UiAutomator2's `showing-hint` / `showingHintText` attribute
+      // names are listed as supported but `getAttribute` on them returns
+      // "unknown attribute" on uiautomator2 6.7.8 — a driver bug). Detect
+      // the empty-field case by comparing `text` to `hint`: when they
+      // match, the field is empty and the hint is being rendered as text.
+      const [text, hint] = await Promise.all([
+        el.getAttribute('text').catch(() => null),
+        el.getAttribute('hint').catch(() => null),
+      ]);
+      if (text && hint && text === hint) return '';
+      return text ?? '';
     }
     // XCUITest reports the placeholder as the element value when the
     // UITextField is empty. Always fetch placeholder + value in parallel
