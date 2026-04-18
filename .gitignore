@@ -5,4 +5,5 @@
 /docs
 src/.DS_Store
 *.md
+/.claude
 test-coverage-report.txt
