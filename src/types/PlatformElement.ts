@@ -116,31 +116,43 @@ export class PlatformElement implements Element {
     // Fast path — already on-screen.
     if (await el.isDisplayed().catch(() => false)) return this;
 
-    // Best-effort keyboard dismiss. The swipe gesture starts at
-    // y=75% of the viewport; on forms with a soft keyboard up, that
-    // start point is inside the keyboard and the touch gets consumed
-    // instead of scrolling the content underneath. Dismissing first
-    // clears the way for the swipe loop. Falls through silently if
-    // the driver doesn't expose the API (web) or the keyboard isn't up.
+    // Best-effort keyboard dismiss with a strategy cascade. The swipe
+    // gesture starts at y=75% of the viewport; on forms with a soft
+    // keyboard up, that start point is inside the keyboard and the
+    // touch gets consumed instead of scrolling the content underneath.
+    // Dismissing first clears the way for the swipe loop.
     //
-    // On iOS, `driver.hideKeyboard()` often returns success without
-    // actually hiding (XCUITest known quirk). Verify with a second
-    // `isKeyboardShown()` check and fall back to tapping the top of
-    // the screen (outside any input field) — the standard iOS
-    // dismiss-by-tap-outside behaviour.
+    // Strategy chain (stop at first that actually dismisses):
+    //   1. `driver.hideKeyboard()` — works on Android UiAutomator2.
+    //   2. `mobile: hideKeyboard` with `strategy: 'pressKey', key: 'return'`
+    //      — the iOS XCUITest path. XCUITest refuses the no-arg
+    //      `hideKeyboard` on modern iOS ("Did not know how to dismiss
+    //      the keyboard"); it needs an explicit press of the keyboard's
+    //      Return key.
+    //   3. `mobile: hideKeyboard` with `strategy: 'tapOutside'` — fallback
+    //      for keyboards without a Return button (e.g. numeric pads).
+    //
+    // Everything is best-effort: if the driver doesn't expose
+    // `isKeyboardShown` (e.g. web), the whole block no-ops. If every
+    // strategy fails, we proceed to the swipe anyway — the only cost
+    // is wasted swipes bouncing off the keyboard area.
     try {
-      if (typeof this.driver.isKeyboardShown === 'function' && await this.driver.isKeyboardShown()) {
-        await this.driver.hideKeyboard().catch(() => { /* ignore */ });
-        // Fallback: if still up, tap near the top of the screen.
-        if (await this.driver.isKeyboardShown().catch(() => false)) {
-          const s = await this.driver.getWindowSize();
-          await this.driver.action('pointer', { parameters: { pointerType: 'touch' } })
-            .move({ x: Math.round(s.width / 2), y: Math.round(s.height * 0.05) })
-            .down()
-            .up()
-            .perform()
-            .catch(() => { /* ignore */ });
+      const drv = this.driver as {
+        isKeyboardShown?: () => Promise<boolean>;
+        hideKeyboard?: () => Promise<void>;
+        execute?: (script: string, args: Record<string, unknown>) => Promise<unknown>;
+      };
+      if (typeof drv.isKeyboardShown === 'function' && await drv.isKeyboardShown()) {
+        const strategies: Array<() => Promise<void>> = [
+          async () => { if (drv.hideKeyboard) await drv.hideKeyboard(); },
+          async () => { if (drv.execute) await drv.execute('mobile: hideKeyboard', { strategy: 'pressKey', key: 'return' }); },
+          async () => { if (drv.execute) await drv.execute('mobile: hideKeyboard', { strategy: 'tapOutside' }); },
+        ];
+        for (const attempt of strategies) {
+          await attempt().catch(() => { /* try next */ });
           await this.driver.pause(300);
+          const stillShown = await drv.isKeyboardShown!().catch(() => false);
+          if (!stillShown) break;
         }
       }
     } catch { /* no-op — proceed to swipe regardless */ }
