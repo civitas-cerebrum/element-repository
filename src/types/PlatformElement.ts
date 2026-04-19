@@ -116,6 +116,35 @@ export class PlatformElement implements Element {
     // Fast path — already on-screen.
     if (await el.isDisplayed().catch(() => false)) return this;
 
+    // Best-effort keyboard dismiss. The swipe gesture starts at
+    // y=75% of the viewport; on forms with a soft keyboard up, that
+    // start point is inside the keyboard and the touch gets consumed
+    // instead of scrolling the content underneath. Dismissing first
+    // clears the way for the swipe loop. Falls through silently if
+    // the driver doesn't expose the API (web) or the keyboard isn't up.
+    //
+    // On iOS, `driver.hideKeyboard()` often returns success without
+    // actually hiding (XCUITest known quirk). Verify with a second
+    // `isKeyboardShown()` check and fall back to tapping the top of
+    // the screen (outside any input field) — the standard iOS
+    // dismiss-by-tap-outside behaviour.
+    try {
+      if (typeof this.driver.isKeyboardShown === 'function' && await this.driver.isKeyboardShown()) {
+        await this.driver.hideKeyboard().catch(() => { /* ignore */ });
+        // Fallback: if still up, tap near the top of the screen.
+        if (await this.driver.isKeyboardShown().catch(() => false)) {
+          const s = await this.driver.getWindowSize();
+          await this.driver.action('pointer', { parameters: { pointerType: 'touch' } })
+            .move({ x: Math.round(s.width / 2), y: Math.round(s.height * 0.05) })
+            .down()
+            .up()
+            .perform()
+            .catch(() => { /* ignore */ });
+          await this.driver.pause(300);
+        }
+      }
+    } catch { /* no-op — proceed to swipe regardless */ }
+
     // `mobile: scroll` with `{ toVisible: true }` stopped working on
     // modern UiAutomator2 / XCUITest — the current API requires a
     // strategy+selector pair, which we don't have at this abstraction
