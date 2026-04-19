@@ -103,7 +103,16 @@ export class PlatformElement implements Element {
   }
 
   async scrollIntoView(options?: ElementActionOptions): Promise<Element> {
-    const el = await this.ensureAttached(options?.timeout);
+    // Deliberately skip `ensureAttached` here — the whole point of
+    // scrollIntoView is to handle the "not in the viewport (and maybe
+    // not in the a11y tree) yet" case. On virtualised lists
+    // (RecyclerView / UITableView / LazyColumn / SwiftUI List),
+    // off-window items only exist in the tree after they've been
+    // recycled in. Waiting up to defaultTimeout for attach here would
+    // burn 30s on the happy scroll-and-find path before a single
+    // swipe runs. Instead, resolve the lazy locator and let the
+    // per-iteration isDisplayed() drive the loop.
+    const el = await this.findOne();
     // Fast path — already on-screen.
     if (await el.isDisplayed().catch(() => false)) return this;
 
@@ -116,9 +125,20 @@ export class PlatformElement implements Element {
     // Works on both Android and iOS, no platform-specific branches.
     const windowSize = await this.driver.getWindowSize();
     const cx = Math.round(windowSize.width / 2);
+    // 25% → 75% covers 50% of screen height per swipe. Wider ranges
+    // (e.g. 15%/85%) start inside platform system-gesture zones and
+    // trigger intercepts or momentum overshoot on Android — stick to
+    // the safe middle band.
     const yNear = Math.round(windowSize.height * 0.25);
     const yFar = Math.round(windowSize.height * 0.75);
-    const maxSwipesPerDirection = 8;
+    // 20 downward + 40 upward = 60 swipes max. Sized to cover the
+    // pathological case of a second scrollIntoView from deep inside a
+    // long list back toward the top (first call scrolled to item-80 of
+    // a 200-item RecyclerView; second call needs to retrace 15+
+    // screens). The budget only affects failure timing — the
+    // per-iteration isDisplayed check returns early on success, so a
+    // close target still completes in 1-2 swipes regardless of cap.
+    const maxSwipesPerDirection = 20;
 
     const swipe = async (fromY: number, toY: number): Promise<void> => {
       await this.driver.action('pointer', { parameters: { pointerType: 'touch' } })
