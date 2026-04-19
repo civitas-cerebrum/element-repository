@@ -11,6 +11,32 @@ export interface ElementActionOptions {
   timeout?: number;
 }
 
+/** Direction of a {@link Element.swipe} gesture. */
+export type SwipeDirection = 'up' | 'down' | 'left' | 'right';
+
+/**
+ * Options for {@link Element.scrollIntoView}. When no direction is given,
+ * the sweep is single-direction downward — cheap, predictable, appropriate
+ * when the caller knows the target is below. Set `direction: 'both'` for a
+ * bidirectional vertical sweep (covers unknown positions at the cost of
+ * up to 3× the swipe budget); `direction: 'up'` for a targeted upward
+ * sweep; `direction: 'horizontal'` for a left-then-right sweep on
+ * horizontal lists.
+ */
+export interface ScrollIntoViewOptions extends ElementActionOptions {
+  direction?: 'down' | 'up' | 'both' | 'horizontal';
+}
+
+/** Options for {@link Element.swipe}. */
+export interface SwipeOptions extends ElementActionOptions {
+  /**
+   * Gesture distance in CSS pixels. When omitted, defaults to ~50% of the
+   * relevant viewport dimension in the chosen direction, which is a
+   * reasonable "single screen swipe" on typical phone / desktop sizes.
+   */
+  distance?: number;
+}
+
 /**
  * Platform-agnostic element abstraction.
  *
@@ -77,8 +103,36 @@ export interface Element {
   /** Double-clicks the element. */
   doubleClick(options?: ElementActionOptions): Promise<Element>;
 
-  /** Scrolls the element into the visible area of the viewport. */
-  scrollIntoView(options?: ElementActionOptions): Promise<Element>;
+  /**
+   * Scrolls the element into the visible area of the viewport.
+   *
+   * By default performs a single-direction downward sweep (reveals
+   * content below the current viewport). Pass
+   * `{ direction: 'both' }` for a bidirectional vertical sweep,
+   * `{ direction: 'up' }` for a reverse sweep, or
+   * `{ direction: 'horizontal' }` for a left-then-right sweep on
+   * horizontal lists / carousels.
+   */
+  scrollIntoView(options?: ScrollIntoViewOptions): Promise<Element>;
+
+  /**
+   * Performs a swipe gesture originating at the element's center. Used
+   * for user-driven horizontal / vertical swipes where the caller knows
+   * the intent (e.g., advancing a horizontal carousel by one page,
+   * dismissing a card by flicking right). Distinct from
+   * {@link Element.scrollIntoView}, which sweeps a scrollable container
+   * until a target becomes visible.
+   *
+   * On mobile, dispatches a W3C pointer action from the element's center
+   * toward the given direction for the requested distance. On web,
+   * delegates to the driver's native mouse/touch wheel emulation where
+   * available; throws on backends that don't support programmatic
+   * swipes.
+   *
+   * @param direction - 'up' | 'down' | 'left' | 'right'.
+   * @param options - Optional distance (default ~50% of viewport dim).
+   */
+  swipe(direction: SwipeDirection, options?: SwipeOptions): Promise<Element>;
 
   /**
    * Types text one character at a time.

@@ -491,14 +491,15 @@ test.describe('PlatformElement interaction methods', () => {
     expect(displayCalls).toBeGreaterThanOrEqual(2);
   });
 
-  test('scrollIntoView reverses direction when element is not found after downward sweep', async () => {
-    // First 8 swipes (downward phase) all see isDisplayed=false. The 9th
-    // call (first swipe of the upward phase) returns true. Proves the
-    // reversal kicks in when the forward direction exhausts.
+  test('scrollIntoView with direction=both explores the reverse phase after forward exhausts', async () => {
+    // First 20 forward swipes (down phase) + 1 reverse swipe = 21 total.
+    // Mock returns true after 22 isDisplayed calls (1 fast-path + 20 forward
+    // + 1 reverse), proving the bidirectional sweep falls through to the
+    // reverse phase.
     let displayCalls = 0;
     const mockEl = createMockWdioElement({
       elementId: 'el-42',
-      isDisplayed: async () => { displayCalls++; return displayCalls > 9; },
+      isDisplayed: async () => { displayCalls++; return displayCalls > 21; },
     });
     let swipes = 0;
     const driver = {
@@ -511,9 +512,84 @@ test.describe('PlatformElement interaction methods', () => {
       }),
     };
     const el = new PlatformElement(driver, '~button');
-    await el.scrollIntoView();
-    // 8 downward swipes + 1 upward swipe, then the 10th visibility check passes.
-    expect(swipes).toBe(9);
+    await el.scrollIntoView({ direction: 'both' });
+    // 20 downward + 1 upward = 21 swipes, 22nd isDisplayed returns true.
+    expect(swipes).toBe(21);
+  });
+
+  test('scrollIntoView with default direction does NOT fall through to reverse phase', async () => {
+    // Default is direction: 'down'. After 20 forward swipes exhaust, the
+    // impl throws rather than reversing — opt-in reversal is the whole
+    // point of the `direction: 'both'` flag.
+    const mockEl = createMockWdioElement({ elementId: 'el-42', isDisplayed: async () => false });
+    let swipes = 0;
+    const driver = {
+      $: async () => mockEl,
+      $$: async () => [mockEl],
+      pause: async () => {},
+      getWindowSize: async () => ({ width: 1080, height: 2400 }),
+      action: () => ({
+        move: () => ({ down: () => ({ move: () => ({ up: () => ({ perform: async () => { swipes++; } }) }) }) }),
+      }),
+    };
+    const el = new PlatformElement(driver, '~button');
+    await expect(el.scrollIntoView()).rejects.toThrow(/not visible after/);
+    expect(swipes).toBe(20); // no reverse phase
+  });
+
+  test('swipe("right") dispatches a left-to-right pointer drag from the element center', async () => {
+    const mockEl = createMockWdioElement({
+      elementId: 'el-42',
+      isDisplayed: async () => true,
+      getRect: async () => ({ x: 100, y: 200, width: 200, height: 100 }),
+      waitForExist: async () => {},
+    });
+    let moveStart: { x: number; y: number } | null = null;
+    let moveEnd: { x: number; y: number } | null = null;
+    const driver = {
+      $: async () => mockEl,
+      $$: async () => [mockEl],
+      pause: async () => {},
+      getWindowSize: async () => ({ width: 1000, height: 2000 }),
+      action: () => ({
+        move: (p: { x: number; y: number }) => {
+          moveStart = p;
+          return {
+            down: () => ({
+              move: (p2: { x: number; y: number }) => { moveEnd = p2; return { up: () => ({ perform: async () => {} }) }; },
+            }),
+          };
+        },
+      }),
+    };
+    const el = new PlatformElement(driver, '~card');
+    await el.swipe('right');
+    // Center of the mocked rect: (200, 250). Right swipe moves +500 (50% of window width 1000).
+    expect(moveStart).toMatchObject({ x: 200, y: 250 });
+    expect(moveEnd).toMatchObject({ x: 700, y: 250 });
+  });
+
+  test('swipe with explicit distance uses the supplied value', async () => {
+    const mockEl = createMockWdioElement({
+      elementId: 'el-42',
+      isDisplayed: async () => true,
+      getRect: async () => ({ x: 100, y: 200, width: 200, height: 100 }),
+      waitForExist: async () => {},
+    });
+    let moveEnd: { x: number; y: number } | null = null;
+    const driver = {
+      $: async () => mockEl,
+      $$: async () => [mockEl],
+      pause: async () => {},
+      getWindowSize: async () => ({ width: 1000, height: 2000 }),
+      action: () => ({
+        move: () => ({ down: () => ({ move: (p: { x: number; y: number }) => { moveEnd = p; return { up: () => ({ perform: async () => {} }) }; } }) }),
+      }),
+    };
+    const el = new PlatformElement(driver, '~card');
+    await el.swipe('up', { distance: 300 });
+    // Center y = 250; up swipe with distance=300 → 250 - 300 = -50.
+    expect(moveEnd).toMatchObject({ x: 200, y: -50 });
   });
 
   test('scrollIntoView throws after max swipes when element never appears', async () => {
