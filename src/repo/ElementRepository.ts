@@ -158,13 +158,15 @@ export class ElementRepository {
       return element;
     }
 
-    // Wait for the primary to attach, using the repo's configured element
-    // timeout as the probe budget. `waitFor` resolves the moment the
-    // element appears — the timeout only caps the wait, it does not delay
-    // the common (primary-attaches-quickly) case. Throws on timeout or
-    // detachment, which triggers the fallback walk.
+    // Wait for the primary to attach. Probe budget is `options.timeout` when
+    // provided (caller-supplied override — e.g. a non-throwing visibility
+    // probe with a short deadline), otherwise the repo's configured
+    // `defaultTimeout`. `waitFor` resolves the moment the element appears;
+    // the timeout only caps the wait. Throws on timeout or detachment,
+    // which triggers the fallback walk.
+    const attachTimeout = options?.timeout ?? this.defaultTimeout;
     try {
-      await element.waitFor({ state: 'attached', timeout: this.defaultTimeout });
+      await element.waitFor({ state: 'attached', timeout: attachTimeout });
       return element;
     } catch {
       return this.resolveWithFallback(pageObj, elementName, fallback, pageName, options);
@@ -196,17 +198,19 @@ export class ElementRepository {
       this._driver, syntheticPage, elementName, this.getFormattersForPlatform(pageObj.platform ?? 'web'),
     );
 
+    const attachTimeout = options?.timeout ?? this.defaultTimeout;
+
     if (enhanced !== null) {
       if (EnhancedResolver.isWebPlatform(pageObj)) {
-        return StrategyResolver.fromLocator(enhanced, elementName, pageName, this.defaultTimeout, options);
+        return StrategyResolver.fromLocator(enhanced, elementName, pageName, attachTimeout, options);
       } else {
-        return StrategyResolver.fromMobileSelector(this._driver, enhanced as string, this.defaultTimeout, options);
+        return StrategyResolver.fromMobileSelector(this._driver, enhanced as string, attachTimeout, options);
       }
     }
 
     // Standard resolution path — format via platform selector formatter.
     const formatted = this.formatSingleSelector(pageObj, selector);
-    return StrategyResolver.fromSelector(this._driver, formatted, pageObj, elementName, pageName, this.defaultTimeout, options);
+    return StrategyResolver.fromSelector(this._driver, formatted, pageObj, elementName, pageName, attachTimeout, options);
   }
 
   /** Returns a copy of `selector` with the `fallback` key stripped. */
