@@ -104,8 +104,31 @@ export class PlatformElement implements Element {
 
   async scrollIntoView(options?: ElementActionOptions): Promise<Element> {
     const el = await this.ensureAttached(options?.timeout);
-    await this.driver.execute('mobile: scroll', { element: el.elementId, toVisible: true });
-    return this;
+    // Fast path — already on-screen.
+    if (await el.isDisplayed().catch(() => false)) return this;
+
+    // Walking `mobile: scroll` with `toVisible: true` stopped working on
+    // modern UiAutomator2 / XCUITest — the current API requires a
+    // strategy+selector pair, which we don't have at this abstraction
+    // level. Instead, swipe the viewport upward repeatedly and re-check
+    // visibility after each pass. Works on both Android and iOS with no
+    // platform-specific branches.
+    const windowSize = await this.driver.getWindowSize();
+    const cx = Math.round(windowSize.width / 2);
+    const yStart = Math.round(windowSize.height * 0.75);
+    const yEnd = Math.round(windowSize.height * 0.25);
+    const maxSwipes = 10;
+    for (let i = 0; i < maxSwipes; i++) {
+      await this.driver.action('pointer', { parameters: { pointerType: 'touch' } })
+        .move({ x: cx, y: yStart })
+        .down()
+        .move({ x: cx, y: yEnd, duration: 300 })
+        .up()
+        .perform();
+      await this.driver.pause(200);
+      if (await el.isDisplayed().catch(() => false)) return this;
+    }
+    throw new Error(`scrollIntoView: element not visible after ${maxSwipes} upward swipes`);
   }
 
   async pressSequentially(text: string, delay: number = 50, options?: ElementActionOptions): Promise<Element> {
