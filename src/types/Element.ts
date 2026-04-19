@@ -15,23 +15,18 @@ export interface ElementActionOptions {
 export type SwipeDirection = 'up' | 'down' | 'left' | 'right';
 
 /**
- * Options for {@link Element.scrollIntoView}. When no direction is given,
- * the sweep is single-direction downward — cheap, predictable, appropriate
- * when the caller knows the target is below. Each named direction does a
- * targeted single-axis, single-direction sweep:
+ * Options for {@link Element.scrollIntoView}. The sweep is always
+ * single-axis, single-direction — the caller tells us where to look.
+ * No implicit bidirectional fallback; if you don't know the target
+ * position, chain two calls in different directions.
  *
  *   `'down'`  (default) — swipes up to reveal content below.
  *   `'up'`              — swipes down to reveal content above.
  *   `'left'`            — swipes right to reveal content to the left.
  *   `'right'`           — swipes left to reveal content to the right.
- *   `'both'`            — bidirectional vertical (down-then-up); opt-in
- *                         when target position is unknown along the y-axis.
- *
- * There's no bidirectional-horizontal option; if you need one, call
- * scrollIntoView twice with `'left'` then `'right'`.
  */
 export interface ScrollIntoViewOptions extends ElementActionOptions {
-  direction?: 'down' | 'up' | 'left' | 'right' | 'both';
+  direction?: 'down' | 'up' | 'left' | 'right';
 }
 
 /** Options for {@link Element.swipe}. */

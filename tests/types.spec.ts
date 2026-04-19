@@ -491,50 +491,31 @@ test.describe('PlatformElement interaction methods', () => {
     expect(displayCalls).toBeGreaterThanOrEqual(2);
   });
 
-  test('scrollIntoView with direction=both explores the reverse phase after forward exhausts', async () => {
-    // First 20 forward swipes (down phase) + 1 reverse swipe = 21 total.
-    // Mock returns true after 22 isDisplayed calls (1 fast-path + 20 forward
-    // + 1 reverse), proving the bidirectional sweep falls through to the
-    // reverse phase.
-    let displayCalls = 0;
+  test('scrollIntoView with direction=up swipes in the opposite direction', async () => {
+    // Passes direction: 'up' and verifies the swipe endpoint coordinates
+    // reflect a downward-pull gesture (yNear→yFar) rather than the
+    // default upward-pull (yFar→yNear).
+    let firstMoveStart: { x: number; y: number } | null = null;
     const mockEl = createMockWdioElement({
       elementId: 'el-42',
-      isDisplayed: async () => { displayCalls++; return displayCalls > 21; },
+      isDisplayed: async () => { return false; /* force at least one swipe */ },
     });
-    let swipes = 0;
     const driver = {
       $: async () => mockEl,
       $$: async () => [mockEl],
       pause: async () => {},
       getWindowSize: async () => ({ width: 1080, height: 2400 }),
       action: () => ({
-        move: () => ({ down: () => ({ move: () => ({ up: () => ({ perform: async () => { swipes++; } }) }) }) }),
+        move: (p: { x: number; y: number }) => {
+          if (!firstMoveStart) firstMoveStart = p;
+          return { down: () => ({ move: () => ({ up: () => ({ perform: async () => {} }) }) }) };
+        },
       }),
     };
     const el = new PlatformElement(driver, '~button');
-    await el.scrollIntoView({ direction: 'both' });
-    // 20 downward + 1 upward = 21 swipes, 22nd isDisplayed returns true.
-    expect(swipes).toBe(21);
-  });
-
-  test('scrollIntoView with default direction does NOT fall through to reverse phase', async () => {
-    // Default is direction: 'down'. After 20 forward swipes exhaust, the
-    // impl throws rather than reversing — opt-in reversal is the whole
-    // point of the `direction: 'both'` flag.
-    const mockEl = createMockWdioElement({ elementId: 'el-42', isDisplayed: async () => false });
-    let swipes = 0;
-    const driver = {
-      $: async () => mockEl,
-      $$: async () => [mockEl],
-      pause: async () => {},
-      getWindowSize: async () => ({ width: 1080, height: 2400 }),
-      action: () => ({
-        move: () => ({ down: () => ({ move: () => ({ up: () => ({ perform: async () => { swipes++; } }) }) }) }),
-      }),
-    };
-    const el = new PlatformElement(driver, '~button');
-    await expect(el.scrollIntoView()).rejects.toThrow(/not visible after/);
-    expect(swipes).toBe(20); // no reverse phase
+    await expect(el.scrollIntoView({ direction: 'up' })).rejects.toThrow(/not visible after/);
+    // 25% of 2400 = 600 — start of an 'up' sweep (swipes down from near top).
+    expect(firstMoveStart).toMatchObject({ y: 600 });
   });
 
   test('swipe("right") dispatches a left-to-right pointer drag from the element center', async () => {
