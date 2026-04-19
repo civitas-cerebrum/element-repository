@@ -1,5 +1,5 @@
 import { Locator } from '@playwright/test';
-import { Element, ElementType, ElementActionOptions } from './Element';
+import { Element, ElementType, ElementActionOptions, ScrollIntoViewOptions, SwipeDirection, SwipeOptions } from './Element';
 import { ElementChain } from './ElementChain';
 
 /**
@@ -105,9 +105,42 @@ export class WebElement implements Element {
   }
 
   /** {@inheritDoc Element.scrollIntoView} */
-  async scrollIntoView(options?: ElementActionOptions): Promise<Element> {
+  async scrollIntoView(options?: ScrollIntoViewOptions): Promise<Element> {
+    // Playwright's native `scrollIntoViewIfNeeded` handles any direction
+    // transparently — the browser scrolls the nearest scrollable
+    // ancestor by whatever distance is needed. The `direction` option
+    // is accepted for API symmetry with {@link PlatformElement.scrollIntoView}
+    // but doesn't affect the Playwright path.
     await this.ensureAttached(options?.timeout);
     await this.locator.scrollIntoViewIfNeeded({ timeout: options?.timeout });
+    return this;
+  }
+
+  /** {@inheritDoc Element.swipe} */
+  async swipe(direction: SwipeDirection, options?: SwipeOptions): Promise<Element> {
+    await this.ensureAttached(options?.timeout);
+    const box = await this.locator.boundingBox();
+    if (!box) throw new Error('swipe: element has no bounding box (not rendered)');
+    const page = this.locator.page();
+    const viewport = page.viewportSize();
+    const cx = Math.round(box.x + box.width / 2);
+    const cy = Math.round(box.y + box.height / 2);
+    const horizontal = direction === 'left' || direction === 'right';
+    const defaultDistance = horizontal
+      ? Math.round((viewport?.width ?? 1024) * 0.5)
+      : Math.round((viewport?.height ?? 768) * 0.5);
+    const distance = options?.distance ?? defaultDistance;
+    const sign = (direction === 'left' || direction === 'up') ? -1 : 1;
+    const toX = horizontal ? cx + distance * sign : cx;
+    const toY = horizontal ? cy : cy + distance * sign;
+    // Playwright's mouse API emulates a single-pointer drag. On touch
+    // contexts (hasTouch viewports) the browser treats this as a swipe;
+    // on desktop it's a held-drag. Works for both because the browser's
+    // scroll containers respond to drag events equivalently.
+    await page.mouse.move(cx, cy);
+    await page.mouse.down();
+    await page.mouse.move(toX, toY, { steps: 10 });
+    await page.mouse.up();
     return this;
   }
 

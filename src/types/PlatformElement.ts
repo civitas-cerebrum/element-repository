@@ -1,4 +1,4 @@
-import { Element, ElementType, ElementActionOptions } from './Element';
+import { Element, ElementType, ElementActionOptions, ScrollIntoViewOptions, SwipeDirection, SwipeOptions } from './Element';
 import { ElementChain } from './ElementChain';
 
 /**
@@ -102,9 +102,119 @@ export class PlatformElement implements Element {
     return this;
   }
 
-  async scrollIntoView(options?: ElementActionOptions): Promise<Element> {
+  async scrollIntoView(options?: ScrollIntoViewOptions): Promise<Element> {
+    // Deliberately skip `ensureAttached` here — the whole point of
+    // scrollIntoView is to handle the "not in the viewport (and maybe
+    // not in the a11y tree) yet" case. On virtualised lists
+    // (RecyclerView / UITableView / LazyColumn / SwiftUI List),
+    // off-window items only exist in the tree after they've been
+    // recycled in. Waiting up to defaultTimeout for attach here would
+    // burn 30s on the happy scroll-and-find path before a single
+    // swipe runs. Instead, resolve the lazy locator and let the
+    // per-iteration isDisplayed() drive the loop.
+    const el = await this.findOne();
+    // Fast path — already on-screen.
+    if (await el.isDisplayed().catch(() => false)) return this;
+
+    // Best-effort keyboard dismiss cascade. See earlier history — the
+    // swipe gesture starts near y=75% which is inside the soft keyboard
+    // on forms; dismiss first so touches reach the content underneath.
+    // Bare `hideKeyboard()` → `mobile: hideKeyboard {pressKey, return}`
+    // → `mobile: hideKeyboard {tapOutside}`, stopping at the first that
+    // actually dismisses. No-op if the driver doesn't expose the APIs
+    // (web) or if all strategies fail (swipe proceeds anyway).
+    try {
+      const drv = this.driver as {
+        isKeyboardShown?: () => Promise<boolean>;
+        hideKeyboard?: () => Promise<void>;
+        execute?: (script: string, args: Record<string, unknown>) => Promise<unknown>;
+      };
+      if (typeof drv.isKeyboardShown === 'function' && await drv.isKeyboardShown()) {
+        const strategies: Array<() => Promise<void>> = [
+          async () => { if (drv.hideKeyboard) await drv.hideKeyboard(); },
+          async () => { if (drv.execute) await drv.execute('mobile: hideKeyboard', { strategy: 'pressKey', key: 'return' }); },
+          async () => { if (drv.execute) await drv.execute('mobile: hideKeyboard', { strategy: 'tapOutside' }); },
+        ];
+        for (const attempt of strategies) {
+          await attempt().catch(() => { /* try next */ });
+          await this.driver.pause(300);
+          const stillShown = await drv.isKeyboardShown!().catch(() => false);
+          if (!stillShown) break;
+        }
+      }
+    } catch { /* no-op — proceed to swipe regardless */ }
+
+    const windowSize = await this.driver.getWindowSize();
+    const cx = Math.round(windowSize.width / 2);
+    const cy = Math.round(windowSize.height / 2);
+    // 25% → 75% covers 50% of viewport per swipe. Wider (e.g. 15%/85%)
+    // starts inside platform system-gesture zones; narrower reduces
+    // per-swipe travel.
+    const yNear = Math.round(windowSize.height * 0.25);
+    const yFar = Math.round(windowSize.height * 0.75);
+    const xNear = Math.round(windowSize.width * 0.25);
+    const xFar = Math.round(windowSize.width * 0.75);
+    const maxSwipesPerDirection = 20;
+
+    const swipeXY = async (fromX: number, fromY: number, toX: number, toY: number): Promise<void> => {
+      await this.driver.action('pointer', { parameters: { pointerType: 'touch' } })
+        .move({ x: fromX, y: fromY })
+        .down()
+        .move({ x: toX, y: toY, duration: 300 })
+        .up()
+        .perform();
+      await this.driver.pause(200);
+    };
+
+    const direction = options?.direction ?? 'down';
+
+    // Direction → swipe geometry:
+    //   'down'  — swipe up (yFar→yNear) reveals content BELOW
+    //   'up'    — swipe down (yNear→yFar) reveals content ABOVE
+    //   'right' — swipe left (xFar→xNear) reveals content to the RIGHT
+    //   'left'  — swipe right (xNear→xFar) reveals content to the LEFT
+    const [fromX, fromY, toX, toY] = (() => {
+      switch (direction) {
+        case 'up':    return [cx, yNear, cx, yFar];
+        case 'left':  return [xNear, cy, xFar, cy];
+        case 'right': return [xFar, cy, xNear, cy];
+        case 'down':  default: return [cx, yFar, cx, yNear];
+      }
+    })();
+
+    for (let i = 0; i < maxSwipesPerDirection; i++) {
+      await swipeXY(fromX, fromY, toX, toY);
+      if (await el.isDisplayed().catch(() => false)) return this;
+    }
+
+    throw new Error(`scrollIntoView: element not visible after ${maxSwipesPerDirection} swipes (direction=${direction})`);
+  }
+
+  async swipe(direction: SwipeDirection, options?: SwipeOptions): Promise<Element> {
     const el = await this.ensureAttached(options?.timeout);
-    await this.driver.execute('mobile: scroll', { element: el.elementId, toVisible: true });
+    const rect = await el.getRect().catch(() => null);
+    const windowSize = await this.driver.getWindowSize();
+    // Origin: element center when the element has a rect; fall back to
+    // viewport center so a missing rect (iOS XCUITest returns null for
+    // some off-screen elements) still lets the gesture dispatch.
+    const cx = rect ? Math.round(rect.x + rect.width / 2) : Math.round(windowSize.width / 2);
+    const cy = rect ? Math.round(rect.y + rect.height / 2) : Math.round(windowSize.height / 2);
+    // Default distance: ~50% of viewport dim in the relevant axis.
+    const horizontal = direction === 'left' || direction === 'right';
+    const defaultDistance = horizontal
+      ? Math.round(windowSize.width * 0.5)
+      : Math.round(windowSize.height * 0.5);
+    const distance = options?.distance ?? defaultDistance;
+    const sign = (direction === 'left' || direction === 'up') ? -1 : 1;
+    const toX = horizontal ? cx + distance * sign : cx;
+    const toY = horizontal ? cy : cy + distance * sign;
+    await this.driver.action('pointer', { parameters: { pointerType: 'touch' } })
+      .move({ x: cx, y: cy })
+      .down()
+      .move({ x: toX, y: toY, duration: 300 })
+      .up()
+      .perform();
+    await this.driver.pause(200);
     return this;
   }
 

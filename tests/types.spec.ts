@@ -446,20 +446,146 @@ test.describe('PlatformElement interaction methods', () => {
     expect(called).toBe(true);
   });
 
-  test('scrollIntoView calls driver.execute with element id', async () => {
-    let executedCmd = '';
-    let executedArgs: any = null;
-    const mockEl = createMockWdioElement({ elementId: 'el-42' });
+  test('scrollIntoView short-circuits when element is already visible', async () => {
+    const mockEl = createMockWdioElement({ elementId: 'el-42', isDisplayed: async () => true });
+    let actionInvoked = false;
     const driver = {
       $: async () => mockEl,
       $$: async () => [mockEl],
       pause: async () => {},
-      execute: async (cmd: string, args: any) => { executedCmd = cmd; executedArgs = args; },
+      getWindowSize: async () => ({ width: 1080, height: 2400 }),
+      action: () => { actionInvoked = true; return { move: () => ({ down: () => ({ move: () => ({ up: () => ({ perform: async () => {} }) }) }) }) }; },
     };
     const el = new PlatformElement(driver, '~button');
     await el.scrollIntoView();
-    expect(executedCmd).toBe('mobile: scroll');
-    expect(executedArgs).toEqual({ element: 'el-42', toVisible: true });
+    expect(actionInvoked).toBe(false);
+  });
+
+  test('scrollIntoView swipes up repeatedly until the element becomes visible', async () => {
+    // Mock: first two isDisplayed() calls return false, third returns true
+    // → one swipe happens, then the check passes.
+    let displayCalls = 0;
+    const mockEl = createMockWdioElement({
+      elementId: 'el-42',
+      isDisplayed: async () => { displayCalls++; return displayCalls >= 2; },
+    });
+    let swipes = 0;
+    const driver = {
+      $: async () => mockEl,
+      $$: async () => [mockEl],
+      pause: async () => {},
+      getWindowSize: async () => ({ width: 1080, height: 2400 }),
+      action: () => ({
+        move: () => ({
+          down: () => ({
+            move: () => ({
+              up: () => ({ perform: async () => { swipes++; } }),
+            }),
+          }),
+        }),
+      }),
+    };
+    const el = new PlatformElement(driver, '~button');
+    await el.scrollIntoView();
+    expect(swipes).toBe(1);
+    expect(displayCalls).toBeGreaterThanOrEqual(2);
+  });
+
+  test('scrollIntoView with direction=up swipes in the opposite direction', async () => {
+    // Passes direction: 'up' and verifies the swipe endpoint coordinates
+    // reflect a downward-pull gesture (yNear→yFar) rather than the
+    // default upward-pull (yFar→yNear).
+    let firstMoveStart: { x: number; y: number } | null = null;
+    const mockEl = createMockWdioElement({
+      elementId: 'el-42',
+      isDisplayed: async () => { return false; /* force at least one swipe */ },
+    });
+    const driver = {
+      $: async () => mockEl,
+      $$: async () => [mockEl],
+      pause: async () => {},
+      getWindowSize: async () => ({ width: 1080, height: 2400 }),
+      action: () => ({
+        move: (p: { x: number; y: number }) => {
+          if (!firstMoveStart) firstMoveStart = p;
+          return { down: () => ({ move: () => ({ up: () => ({ perform: async () => {} }) }) }) };
+        },
+      }),
+    };
+    const el = new PlatformElement(driver, '~button');
+    await expect(el.scrollIntoView({ direction: 'up' })).rejects.toThrow(/not visible after/);
+    // 25% of 2400 = 600 — start of an 'up' sweep (swipes down from near top).
+    expect(firstMoveStart).toMatchObject({ y: 600 });
+  });
+
+  test('swipe("right") dispatches a left-to-right pointer drag from the element center', async () => {
+    const mockEl = createMockWdioElement({
+      elementId: 'el-42',
+      isDisplayed: async () => true,
+      getRect: async () => ({ x: 100, y: 200, width: 200, height: 100 }),
+      waitForExist: async () => {},
+    });
+    let moveStart: { x: number; y: number } | null = null;
+    let moveEnd: { x: number; y: number } | null = null;
+    const driver = {
+      $: async () => mockEl,
+      $$: async () => [mockEl],
+      pause: async () => {},
+      getWindowSize: async () => ({ width: 1000, height: 2000 }),
+      action: () => ({
+        move: (p: { x: number; y: number }) => {
+          moveStart = p;
+          return {
+            down: () => ({
+              move: (p2: { x: number; y: number }) => { moveEnd = p2; return { up: () => ({ perform: async () => {} }) }; },
+            }),
+          };
+        },
+      }),
+    };
+    const el = new PlatformElement(driver, '~card');
+    await el.swipe('right');
+    // Center of the mocked rect: (200, 250). Right swipe moves +500 (50% of window width 1000).
+    expect(moveStart).toMatchObject({ x: 200, y: 250 });
+    expect(moveEnd).toMatchObject({ x: 700, y: 250 });
+  });
+
+  test('swipe with explicit distance uses the supplied value', async () => {
+    const mockEl = createMockWdioElement({
+      elementId: 'el-42',
+      isDisplayed: async () => true,
+      getRect: async () => ({ x: 100, y: 200, width: 200, height: 100 }),
+      waitForExist: async () => {},
+    });
+    let moveEnd: { x: number; y: number } | null = null;
+    const driver = {
+      $: async () => mockEl,
+      $$: async () => [mockEl],
+      pause: async () => {},
+      getWindowSize: async () => ({ width: 1000, height: 2000 }),
+      action: () => ({
+        move: () => ({ down: () => ({ move: (p: { x: number; y: number }) => { moveEnd = p; return { up: () => ({ perform: async () => {} }) }; } }) }),
+      }),
+    };
+    const el = new PlatformElement(driver, '~card');
+    await el.swipe('up', { distance: 300 });
+    // Center y = 250; up swipe with distance=300 → 250 - 300 = -50.
+    expect(moveEnd).toMatchObject({ x: 200, y: -50 });
+  });
+
+  test('scrollIntoView throws after max swipes when element never appears', async () => {
+    const mockEl = createMockWdioElement({ elementId: 'el-42', isDisplayed: async () => false });
+    const driver = {
+      $: async () => mockEl,
+      $$: async () => [mockEl],
+      pause: async () => {},
+      getWindowSize: async () => ({ width: 1080, height: 2400 }),
+      action: () => ({
+        move: () => ({ down: () => ({ move: () => ({ up: () => ({ perform: async () => {} }) }) }) }),
+      }),
+    };
+    const el = new PlatformElement(driver, '~button');
+    await expect(el.scrollIntoView()).rejects.toThrow(/not visible after/);
   });
 
   test('pressSequentially calls addValue for each char with delay', async () => {
