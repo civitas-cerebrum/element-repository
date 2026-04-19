@@ -301,4 +301,25 @@ test.describe('Live element location — ButtonsPage', () => {
     const dropped = await page.evaluate(() => (window as unknown as { __dropped: boolean }).__dropped);
     expect(typeof dropped).toBe('boolean');
   });
+
+  test('swipe dispatches a mouse drag from the element center in the requested direction', async ({ page }) => {
+    await page.setContent(`
+      <div id="target" style="position:absolute;left:100px;top:200px;width:200px;height:100px;background:#08f"></div>
+      <script>
+        // Track the move+up sequence to confirm the drag direction.
+        window.__moves = [];
+        document.addEventListener('mousemove', e => {
+          (window.__moves).push({ x: e.clientX, y: e.clientY });
+        });
+      </script>
+    `);
+    const el = new WebElement(page.locator('#target'));
+    await el.swipe('right', { distance: 150 });
+    const moves = await page.evaluate(() => (window as unknown as { __moves: Array<{ x: number; y: number }> }).__moves);
+    // Element center is (200, 250). Right swipe ends at x=350, y=250.
+    const last = moves[moves.length - 1];
+    expect(last.x).toBeGreaterThan(300);
+    expect(last.y).toBeGreaterThanOrEqual(249);
+    expect(last.y).toBeLessThanOrEqual(251);
+  });
 });
