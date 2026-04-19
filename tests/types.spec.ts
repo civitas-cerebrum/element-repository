@@ -491,6 +491,31 @@ test.describe('PlatformElement interaction methods', () => {
     expect(displayCalls).toBeGreaterThanOrEqual(2);
   });
 
+  test('scrollIntoView reverses direction when element is not found after downward sweep', async () => {
+    // First 8 swipes (downward phase) all see isDisplayed=false. The 9th
+    // call (first swipe of the upward phase) returns true. Proves the
+    // reversal kicks in when the forward direction exhausts.
+    let displayCalls = 0;
+    const mockEl = createMockWdioElement({
+      elementId: 'el-42',
+      isDisplayed: async () => { displayCalls++; return displayCalls > 9; },
+    });
+    let swipes = 0;
+    const driver = {
+      $: async () => mockEl,
+      $$: async () => [mockEl],
+      pause: async () => {},
+      getWindowSize: async () => ({ width: 1080, height: 2400 }),
+      action: () => ({
+        move: () => ({ down: () => ({ move: () => ({ up: () => ({ perform: async () => { swipes++; } }) }) }) }),
+      }),
+    };
+    const el = new PlatformElement(driver, '~button');
+    await el.scrollIntoView();
+    // 8 downward swipes + 1 upward swipe, then the 10th visibility check passes.
+    expect(swipes).toBe(9);
+  });
+
   test('scrollIntoView throws after max swipes when element never appears', async () => {
     const mockEl = createMockWdioElement({ elementId: 'el-42', isDisplayed: async () => false });
     const driver = {
