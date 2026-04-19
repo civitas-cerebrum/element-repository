@@ -168,11 +168,12 @@ export class PlatformElement implements Element {
 
     const direction = options?.direction ?? 'down';
 
-    // Mapping from direction → (forward swipe, reverse swipe — only used in 'both' / 'horizontal'):
-    //   'down'        → swipe up (yFar→yNear), reveals content below
-    //   'up'          → swipe down (yNear→yFar), reveals content above
-    //   'both'        → 'down' phase + 'up' phase
-    //   'horizontal'  → swipe left (xFar→xNear, reveals right) + swipe right (reverse)
+    // Direction → swipe geometry:
+    //   'down'  — swipe up (yFar→yNear) reveals content BELOW
+    //   'up'    — swipe down (yNear→yFar) reveals content ABOVE
+    //   'right' — swipe left (xFar→xNear) reveals content to the RIGHT
+    //   'left'  — swipe right (xNear→xFar) reveals content to the LEFT
+    //   'both'  — 'down' phase + 2× reversed 'up' phase
     if (direction === 'down' || direction === 'both') {
       for (let i = 0; i < maxSwipesPerDirection; i++) {
         await swipeXY(cx, yFar, cx, yNear);
@@ -185,25 +186,24 @@ export class PlatformElement implements Element {
         if (await el.isDisplayed().catch(() => false)) return this;
       }
     }
+    if (direction === 'right') {
+      for (let i = 0; i < maxSwipesPerDirection; i++) {
+        await swipeXY(xFar, cy, xNear, cy);
+        if (await el.isDisplayed().catch(() => false)) return this;
+      }
+    }
+    if (direction === 'left') {
+      for (let i = 0; i < maxSwipesPerDirection; i++) {
+        await swipeXY(xNear, cy, xFar, cy);
+        if (await el.isDisplayed().catch(() => false)) return this;
+      }
+    }
     if (direction === 'both') {
       // Reverse phase — 2× first-phase budget to retrace past origin
       // and keep going into content above it.
       const reverseSwipes = maxSwipesPerDirection * 2;
       for (let i = 0; i < reverseSwipes; i++) {
         await swipeXY(cx, yNear, cx, yFar);
-        if (await el.isDisplayed().catch(() => false)) return this;
-      }
-    }
-    if (direction === 'horizontal') {
-      // Left phase — swipe left, reveals content on the right.
-      for (let i = 0; i < maxSwipesPerDirection; i++) {
-        await swipeXY(xFar, cy, xNear, cy);
-        if (await el.isDisplayed().catch(() => false)) return this;
-      }
-      // Right phase — 2× budget to retrace past origin and continue left.
-      const reverseSwipes = maxSwipesPerDirection * 2;
-      for (let i = 0; i < reverseSwipes; i++) {
-        await swipeXY(xNear, cy, xFar, cy);
         if (await el.isDisplayed().catch(() => false)) return this;
       }
     }
