@@ -162,7 +162,14 @@ export class StrategyResolver {
       ? new WebElement(driver.locator(selector), selector, timeout)
       : new PlatformElement(driver, selector, undefined, timeout);
     const element = base.first();
-    await element.waitFor({ state: 'attached', timeout }).catch(() => {});
+    // On the platform (mobile/WebDriverIO) branch, cap the attach probe at 2s.
+    // The probe is a best-effort presence preamble whose failure is swallowed —
+    // downstream actions still get the full `timeout` budget via their own waits.
+    // Without the cap, every probe on an absent platform element burns the full
+    // repoTimeout. Web stays uncapped to preserve behaviour for SPA hydration.
+    const PLATFORM_ATTACH_PROBE_TIMEOUT_MS = 2_000;
+    const probeTimeout = isWeb ? timeout : Math.min(timeout, PLATFORM_ATTACH_PROBE_TIMEOUT_MS);
+    await element.waitFor({ state: 'attached', timeout: probeTimeout }).catch(() => {});
     return element;
   }
 
