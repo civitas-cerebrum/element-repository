@@ -130,7 +130,10 @@ test.describe('constructor — driver argument', () => {
     expect(repo.driver).toBe(mockPage);
   });
 
-  test('accepts optional timeout as third argument', async () => {
+  test('accepts optional timeout as third argument (capped at the attach probe ceiling)', async () => {
+    // The configured timeout (5000) is the budget for downstream actions and
+    // assertions. The resolver only uses it to bound a best-effort attach probe,
+    // capped at 2000ms — see StrategyResolver.fromSelector.
     let capturedTimeout: number | undefined;
     const mockPage = {
       locator: (_sel: string) => createMockLocator({
@@ -139,7 +142,7 @@ test.describe('constructor — driver argument', () => {
     };
     const repo = new ElementRepository(mockPage, webMockData, 5000);
     await repo.get('button', 'TestPage');
-    expect(capturedTimeout).toBe(5000);
+    expect(capturedTimeout).toBe(2000);
   });
 });
 
@@ -156,7 +159,7 @@ test.describe('setDefaultTimeout', () => {
     repo.setDefaultTimeout(60000);
   });
 
-  test('new timeout is used by subsequent get calls (mock verifies waitFor is called)', async () => {
+  test('new timeout is used by subsequent get calls (mock verifies waitFor is called, capped at the attach probe ceiling)', async () => {
     let capturedTimeout: number | undefined;
     const mockPage = {
       locator: (_sel: string) => createMockLocator({
@@ -166,7 +169,8 @@ test.describe('setDefaultTimeout', () => {
     const repo = new ElementRepository(mockPage, webMockData, 15000);
     repo.setDefaultTimeout(9999);
     await repo.get('button', 'TestPage');
-    expect(capturedTimeout).toBe(9999);
+    // 9999 is above the 2000ms attach probe cap — see StrategyResolver.fromSelector.
+    expect(capturedTimeout).toBe(2000);
   });
 });
 
