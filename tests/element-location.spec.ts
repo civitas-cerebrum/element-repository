@@ -347,7 +347,14 @@ test.describe('iOS element location — get()', () => {
 // ===========================================================================
 
 test.describe('Timeout propagation', () => {
-  test('default timeout (15000) is passed to element.waitFor', async () => {
+  // The resolver runs a best-effort attach probe before returning the lazy
+  // locator. Its failure is intentionally swallowed — downstream actions and
+  // assertions still get the full configured timeout via their own waits — so
+  // the probe is capped at 2000ms to avoid burning the entire repoTimeout on
+  // negative assertions (e.g. `.visible.toBeFalse()` on an absent element).
+  const ATTACH_PROBE_CAP_MS = 2000;
+
+  test('default timeout (15000) is capped at the attach probe ceiling', async () => {
     let capturedTimeout: number | undefined;
     const page = {
       locator: () => createCapturingMockLocator(),
@@ -361,10 +368,10 @@ test.describe('Timeout propagation', () => {
     };
     const repo = new ElementRepository(page, webMockData);
     await repo.get('cssBtn', 'TestPage');
-    expect(capturedTimeout).toBe(15000);
+    expect(capturedTimeout).toBe(ATTACH_PROBE_CAP_MS);
   });
 
-  test('custom timeout from constructor is propagated', async () => {
+  test('constructor timeout above the cap is capped at the attach probe ceiling', async () => {
     let capturedTimeout: number | undefined;
     const page = {
       locator: (_sel: string) => {
@@ -375,10 +382,24 @@ test.describe('Timeout propagation', () => {
     };
     const repo = new ElementRepository(page, webMockData, 5000);
     await repo.get('cssBtn', 'TestPage');
-    expect(capturedTimeout).toBe(5000);
+    expect(capturedTimeout).toBe(ATTACH_PROBE_CAP_MS);
   });
 
-  test('setDefaultTimeout updates the propagated timeout', async () => {
+  test('constructor timeout below the cap passes through unchanged', async () => {
+    let capturedTimeout: number | undefined;
+    const page = {
+      locator: (_sel: string) => {
+        const loc = createCapturingMockLocator();
+        loc.waitFor = async (opts?: any) => { capturedTimeout = opts?.timeout; };
+        return loc;
+      },
+    };
+    const repo = new ElementRepository(page, webMockData, 1000);
+    await repo.get('cssBtn', 'TestPage');
+    expect(capturedTimeout).toBe(1000);
+  });
+
+  test('setDefaultTimeout above the cap is capped at the attach probe ceiling', async () => {
     let capturedTimeout: number | undefined;
     const page = {
       locator: (_sel: string) => {
@@ -390,7 +411,7 @@ test.describe('Timeout propagation', () => {
     const repo = new ElementRepository(page, webMockData);
     repo.setDefaultTimeout(3000);
     await repo.get('cssBtn', 'TestPage');
-    expect(capturedTimeout).toBe(3000);
+    expect(capturedTimeout).toBe(ATTACH_PROBE_CAP_MS);
   });
 });
 
