@@ -152,9 +152,9 @@ export class WebElement implements Element {
   }
 
   /** {@inheritDoc Element.setInputFiles} */
-  async setInputFiles(filePath: string, options?: ElementActionOptions): Promise<Element> {
+  async setInputFiles(filePath: string | string[], options?: ElementActionOptions): Promise<Element> {
     await this.ensureAttached(options?.timeout);
-    await this.locator.setInputFiles(filePath, { timeout: options?.timeout });
+    await this.locator.setInputFiles(filePath as string, { timeout: options?.timeout });
     return this;
   }
 
@@ -162,6 +162,39 @@ export class WebElement implements Element {
   async dispatchEvent(event: string): Promise<Element> {
     await this.ensureAttached();
     await this.locator.dispatchEvent(event);
+    return this;
+  }
+
+  /**
+   * Simulates dropping one or more files onto this element by dispatching
+   * `dragenter`, `dragover`, and `drop` events carrying a `DataTransfer`
+   * object populated with synthetic `File` entries.
+   *
+   * Web-only — not part of the cross-platform `Element` interface.
+   *
+   * @param filenames - File name(s) to include in the DataTransfer (basename only;
+   *                    no real file content is read — the drop zone receives the
+   *                    name and type via `event.dataTransfer.files`).
+   * @param options   - Optional `mimeType` (default `'application/octet-stream'`)
+   *                    and `timeout` for the pre-drop attachment check.
+   */
+  async dropFiles(
+    filenames: string[],
+    options?: { mimeType?: string } & ElementActionOptions,
+  ): Promise<Element> {
+    await this.ensureAttached(options?.timeout);
+    const mimeType = options?.mimeType ?? 'application/octet-stream';
+    const dataTransfer = await this.locator.page().evaluateHandle(
+      ([names, mime]: [string[], string]) => {
+        const dt = new DataTransfer();
+        for (const name of names) dt.items.add(new File(['x'], name, { type: mime }));
+        return dt;
+      },
+      [filenames, mimeType] as [string[], string],
+    );
+    await this.locator.dispatchEvent('dragenter', { dataTransfer });
+    await this.locator.dispatchEvent('dragover', { dataTransfer });
+    await this.locator.dispatchEvent('drop', { dataTransfer });
     return this;
   }
 

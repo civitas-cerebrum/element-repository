@@ -145,10 +145,11 @@ export interface Element {
 
   /**
    * Sets the value of a file input.
-   * @param filePath - Absolute or relative path to the file.
+   * @param filePath - Absolute or relative path(s) to the file(s). Pass a
+   *                   string array to attach multiple files in a single operation.
    * @throws On platform elements where file input is unsupported.
    */
-  setInputFiles(filePath: string, options?: ElementActionOptions): Promise<Element>;
+  setInputFiles(filePath: string | string[], options?: ElementActionOptions): Promise<Element>;
 
   /**
    * Dispatches a DOM event on the element.
