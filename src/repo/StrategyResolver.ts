@@ -12,6 +12,8 @@ import { EnhancedResolver } from './EnhancedResolver';
  * or {@link PlatformElement} instances from a locator/selector and applying
  * the requested strategy on top. All methods are stateless and static.
  */
+const ATTACH_PROBE_TIMEOUT_MS = 2_000;
+
 export class StrategyResolver {
 
   /**
@@ -52,6 +54,10 @@ export class StrategyResolver {
         }
         case SelectionStrategy.RANDOM: {
           const base = new WebElement(locator, desc, timeout);
+          // Wait for at least one element to be visible before sampling so that
+          // `clickRandom` / `getRandom` compose with Playwright's standard
+          // auto-wait semantics instead of throwing immediately on 0 matches.
+          await base.waitFor({ state: 'visible', timeout });
           const all = await base.all();
           if (all.length === 0) {
             throw new Error(`No elements found for '${elementName}' on '${pageName}'`);
@@ -60,7 +66,7 @@ export class StrategyResolver {
         }
         case SelectionStrategy.ALL: {
           const element = new WebElement(locator, desc, timeout);
-          await element.waitFor({ state: 'attached', timeout }).catch(() => {});
+          await element.waitFor({ state: 'attached', timeout: Math.min(timeout, ATTACH_PROBE_TIMEOUT_MS) }).catch(() => {});
           return element;
         }
         case SelectionStrategy.TEXT: {
@@ -69,7 +75,7 @@ export class StrategyResolver {
           }
           const filtered = locator.filter({ hasText: options.value });
           const element = new WebElement(filtered.first(), desc, timeout);
-          await element.waitFor({ state: 'attached', timeout }).catch(() => {});
+          await element.waitFor({ state: 'attached', timeout: Math.min(timeout, ATTACH_PROBE_TIMEOUT_MS) }).catch(() => {});
           return element;
         }
         default:
@@ -78,7 +84,7 @@ export class StrategyResolver {
     }
 
     const element = new WebElement(locator.first(), desc, timeout);
-    await element.waitFor({ state: 'attached', timeout }).catch(() => {});
+    await element.waitFor({ state: 'attached', timeout: Math.min(timeout, ATTACH_PROBE_TIMEOUT_MS) }).catch(() => {});
     return element;
   }
 
@@ -128,6 +134,8 @@ export class StrategyResolver {
           const base = isWeb
             ? new WebElement(driver.locator(selector), selector, timeout)
             : new PlatformElement(driver, selector, undefined, timeout);
+          // Wait for at least one element to be visible before sampling.
+          await base.waitFor({ state: 'visible', timeout });
           const all = await base.all();
           if (all.length === 0) {
             throw new Error(`No elements found for '${elementName}' on '${pageName}'`);
@@ -143,14 +151,14 @@ export class StrategyResolver {
           const element = isWeb
             ? new WebElement(filtered.first(), selector, timeout)
             : new PlatformElement(driver, selector, undefined, timeout);
-          await element.waitFor({ state: 'attached', timeout }).catch(() => {});
+          await element.waitFor({ state: 'attached', timeout: Math.min(timeout, ATTACH_PROBE_TIMEOUT_MS) }).catch(() => {});
           return element;
         }
         case SelectionStrategy.ALL: {
           const element = isWeb
             ? new WebElement(driver.locator(selector), selector, timeout)
             : new PlatformElement(driver, selector, undefined, timeout);
-          await element.waitFor({ state: 'attached', timeout }).catch(() => {});
+          await element.waitFor({ state: 'attached', timeout: Math.min(timeout, ATTACH_PROBE_TIMEOUT_MS) }).catch(() => {});
           return element;
         }
         default:
@@ -162,15 +170,7 @@ export class StrategyResolver {
       ? new WebElement(driver.locator(selector), selector, timeout)
       : new PlatformElement(driver, selector, undefined, timeout);
     const element = base.first();
-    // Cap the attach probe at 2s. The probe is a best-effort presence preamble
-    // whose failure is intentionally swallowed — downstream actions/assertions
-    // still get the full `timeout` budget via their own waits. Without the cap,
-    // every probe on an absent element burns the full repoTimeout (e.g. a
-    // negative assertion via the consumer matcher tree like
-    // `.visible.toBeFalse()` or `.count.toBe(0)` waits 15s for nothing).
-    const ATTACH_PROBE_TIMEOUT_MS = 2_000;
-    const probeTimeout = Math.min(timeout, ATTACH_PROBE_TIMEOUT_MS);
-    await element.waitFor({ state: 'attached', timeout: probeTimeout }).catch(() => {});
+    await element.waitFor({ state: 'attached', timeout: Math.min(timeout, ATTACH_PROBE_TIMEOUT_MS) }).catch(() => {});
     return element;
   }
 
