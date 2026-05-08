@@ -54,10 +54,17 @@ export class StrategyResolver {
         }
         case SelectionStrategy.RANDOM: {
           const base = new WebElement(locator, desc, timeout);
-          // Wait for at least one element to be visible before sampling so that
-          // `clickRandom` / `getRandom` compose with Playwright's standard
-          // auto-wait semantics instead of throwing immediately on 0 matches.
-          await base.waitFor({ state: 'visible', timeout });
+          // RANDOM uses the full `timeout` budget — this wait is load-bearing:
+          // it's the mechanism that lets populated-after-load grids settle before
+          // sampling. The probes below (ALL, TEXT, default) use Math.min(timeout,
+          // ATTACH_PROBE_TIMEOUT_MS) because those probes are best-effort
+          // preambles whose failure is swallowed; wasting the full budget there
+          // would hurt negative-assertion perf (`.count.toBe(0)` etc.).
+          try {
+            await base.waitFor({ state: 'visible', timeout });
+          } catch {
+            throw new Error(`No elements found for '${elementName}' on '${pageName}'`);
+          }
           const all = await base.all();
           if (all.length === 0) {
             throw new Error(`No elements found for '${elementName}' on '${pageName}'`);
@@ -134,8 +141,13 @@ export class StrategyResolver {
           const base = isWeb
             ? new WebElement(driver.locator(selector), selector, timeout)
             : new PlatformElement(driver, selector, undefined, timeout);
-          // Wait for at least one element to be visible before sampling.
-          await base.waitFor({ state: 'visible', timeout });
+          // Full timeout — load-bearing wait, not a swallowed probe. See the
+          // equivalent path in fromLocator for the rationale on the asymmetry.
+          try {
+            await base.waitFor({ state: 'visible', timeout });
+          } catch {
+            throw new Error(`No elements found for '${elementName}' on '${pageName}'`);
+          }
           const all = await base.all();
           if (all.length === 0) {
             throw new Error(`No elements found for '${elementName}' on '${pageName}'`);
