@@ -54,12 +54,13 @@ export class StrategyResolver {
         }
         case SelectionStrategy.RANDOM: {
           const base = new WebElement(locator, desc, timeout);
-          // RANDOM uses the full `timeout` budget — this wait is load-bearing:
-          // it's the mechanism that lets populated-after-load grids settle before
-          // sampling. The probes below (ALL, TEXT, default) use Math.min(timeout,
-          // ATTACH_PROBE_TIMEOUT_MS) because those probes are best-effort
-          // preambles whose failure is swallowed; wasting the full budget there
-          // would hurt negative-assertion perf (`.count.toBe(0)` etc.).
+          // Wait for at least one element to be visible before sampling so that
+          // `clickRandom` / `getRandom` compose with Playwright's standard
+          // auto-wait semantics instead of throwing immediately on 0 matches.
+          // Full `timeout` is intentional here — RANDOM is load-bearing (the
+          // result feeds into a sample) and gets the caller's full budget.
+          // Contrast with the ATTACH_PROBE_TIMEOUT_MS cap on ALL/TEXT/default
+          // paths, which gate a best-effort probe whose failure is swallowed.
           try {
             await base.waitFor({ state: 'visible', timeout });
           } catch {
@@ -141,8 +142,10 @@ export class StrategyResolver {
           const base = isWeb
             ? new WebElement(driver.locator(selector), selector, timeout)
             : new PlatformElement(driver, selector, undefined, timeout);
-          // Full timeout — load-bearing wait, not a swallowed probe. See the
-          // equivalent path in fromLocator for the rationale on the asymmetry.
+          
+          // Wait for at least one element to be visible before sampling. Full
+          // `timeout` is intentional — see the matching block in `fromLocator`
+          // for the rationale (RANDOM is load-bearing, not a swallowed probe).
           try {
             await base.waitFor({ state: 'visible', timeout });
           } catch {
