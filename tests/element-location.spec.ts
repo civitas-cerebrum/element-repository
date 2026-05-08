@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { ElementRepository } from '../src/repo/ElementRepository';
 import { WebElement, PlatformElement } from '../src/types';
+import { SelectionStrategy } from '../src/enum/Options';
 
 // ---------------------------------------------------------------------------
 // Mock data covering all selector strategies
@@ -412,6 +413,67 @@ test.describe('Timeout propagation', () => {
     repo.setDefaultTimeout(3000);
     await repo.get('cssBtn', 'TestPage');
     expect(capturedTimeout).toBe(ATTACH_PROBE_CAP_MS);
+  });
+});
+
+// ===========================================================================
+// RANDOM strategy: auto-wait + error-shape preservation
+// ===========================================================================
+
+test.describe('RANDOM strategy — auto-wait for visibility', () => {
+  // RANDOM is load-bearing (the result feeds into a sample), so it gets the
+  // caller's full timeout — unlike the swallowed attach probe on ALL/TEXT/
+  // default paths which is capped at ATTACH_PROBE_TIMEOUT_MS. These tests
+  // pin both halves of that contract on the StrategyResolver RANDOM branch
+  // reached via `repo.get(..., { strategy: SelectionStrategy.RANDOM })`.
+
+  test('waits with state:"visible" using the full configured timeout (not the 2s probe cap)', async () => {
+    const captured: { state?: string; timeout?: number }[] = [];
+    const page = {
+      locator: (_sel: string) => {
+        const loc = createCapturingMockLocator();
+        loc.waitFor = async (opts?: any) => {
+          captured.push({ state: opts?.state, timeout: opts?.timeout });
+        };
+        return loc;
+      },
+    };
+    const repo = new ElementRepository(page, webMockData, 8000);
+    await repo.get('cssBtn', 'TestPage', { strategy: SelectionStrategy.RANDOM });
+
+    // The first waitFor call on the RANDOM path is the visibility wait —
+    // state must be 'visible' and timeout must be the full 8000, not the
+    // 2000 attach-probe cap.
+    expect(captured.length).toBeGreaterThanOrEqual(1);
+    expect(captured[0].state).toBe('visible');
+    expect(captured[0].timeout).toBe(8000);
+  });
+
+  test('preserves the "No elements found" error shape when the visibility wait times out', async () => {
+    const page = {
+      locator: (_sel: string) => {
+        const loc = createCapturingMockLocator();
+        loc.waitFor = async () => {
+          // Simulate a Playwright timeout rejection. The try/catch in
+          // StrategyResolver must convert this into the canonical error
+          // message so consumers matching on `.toContain('No elements found')`
+          // keep passing.
+          throw new Error('locator.waitFor: Timeout 5000ms exceeded.');
+        };
+        return loc;
+      },
+    };
+    const repo = new ElementRepository(page, webMockData);
+
+    let caught: Error | undefined;
+    try {
+      await repo.get('cssBtn', 'TestPage', { strategy: SelectionStrategy.RANDOM });
+    } catch (err) {
+      caught = err as Error;
+    }
+
+    expect(caught).toBeDefined();
+    expect(caught!.message).toBe(`No elements found for 'cssBtn' on 'TestPage'`);
   });
 });
 
