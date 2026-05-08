@@ -57,7 +57,15 @@ export class StrategyResolver {
           // Wait for at least one element to be visible before sampling so that
           // `clickRandom` / `getRandom` compose with Playwright's standard
           // auto-wait semantics instead of throwing immediately on 0 matches.
-          await base.waitFor({ state: 'visible', timeout });
+          // Full `timeout` is intentional here — RANDOM is load-bearing (the
+          // result feeds into a sample) and gets the caller's full budget.
+          // Contrast with the ATTACH_PROBE_TIMEOUT_MS cap on ALL/TEXT/default
+          // paths, which gate a best-effort probe whose failure is swallowed.
+          try {
+            await base.waitFor({ state: 'visible', timeout });
+          } catch {
+            throw new Error(`No elements found for '${elementName}' on '${pageName}'`);
+          }
           const all = await base.all();
           if (all.length === 0) {
             throw new Error(`No elements found for '${elementName}' on '${pageName}'`);
@@ -134,8 +142,14 @@ export class StrategyResolver {
           const base = isWeb
             ? new WebElement(driver.locator(selector), selector, timeout)
             : new PlatformElement(driver, selector, undefined, timeout);
-          // Wait for at least one element to be visible before sampling.
-          await base.waitFor({ state: 'visible', timeout });
+          // Wait for at least one element to be visible before sampling. Full
+          // `timeout` is intentional — see the matching block in `fromLocator`
+          // for the rationale (RANDOM is load-bearing, not a swallowed probe).
+          try {
+            await base.waitFor({ state: 'visible', timeout });
+          } catch {
+            throw new Error(`No elements found for '${elementName}' on '${pageName}'`);
+          }
           const all = await base.all();
           if (all.length === 0) {
             throw new Error(`No elements found for '${elementName}' on '${pageName}'`);
