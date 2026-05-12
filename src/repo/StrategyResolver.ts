@@ -61,8 +61,10 @@ export class StrategyResolver {
           // result feeds into a sample) and gets the caller's full budget.
           // Contrast with the ATTACH_PROBE_TIMEOUT_MS cap on ALL/TEXT/default
           // paths, which gate a best-effort probe whose failure is swallowed.
+          // Use .first() to avoid Playwright strict-mode violations on locators
+          // that match multiple elements (e.g. a list of size labels).
           try {
-            await base.waitFor({ state: 'visible', timeout });
+            await base.first().waitFor({ state: 'visible', timeout });
           } catch {
             throw new Error(`No elements found for '${elementName}' on '${pageName}'`);
           }
@@ -142,12 +144,13 @@ export class StrategyResolver {
           const base = isWeb
             ? new WebElement(driver.locator(selector), selector, timeout)
             : new PlatformElement(driver, selector, undefined, timeout);
-          
           // Wait for at least one element to be visible before sampling. Full
           // `timeout` is intentional — see the matching block in `fromLocator`
           // for the rationale (RANDOM is load-bearing, not a swallowed probe).
+          // Use .first() to avoid Playwright strict-mode violations on locators
+          // that match multiple elements (e.g. a list of size labels).
           try {
-            await base.waitFor({ state: 'visible', timeout });
+            await base.first().waitFor({ state: 'visible', timeout });
           } catch {
             throw new Error(`No elements found for '${elementName}' on '${pageName}'`);
           }

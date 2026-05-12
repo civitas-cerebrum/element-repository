@@ -277,14 +277,14 @@ export class ElementRepository {
    * @returns A promise that resolves to a randomly selected Element, or null if none are found.
    */
   public async getRandom(elementName: string, pageName: string, strict: boolean = false): Promise<Element | null> {
-    const allElements = await this.getAll(elementName, pageName);
-    if (allElements.length === 0) {
+    try {
+      return await this.resolveElement(elementName, pageName, { strategy: SelectionStrategy.RANDOM });
+    } catch {
       const msg = `No elements found for '${elementName}' on '${pageName}'`;
       if (strict) throw new Error(msg);
       console.warn(msg);
       return null;
     }
-    return allElements[pickRandomIndex(allElements.length)];
   }
 
   /**
