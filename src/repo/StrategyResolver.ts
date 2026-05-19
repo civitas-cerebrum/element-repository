@@ -144,6 +144,7 @@ export class StrategyResolver {
           const base = isWeb
             ? new WebElement(driver.locator(selector), selector, timeout)
             : new PlatformElement(driver, selector, undefined, timeout);
+          
           // Wait for at least one element to be visible before sampling. Full
           // `timeout` is intentional — see the matching block in `fromLocator`
           // for the rationale (RANDOM is load-bearing, not a swallowed probe).
