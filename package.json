@@ -53,5 +53,8 @@
   "license": "MIT",
   "dependencies": {
     "@civitas-cerebrum/test-coverage": "^0.1.0"
+  },
+  "overrides": {
+    "ws": "^8.21.0"
   }
 }
