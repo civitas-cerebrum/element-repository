@@ -154,7 +154,7 @@ export class WebElement implements Element {
   /** {@inheritDoc Element.setInputFiles} */
   async setInputFiles(filePath: string | string[], options?: ElementActionOptions): Promise<Element> {
     await this.ensureAttached(options?.timeout);
-    await this.locator.setInputFiles(filePath as string, { timeout: options?.timeout });
+    await this.locator.setInputFiles(filePath, { timeout: options?.timeout });
     return this;
   }
 

@@ -5,7 +5,7 @@ import { ElementChain } from './ElementChain';
  * WebDriverIO-backed {@link Element} implementation for mobile and desktop platforms.
  *
  * Uses the WebDriverIO `$` / `$$` commands to locate native elements via Appium selectors.
- * Methods that have no native equivalent (e.g. {@link dispatchEvent})
+ * Methods that have no native equivalent (e.g. {@link setInputFiles}, {@link dispatchEvent})
  * throw at runtime.
  */
 export class PlatformElement implements Element {
@@ -238,6 +238,10 @@ export class PlatformElement implements Element {
       if (delay > 0) await this.driver.pause(delay);
     }
     return this;
+  }
+
+  async setInputFiles(_filePath: string | string[], _options?: ElementActionOptions): Promise<Element> {
+    throw new Error('setInputFiles is not supported on platform elements.');
   }
 
   async dispatchEvent(_event: string): Promise<Element> {

@@ -144,6 +144,14 @@ export interface Element {
   pressSequentially(text: string, delay?: number, options?: ElementActionOptions): Promise<Element>;
 
   /**
+   * Sets the value of a file input.
+   * @param filePath - One path, or an array of paths for a `multiple` input.
+   *                   Absolute or relative to the working directory.
+   * @throws On platform elements where file input is unsupported.
+   */
+  setInputFiles(filePath: string | string[], options?: ElementActionOptions): Promise<Element>;
+
+  /**
    * Dispatches a DOM event on the element.
    * @param event - The event type to dispatch (e.g. `"change"`).
    * @throws On platform elements where DOM events are unsupported.
