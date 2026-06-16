@@ -302,6 +302,48 @@ test.describe('Live element location — ButtonsPage', () => {
     expect(typeof dropped).toBe('boolean');
   });
 
+  test('setInputFiles accepts a string array to attach multiple files', async ({ page }) => {
+    await page.setContent(`
+      <input id="multi" type="file" multiple />
+      <script>
+        document.getElementById('multi').addEventListener('change', function () {
+          window.__fileCount = this.files.length;
+          window.__fileNames = Array.from(this.files).map(f => f.name);
+        });
+      </script>
+    `);
+    const el = new WebElement(page.locator('#multi'));
+    await el.setInputFiles(['tests/locators.json', 'tests/live-element-location.spec.ts']);
+    const count = await page.evaluate(() => (window as unknown as { __fileCount: number }).__fileCount);
+    const names = await page.evaluate(() => (window as unknown as { __fileNames: string[] }).__fileNames);
+    expect(count).toBe(2);
+    expect(names).toContain('locators.json');
+    expect(names).toContain('live-element-location.spec.ts');
+  });
+
+  test('dropFiles dispatches drag events with a populated DataTransfer', async ({ page }) => {
+    await page.setContent(`
+      <div id="zone" style="width:200px;height:200px;background:#eee">Drop here</div>
+      <script>
+        window.__dropped = false;
+        window.__fileNames = [];
+        const zone = document.getElementById('zone');
+        zone.addEventListener('dragover', e => e.preventDefault());
+        zone.addEventListener('drop', e => {
+          window.__dropped = true;
+          window.__fileNames = Array.from(e.dataTransfer.files).map(f => f.name);
+        });
+      </script>
+    `);
+    const el = new WebElement(page.locator('#zone'));
+    await el.dropFiles(['report.pdf', 'photo.png'], { mimeType: 'application/octet-stream' });
+    const dropped = await page.evaluate(() => (window as unknown as { __dropped: boolean }).__dropped);
+    const names = await page.evaluate(() => (window as unknown as { __fileNames: string[] }).__fileNames);
+    expect(dropped).toBe(true);
+    expect(names).toContain('report.pdf');
+    expect(names).toContain('photo.png');
+  });
+
   test('swipe dispatches a mouse drag from the element center in the requested direction', async ({ page }) => {
     await page.setContent(`
       <div id="target" style="position:absolute;left:100px;top:200px;width:200px;height:100px;background:#08f"></div>

@@ -240,7 +240,7 @@ export class PlatformElement implements Element {
     return this;
   }
 
-  async setInputFiles(_filePath: string, _options?: ElementActionOptions): Promise<Element> {
+  async setInputFiles(_filePath: string | string[], _options?: ElementActionOptions): Promise<Element> {
     throw new Error('setInputFiles is not supported on platform elements.');
   }
 
