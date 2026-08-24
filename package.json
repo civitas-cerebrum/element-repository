@@ -53,6 +53,7 @@
   "license": "MIT",
   "overrides": {
     "ws": "^8.21.0",
-    "@puppeteer/browsers": "^3.2.0"
+    "@puppeteer/browsers": "^3.2.0",
+    "deepmerge-ts": "^8.0.2"
   }
 }
