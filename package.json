@@ -17,6 +17,7 @@
     "@civitas-cerebrum/test-coverage": "^0.1.0",
     "@playwright/test": "^1.61.0",
     "@types/node": "^20.0.0",
+    "playwright-core": "^1.61.0",
     "typescript": "^5.0.0"
   },
   "peerDependencies": {
@@ -50,10 +51,5 @@
     "url": "git@github.com/civitas-cerebrum/element-repository.git"
   },
   "author": "Umut Ay Bora",
-  "license": "MIT",
-  "overrides": {
-    "ws": "^8.21.0",
-    "@puppeteer/browsers": "^3.2.0",
-    "deepmerge-ts": "^8.0.2"
-  }
+  "license": "MIT"
 }
