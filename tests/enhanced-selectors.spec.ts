@@ -3,6 +3,7 @@ import { EnhancedResolver } from '../src/repo/EnhancedResolver';
 import { StrategyResolver } from '../src/repo/StrategyResolver';
 import { ElementRepository } from '../src/repo/ElementRepository';
 import { WebElement } from '../src/types';
+import { SelectionStrategy } from '../src/enum/Options';
 
 /**
  * Mock helpers for testing enhanced selectors without a live browser.
@@ -215,6 +216,60 @@ test.describe('StrategyResolver — static methods', () => {
     };
     const element = await StrategyResolver.fromMobileSelector(mockDriver, 'android=new UiSelector()', 5000);
     expect(element).toBeDefined();
+  });
+
+  test('fromLocator — ATTRIBUTE strategy resolves the matching non-first element', async () => {
+    // Generic list: three items with distinct data attributes; the target is
+    // deliberately NOT first so a silent .first() fallback fails the test.
+    const children = [
+      { 'data-kind': 'alpha', text: 'Alpha' },
+      { 'data-kind': 'bravo', text: 'Bravo' },
+      { 'data-kind': 'charlie', text: 'Charlie' },
+    ].map((c) => {
+      const loc: any = {
+        getAttribute: async (name: string) => (name === 'data-kind' ? c['data-kind'] : null),
+        textContent: async () => c.text,
+        waitFor: async () => {},
+        first: () => loc,
+        all: async () => [loc],
+      };
+      return loc;
+    });
+    const mockLocator: any = {
+      first: () => mockLocator,
+      filter: () => mockLocator,
+      waitFor: async () => {},
+      all: async () => children,
+    };
+
+    const element = await StrategyResolver.fromLocator(mockLocator, 'listItem', 'ListPage', 5000, {
+      strategy: SelectionStrategy.ATTRIBUTE, attribute: 'data-kind', value: 'bravo',
+    });
+    expect(await element.textContent()).toBe('Bravo');
+  });
+
+  test('fromLocator — unhandled strategy throws instead of resolving .first()', async () => {
+    const mockLocator: any = {
+      first: () => mockLocator,
+      filter: () => mockLocator,
+      waitFor: async () => {},
+      all: async () => [mockLocator],
+    };
+    await expect(
+      StrategyResolver.fromLocator(mockLocator, 'btn', 'Page', 5000, { strategy: SelectionStrategy.VALUE, value: 'x' }),
+    ).rejects.toThrow(`Unhandled selection strategy 'value' for 'btn' on 'Page'`);
+  });
+
+  test('fromMobileSelector — non-ALL strategy throws instead of resolving .first()', async () => {
+    const mockDriver: any = {
+      $: async () => ({ elementId: 'mock' }),
+      $$: async () => [],
+    };
+    await expect(
+      StrategyResolver.fromMobileSelector(mockDriver, 'android=new UiSelector()', 5000, {
+        strategy: SelectionStrategy.ATTRIBUTE, attribute: 'content-desc', value: 'x',
+      }),
+    ).rejects.toThrow('Unhandled selection strategy');
   });
 });
 

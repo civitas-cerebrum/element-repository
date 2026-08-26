@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { ElementRepository } from '../src/repo/ElementRepository';
 import { WebElement } from '../src/types';
+import { SelectionStrategy } from '../src/enum/Options';
 
 const BASE_URL = 'https://civitas-cerebrum.github.io/vue-test-app/buttons';
 
@@ -145,6 +146,32 @@ test.describe('Live element location — ButtonsPage', () => {
 
     expect(el).not.toBeNull();
     expect(await el!.textContent()).toBe('Ghost');
+  });
+
+  // =========================================================================
+  // ATTRIBUTE selection strategy — the strategy path must apply the same
+  // filter as getByAttribute() (regression: it used to silently resolve
+  // the first matching element, ignoring the attribute filter)
+  // =========================================================================
+
+  test('get() with ATTRIBUTE strategy resolves the matching non-first element', async ({ page }) => {
+    const repo = new ElementRepository(page, './tests/locators.json');
+    const el = await repo.get('allVariantButtons', 'ButtonsPage', {
+      strategy: SelectionStrategy.ATTRIBUTE, attribute: 'data-testid', value: 'btn-danger',
+    });
+
+    // 'Danger' is the third button in the list — a silent .first()
+    // fallback would resolve 'Primary' and fail this assertion.
+    expect(await el.textContent()).toBe('Danger');
+  });
+
+  test('get() with ATTRIBUTE strategy throws a descriptive error when nothing matches', async ({ page }) => {
+    const repo = new ElementRepository(page, './tests/locators.json');
+    await expect(
+      repo.get('allVariantButtons', 'ButtonsPage', {
+        strategy: SelectionStrategy.ATTRIBUTE, attribute: 'data-testid', value: 'btn-nonexistent',
+      }),
+    ).rejects.toThrow(`with attribute [data-testid] matching "btn-nonexistent" not found`);
   });
 
   // =========================================================================

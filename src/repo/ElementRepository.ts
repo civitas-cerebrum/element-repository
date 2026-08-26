@@ -346,24 +346,10 @@ export class ElementRepository {
     const { exact, strict = false } = options;
     const allElements = await this.getAll(elementName, pageName);
 
-    // When exact is explicitly set, use only that matching mode
-    if (exact !== undefined) {
-      for (const element of allElements) {
-        const attrValue = await element.getAttribute(attribute);
-        if (attrValue === null) continue;
-        if (exact ? attrValue === value : attrValue.includes(value)) return element;
-      }
-    } else {
-      // Default: try exact match first, then fall back to contains
-      for (const element of allElements) {
-        const attrValue = await element.getAttribute(attribute);
-        if (attrValue === value) return element;
-      }
-      for (const element of allElements) {
-        const attrValue = await element.getAttribute(attribute);
-        if (attrValue !== null && attrValue.includes(value)) return element;
-      }
-    }
+    // Shared with the ATTRIBUTE selection strategy — one filtering
+    // implementation, two entry points (see StrategyResolver.filterByAttribute).
+    const match = await StrategyResolver.filterByAttribute(allElements, attribute, value, exact);
+    if (match) return match;
 
     const matchType = exact === true ? 'equal to' : exact === false ? 'containing' : 'matching';
     const msg = `Element '${elementName}' on '${pageName}' with attribute [${attribute}] ${matchType} "${value}" not found.`;
