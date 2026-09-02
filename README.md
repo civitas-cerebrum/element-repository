@@ -299,8 +299,13 @@ await repo.get('button', 'Page')                                                
 await repo.get('button', 'Page', { strategy: SelectionStrategy.INDEX, index: 2 })   // by index
 await repo.get('button', 'Page', { strategy: SelectionStrategy.RANDOM })             // random
 await repo.get('button', 'Page', { strategy: SelectionStrategy.TEXT, value: 'Sub' }) // by text
+await repo.get('button', 'Page', { strategy: SelectionStrategy.ATTRIBUTE,
+                                   attribute: 'data-id', value: 'row-2' })           // by attribute value
 await repo.get('button', 'Page', { strategy: SelectionStrategy.ALL })                // un-narrowed (for counts)
 ```
+
+> An unhandled strategy value throws a descriptive error — resolution never
+> silently falls back to the first matching element when a strategy was requested.
 
 #### `getAll(elementName, pageName)`
 
