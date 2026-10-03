@@ -75,14 +75,26 @@ test.describe('Entry flags — provisional / list', () => {
           { elementName: 'line', provisional: 1, selector: { css: '.line' } },
           { elementName: 'fine', list: true, selector: { css: '.fine' } },
         ],
+      }, {
+        name: 'CheckoutPage',
+        elements: [
+          { elementName: 'total', list: null, selector: { css: '.total' } },
+        ],
       }],
     } as unknown as PageRepository;
     expect(() => new ElementRepository(mockPage, bad)).toThrow(
       `ElementRepository: invalid repository — 'BasketPage.rows' has "list": "true" (expected true or false); ` +
-      `'BasketPage.line' has "provisional": 1 (expected true or false).`,
+      `'BasketPage.line' has "provisional": 1 (expected true or false); ` +
+      `'CheckoutPage.total' has "list": null (expected true or false).`,
     );
     expect(() => ElementRepository.validate(bad)).toThrow(/'BasketPage\.rows' has "list": "true"/);
     expect(() => ElementRepository.validate(data)).not.toThrow();
+  });
+
+  test('TC_FLAGS_006: validate tolerates a repository without pages or a page without elements', async () => {
+    expect(() => ElementRepository.validate({} as unknown as PageRepository)).not.toThrow();
+    expect(() => ElementRepository.validate({ pages: [{ name: 'EmptyPage' }] } as unknown as PageRepository)).not.toThrow();
+    expect(() => new ElementRepository(mockPage, { pages: [{ name: 'EmptyPage', elements: [] }] })).not.toThrow();
   });
 
   test('TC_FLAGS_005: flags do not change resolution', async () => {
