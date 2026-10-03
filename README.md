@@ -170,6 +170,28 @@ Add a nested `fallback` selector to handle DOM variations (per country, per bran
 - **Brand-specific primary + generic fallback** — prefer a brand-specific `data-qa`, degrade to a role selector.
 - **Graceful degradation** — test works on both old and new DOM during progressive rollout.
 
+### Entry Flags: `provisional` and `list`
+
+Two optional boolean keys sit next to `elementName` and `selector`. Neither changes how an element is resolved; they record what the entry *means*, so tooling and consumer packages can act on it.
+
+```json
+{
+  "elementName": "basketRows",
+  "list": true,
+  "selector": { "css": "[data-testid='basket-row']" }
+},
+{
+  "elementName": "discountLine",
+  "provisional": true,
+  "selector": { "role": "row", "name": { "regex": "discount", "flags": "i" } }
+}
+```
+
+- **`list`** — the entry is a collection: its contract is "at least one match" (count ≥ 1), not "exactly one element". Consumers read it with `getElementMeta()`; element-interactions uses it for `verifyPresence` / `getAll`. Default `false`.
+- **`provisional`** — the entry has not been confirmed against the running application yet (for example, it was inferred from source code or documentation). `getProvisional()` lists these entries so a pipeline can confirm them or refuse to ship them. Default `false`.
+
+Both keys are validated when the repository is constructed (and by the static `ElementRepository.validate(data)`): a value other than `true` / `false` — such as the string `"true"` — throws an error naming every offending `Page.element`.
+
 ## 💻 Usage
 
 ### Initialization
@@ -339,6 +361,18 @@ Returns a platform-formatted selector string (synchronous).
 #### `getSelectorRaw(elementName, pageName)`
 
 Returns `{ strategy, value }` — the raw selector without platform formatting.
+
+#### `getElementMeta(elementName, pageName)`
+
+Returns `{ provisional, list }` for an entry, with defaults applied (`false`). Synchronous; reads the repository data only.
+
+#### `getProvisional()`
+
+Returns `[{ pageName, elementName }]` for every entry marked `"provisional": true`, in repository order.
+
+#### `ElementRepository.validate(data)` (static)
+
+Validates entry-level keys without a driver (the constructor calls it too). Throws when `provisional` or `list` is present with a non-boolean value.
 
 #### `getPagePlatform(pageName)`
 

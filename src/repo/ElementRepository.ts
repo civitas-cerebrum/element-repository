@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
-import { PageRepository, PageObject } from '../schema/repository';
+import { PageRepository, PageObject, ElementMeta } from '../schema/repository';
 import { pickRandomIndex } from '../utils/math';
 import { Element } from '../types';
 import {
@@ -55,7 +55,36 @@ export class ElementRepository {
     } else {
       this.pageData = dataOrPath;
     }
+    ElementRepository.validate(this.pageData);
     this.defaultTimeout = defaultTimeout;
+  }
+
+  /** Entry-level boolean keys and the only values they accept. */
+  private static readonly BOOLEAN_ENTRY_KEYS = ['provisional', 'list'] as const;
+
+  /**
+   * Validates entry-level keys of a repository without a driver — usable from
+   * a lint step as well as from the constructor. `provisional` and `list`,
+   * when present, must be JSON booleans: a string such as `"true"` is
+   * rejected rather than silently read as truthy or ignored.
+   * @param data The parsed repository.
+   * @throws Error naming every offending `Page.element` key.
+   */
+  public static validate(data: PageRepository): void {
+    const problems: string[] = [];
+    for (const page of data?.pages ?? []) {
+      for (const element of page.elements ?? []) {
+        for (const key of ElementRepository.BOOLEAN_ENTRY_KEYS) {
+          const value = (element as unknown as Record<string, unknown>)[key];
+          if (value !== undefined && typeof value !== 'boolean') {
+            problems.push(`'${page.name}.${element.elementName}' has "${key}": ${JSON.stringify(value)} (expected true or false)`);
+          }
+        }
+      }
+    }
+    if (problems.length > 0) {
+      throw new Error(`ElementRepository: invalid repository — ${problems.join('; ')}.`);
+    }
   }
 
   /**
@@ -419,6 +448,42 @@ export class ElementRepository {
    */
   public async getByRole(elementName: string, pageName: string, role: string, strict: boolean = false): Promise<Element | null> {
     return this.getByAttribute(elementName, pageName, 'role', role, { exact: true, strict });
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // Entry Metadata
+  // ══════════════════════════════════════════════════════════════
+
+  /**
+   * Returns the entry-level metadata of an element definition with defaults
+   * applied (`provisional: false`, `list: false`). Synchronous — reads the
+   * repository data only, never the driver.
+   * @param elementName The specific element name to look up.
+   * @param pageName The name of the page block in the JSON repository.
+   * @returns `{ provisional, list }`.
+   * @throws Error if the page or element is not found.
+   */
+  public getElementMeta(elementName: string, pageName: string): ElementMeta {
+    const page = this.findPage(pageName);
+    if (!page) throw new Error(`ElementRepository: Page '${pageName}' not found.`);
+    const element = page.elements.find((e) => e.elementName === elementName);
+    if (!element) throw new Error(`ElementRepository: Element '${elementName}' not found on page '${pageName}'.`);
+    return { provisional: element.provisional === true, list: element.list === true };
+  }
+
+  /**
+   * Lists every entry marked `"provisional": true`, in repository order — the
+   * work list of entries still to be confirmed against the running application.
+   * @returns An array of `{ pageName, elementName }`.
+   */
+  public getProvisional(): Array<{ pageName: string; elementName: string }> {
+    const out: Array<{ pageName: string; elementName: string }> = [];
+    for (const page of this.pageData.pages) {
+      for (const element of page.elements) {
+        if (element.provisional === true) out.push({ pageName: page.name, elementName: element.elementName });
+      }
+    }
+    return out;
   }
 
   // ══════════════════════════════════════════════════════════════
