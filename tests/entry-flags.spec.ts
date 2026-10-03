@@ -1,4 +1,7 @@
 import { test, expect } from '@playwright/test';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { ElementRepository } from '../src/repo/ElementRepository';
 import { PageRepository } from '../src/schema/repository';
 import { WebElement } from '../src/types';
@@ -95,6 +98,41 @@ test.describe('Entry flags — provisional / list', () => {
     expect(() => ElementRepository.validate({} as unknown as PageRepository)).not.toThrow();
     expect(() => ElementRepository.validate({ pages: [{ name: 'EmptyPage' }] } as unknown as PageRepository)).not.toThrow();
     expect(() => new ElementRepository(mockPage, { pages: [{ name: 'EmptyPage', elements: [] }] })).not.toThrow();
+  });
+
+  test('TC_FLAGS_007: a repository loaded from a JSON file path is validated too', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'entry-flags-'));
+    try {
+      const badFile = path.join(dir, 'bad.json');
+      fs.writeFileSync(badFile, JSON.stringify({
+        pages: [{ name: 'BasketPage', elements: [{ elementName: 'rows', list: 'true', selector: { css: '.rows' } }] }],
+      }));
+      expect(() => new ElementRepository(mockPage, badFile)).toThrow(
+        `ElementRepository: invalid repository — 'BasketPage.rows' has "list": "true" (expected true or false).`,
+      );
+
+      const goodFile = path.join(dir, 'good.json');
+      fs.writeFileSync(goodFile, JSON.stringify(data));
+      const repo = new ElementRepository(mockPage, goodFile);
+      expect(repo.getElementMeta('both', 'BasketPage')).toEqual({ provisional: true, list: true });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('TC_FLAGS_008: validate names an offender that is only on a later page', async () => {
+    const bad = {
+      pages: [
+        { name: 'FirstPage', elements: [{ elementName: 'ok', list: true, selector: { css: '.ok' } }] },
+        { name: 'SecondPage', elements: [
+          { elementName: 'fine', provisional: false, selector: { css: '.fine' } },
+          { elementName: 'broken', provisional: 'yes', selector: { css: '.broken' } },
+        ] },
+      ],
+    } as unknown as PageRepository;
+    expect(() => ElementRepository.validate(bad)).toThrow(
+      `ElementRepository: invalid repository — 'SecondPage.broken' has "provisional": "yes" (expected true or false).`,
+    );
   });
 
   test('TC_FLAGS_005: flags do not change resolution', async () => {
