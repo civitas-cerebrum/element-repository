@@ -466,7 +466,7 @@ export class ElementRepository {
   public getElementMeta(elementName: string, pageName: string): ElementMeta {
     const page = this.findPage(pageName);
     if (!page) throw new Error(`ElementRepository: Page '${pageName}' not found.`);
-    const element = page.elements.find((e) => e.elementName === elementName);
+    const element = (page.elements ?? []).find((e) => e.elementName === elementName);
     if (!element) throw new Error(`ElementRepository: Element '${elementName}' not found on page '${pageName}'.`);
     return { provisional: element.provisional === true, list: element.list === true };
   }
@@ -479,7 +479,7 @@ export class ElementRepository {
   public getProvisional(): Array<{ pageName: string; elementName: string }> {
     const out: Array<{ pageName: string; elementName: string }> = [];
     for (const page of this.pageData.pages) {
-      for (const element of page.elements) {
+      for (const element of page.elements ?? []) {
         if (element.provisional === true) out.push({ pageName: page.name, elementName: element.elementName });
       }
     }

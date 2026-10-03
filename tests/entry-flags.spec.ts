@@ -98,6 +98,10 @@ test.describe('Entry flags — provisional / list', () => {
     expect(() => ElementRepository.validate({} as unknown as PageRepository)).not.toThrow();
     expect(() => ElementRepository.validate({ pages: [{ name: 'EmptyPage' }] } as unknown as PageRepository)).not.toThrow();
     expect(() => new ElementRepository(mockPage, { pages: [{ name: 'EmptyPage', elements: [] }] })).not.toThrow();
+    // the entry-flag readers tolerate a page without an elements array, like validate does
+    const bare = new ElementRepository(mockPage, { pages: [{ name: 'EmptyPage' }] } as unknown as PageRepository);
+    expect(bare.getProvisional()).toEqual([]);
+    expect(() => bare.getElementMeta('x', 'EmptyPage')).toThrow("ElementRepository: Element 'x' not found on page 'EmptyPage'.");
   });
 
   test('TC_FLAGS_007: a repository loaded from a JSON file path is validated too', async () => {
