@@ -478,6 +478,157 @@ test.describe('RANDOM strategy — auto-wait for visibility', () => {
 });
 
 // ===========================================================================
+// ATTRIBUTE strategy: filters the element list instead of silently
+// resolving the first match
+// ===========================================================================
+
+// Builds a mock page whose base locator matches several elements, each with
+// its own attributes and text — a generic list shape for attribute filtering.
+function createAttributeListMockPage(
+  children: Array<{ attrs: Record<string, string | null>; text: string }>,
+  options: { failAttachWait?: boolean } = {},
+) {
+  const captured: { state?: string; timeout?: number }[] = [];
+  const childLocators = children.map((child) => {
+    const loc: any = {
+      getAttribute: async (name: string) => child.attrs[name] ?? null,
+      textContent: async () => child.text,
+      waitFor: async () => {},
+      first: () => loc,
+      all: async () => [loc],
+    };
+    return loc;
+  });
+  const base: any = {
+    first: () => base,
+    filter: () => base,
+    all: async () => childLocators,
+    // The un-filtered base reads as its first child (Playwright first() semantics).
+    textContent: async () => children[0]?.text ?? null,
+    getAttribute: async (name: string) => children[0]?.attrs[name] ?? null,
+    waitFor: async (opts?: any) => {
+      captured.push({ state: opts?.state, timeout: opts?.timeout });
+      if (options.failAttachWait) throw new Error('locator.waitFor: Timeout 5000ms exceeded.');
+    },
+  };
+  const page = { locator: (_sel: string) => base };
+  return { page, captured };
+}
+
+test.describe('ATTRIBUTE strategy — filters by attribute value', () => {
+
+  const listItems = [
+    { attrs: { 'data-id': 'alpha' }, text: 'Alpha' },
+    { attrs: { 'data-id': 'bravo' }, text: 'Bravo' },
+    { attrs: { 'data-id': 'charlie' }, text: 'Charlie' },
+  ];
+
+  test('resolves the matching non-first element (regression: never the un-filtered first)', async () => {
+    const { page } = createAttributeListMockPage(listItems);
+    const repo = new ElementRepository(page, webMockData, 5000);
+    const el = await repo.get('cssBtn', 'TestPage', {
+      strategy: SelectionStrategy.ATTRIBUTE, attribute: 'data-id', value: 'bravo',
+    });
+
+    // Before the fix this resolved the FIRST element ('Alpha') — the
+    // attribute filter was silently ignored via the default-break fallback.
+    expect(await el.textContent()).toBe('Bravo');
+    expect(await el.getAttribute('data-id')).toBe('bravo');
+  });
+
+  test('falls back to a contains match when no exact match exists (getByAttribute parity)', async () => {
+    const { page } = createAttributeListMockPage(listItems);
+    const repo = new ElementRepository(page, webMockData, 5000);
+    const el = await repo.get('cssBtn', 'TestPage', {
+      strategy: SelectionStrategy.ATTRIBUTE, attribute: 'data-id', value: 'charl',
+    });
+    expect(await el.textContent()).toBe('Charlie');
+  });
+
+  test('waits with state:"attached" using the full configured timeout (load-bearing, like RANDOM)', async () => {
+    const { page, captured } = createAttributeListMockPage(listItems);
+    const repo = new ElementRepository(page, webMockData, 8000);
+    await repo.get('cssBtn', 'TestPage', {
+      strategy: SelectionStrategy.ATTRIBUTE, attribute: 'data-id', value: 'alpha',
+    });
+    expect(captured.length).toBeGreaterThanOrEqual(1);
+    expect(captured[0].state).toBe('attached');
+    expect(captured[0].timeout).toBe(8000);
+  });
+
+  test('throws the canonical "No elements found" error when nothing attaches', async () => {
+    const { page } = createAttributeListMockPage(listItems, { failAttachWait: true });
+    const repo = new ElementRepository(page, webMockData);
+    await expect(
+      repo.get('cssBtn', 'TestPage', { strategy: SelectionStrategy.ATTRIBUTE, attribute: 'data-id', value: 'alpha' }),
+    ).rejects.toThrow(`No elements found for 'cssBtn' on 'TestPage'`);
+  });
+
+  test('throws a descriptive error when no element matches the filter', async () => {
+    const { page } = createAttributeListMockPage(listItems);
+    const repo = new ElementRepository(page, webMockData, 5000);
+    await expect(
+      repo.get('cssBtn', 'TestPage', { strategy: SelectionStrategy.ATTRIBUTE, attribute: 'data-id', value: 'zulu' }),
+    ).rejects.toThrow(`Element 'cssBtn' on 'TestPage' with attribute [data-id] matching "zulu" not found.`);
+  });
+
+  test('throws when options.attribute is missing', async () => {
+    const { page } = createAttributeListMockPage(listItems);
+    const repo = new ElementRepository(page, webMockData, 5000);
+    await expect(
+      repo.get('cssBtn', 'TestPage', { strategy: SelectionStrategy.ATTRIBUTE, value: 'alpha' }),
+    ).rejects.toThrow('options.attribute is required when using SelectionStrategy.ATTRIBUTE');
+  });
+
+  test('throws when options.value is missing', async () => {
+    const { page } = createAttributeListMockPage(listItems);
+    const repo = new ElementRepository(page, webMockData, 5000);
+    await expect(
+      repo.get('cssBtn', 'TestPage', { strategy: SelectionStrategy.ATTRIBUTE, attribute: 'data-id' }),
+    ).rejects.toThrow('options.value is required when using SelectionStrategy.ATTRIBUTE');
+  });
+});
+
+// ===========================================================================
+// Unhandled strategies fail loud — the silent .first() fallback is the
+// root defect this section pins against regressions
+// ===========================================================================
+
+test.describe('Unhandled strategy — throws instead of silently resolving .first()', () => {
+
+  test('a declared-but-unimplemented strategy throws a descriptive error', async () => {
+    const { page } = createAttributeListMockPage([{ attrs: {}, text: 'Alpha' }]);
+    const repo = new ElementRepository(page, webMockData, 5000);
+
+    // SelectionStrategy.VALUE exists on the enum but has no resolver case.
+    // Before the fix it fell through `default: break` to the un-filtered
+    // `.first()` path — the caller's strategy was silently ignored.
+    let caught: Error | undefined;
+    try {
+      await repo.get('cssBtn', 'TestPage', { strategy: SelectionStrategy.VALUE, value: 'anything' });
+    } catch (err) {
+      caught = err as Error;
+    }
+
+    expect(caught).toBeDefined();
+    expect(caught!.message).toContain(`Unhandled selection strategy 'value' for 'cssBtn' on 'TestPage'`);
+    // The error must name the handled strategies so the caller can self-serve.
+    expect(caught!.message).toContain('attribute');
+    expect(caught!.message).toContain('Refusing to silently fall back');
+  });
+
+  test('omitting the strategy still resolves the first match (explicit default unchanged)', async () => {
+    const { page } = createAttributeListMockPage([
+      { attrs: {}, text: 'Alpha' },
+      { attrs: {}, text: 'Bravo' },
+    ]);
+    const repo = new ElementRepository(page, webMockData, 5000);
+    const el = await repo.get('cssBtn', 'TestPage');
+    expect(await el.textContent()).toBe('Alpha');
+  });
+});
+
+// ===========================================================================
 // Platform isolation: same page name, different platforms get different selectors
 // ===========================================================================
 
