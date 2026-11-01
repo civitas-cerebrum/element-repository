@@ -3,13 +3,17 @@ import { Page as PlaywrightPage } from 'playwright-core';
 import { ElementRepository } from '../src/repo/ElementRepository';
 import { WebElement } from '../src/types';
 
+// The page is served from memory: these cases test type compatibility, not the
+// network, and example.com no longer has an <h1> (and asks not to be used for tests).
+const EXAMPLE_PAGE = '<!doctype html><title>Example Domain</title><h1>Example Domain</h1><p><a href="https://www.iana.org/domains/example">More information...</a></p>';
+
 test.describe('Type Compatibility Tests', () => {
 
   test('TC_002: Should accept an explicitly typed Page from @playwright/test', async ({ page }) => {
     const typedPage: PlaywrightPage = page;
     const repo = new ElementRepository(typedPage, './tests/locators.json');
 
-    await typedPage.goto('https://example.com');
+    await typedPage.setContent(EXAMPLE_PAGE);
     const heading = await repo.get('main-heading', 'ExamplePage');
 
     await expect((heading as WebElement).locator).toBeVisible();
@@ -37,7 +41,7 @@ test.describe('Type Compatibility Tests', () => {
 
     const wrapped = new CustomPageWrapper(page);
     const repo = new ElementRepository(wrapped, './tests/locators.json');
-    await page.goto('https://example.com');
+    await page.setContent(EXAMPLE_PAGE);
 
     const heading = await repo.get('main-heading', 'ExamplePage');
 
