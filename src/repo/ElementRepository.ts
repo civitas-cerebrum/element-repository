@@ -193,9 +193,15 @@ export class ElementRepository {
     // `defaultTimeout`. `waitFor` resolves the moment the element appears;
     // the timeout only caps the wait. Throws on timeout or detachment,
     // which triggers the fallback walk.
+    //
+    // The probe waits on the FIRST match: "this node attached" means "at
+    // least one element matches". Waiting on the whole match set would trip
+    // Playwright's strict mode as soon as it holds more than one element, so
+    // the ALL strategy (and `getAll()`) used to walk past a multi-match
+    // primary onto its fallback. The full match set is still returned.
     const attachTimeout = options?.timeout ?? this.defaultTimeout;
     try {
-      await element.waitFor({ state: 'attached', timeout: attachTimeout });
+      await element.first().waitFor({ state: 'attached', timeout: attachTimeout });
       return element;
     } catch {
       return this.resolveWithFallback(pageObj, elementName, fallback, pageName, options);
