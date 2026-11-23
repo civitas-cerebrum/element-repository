@@ -16,7 +16,7 @@ declare const actions: Array<Record<string, unknown>>;
 
 export async function browserCalls(): Promise<void> {
   // Locating ($ / $$) and the element id the protocol commands take.
-  const el: WebdriverIO.Element = await driver.$('~x');
+  const el: WebdriverIO.Element = await driver.$('~x', { strict: false });
   const elementId: string = el.elementId;
   const all = await driver.$$('~x');
   const list: WebdriverIO.Element[] = Array.from(all);

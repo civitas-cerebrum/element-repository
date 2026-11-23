@@ -61,3 +61,36 @@ test.describe('PlatformElement uses WebdriverIO protocol commands with the eleme
     expect(ids).toEqual(['el-7']);
   });
 });
+
+// WebdriverIO 10's `$` is strict by default: with several matches it throws
+// unless the call passes `{ strict: false }`. This mock behaves the same way.
+test.describe('PlatformElement opts out of WebdriverIO 10 strict `$`', () => {
+  function strictDriver(): { driver: any; options: unknown[] } {
+    const options: unknown[] = [];
+    const matches = [mockElement(), { ...mockElement(), elementId: 'el-8' }];
+    const driver = {
+      $: async (_sel: string, opts?: { strict?: boolean }) => {
+        options.push(opts);
+        if (opts?.strict !== false) throw new Error('strict mode violation: resolved to 2 elements, expected 1.');
+        return matches[0];
+      },
+      $$: async () => matches,
+      pause: async () => {},
+      getWindowSize: async () => ({ width: 1000, height: 2000 }),
+      getElementRect: async (id: string) => ({ x: id === 'el-7' ? 1 : 9, y: 2, width: 3, height: 4 }),
+    };
+    return { driver, options };
+  }
+
+  test('a plain element passes { strict: false } and acts on the first match', async () => {
+    const { driver, options } = strictDriver();
+    expect(await new PlatformElement(driver, '~x').boundingBox()).toEqual({ x: 1, y: 2, width: 3, height: 4 });
+    expect(options).toEqual([{ strict: false }]);
+  });
+
+  test('first() passes { strict: false } and acts on the first match', async () => {
+    const { driver, options } = strictDriver();
+    expect(await new PlatformElement(driver, '~x').first().boundingBox()).toEqual({ x: 1, y: 2, width: 3, height: 4 });
+    expect(options).toEqual([{ strict: false }]);
+  });
+});

@@ -5,6 +5,7 @@ import * as path from 'path';
 import * as ts from 'typescript';
 import type { AddressInfo } from 'net';
 import { PlatformElement } from '../src/types';
+import { ElementRepository } from '../src';
 
 // Drives PlatformElement through a REAL WebdriverIO 10 `remote()` session
 // against a tiny local fake WebDriver server, and asserts the HTTP requests
@@ -18,6 +19,9 @@ let sessionCounter = 0;
 const ELEMENT = 'el-1';
 const RECT = { x: 100, y: 200, width: 50, height: 40 };
 const WINDOW = { x: 0, y: 0, width: 400, height: 800 };
+/** A selector value the fake server answers with several matches. */
+const MANY = 'many';
+const MANY_IDS = [ELEMENT, 'el-2', 'el-3'];
 
 interface Recorded { method: string; path: string; body: any }
 
@@ -43,9 +47,12 @@ async function startFakeServer(): Promise<FakeServer> {
       } else if (method === 'POST' && url === `${s}/element`) {
         value = { [W3C_ELEMENT_KEY]: ELEMENT };
       } else if (method === 'POST' && url === `${s}/elements`) {
-        value = [{ [W3C_ELEMENT_KEY]: ELEMENT }];
+        // The selector value `many` matches three elements; anything else one.
+        value = (body?.value === MANY ? MANY_IDS : [ELEMENT]).map(id => ({ [W3C_ELEMENT_KEY]: id }));
       } else if (method === 'GET' && url === `${s}/element/${ELEMENT}/rect`) {
         value = RECT;
+      } else if (method === 'GET' && MANY_IDS.some(id => url === `${s}/element/${id}/rect`)) {
+        value = { ...RECT, y: RECT.y + 100 * MANY_IDS.findIndex(id => url.includes(`/${id}/`)) };
       } else if (method === 'GET' && url === `${s}/window/rect`) {
         value = WINDOW;
       } else if (method === 'GET' && url === `${s}/element/${ELEMENT}/css/color`) {
@@ -190,6 +197,59 @@ test.describe('PlatformElement against a real WebdriverIO 10 session (fake WebDr
     expect(all).toHaveLength(1);
     expect(await all[0].boundingBox()).toEqual(RECT);
     expect(server.requests.some(r => r.method === 'POST' && r.path.endsWith('/elements'))).toBe(true);
+  });
+});
+
+test.describe('multi-match selectors on WebdriverIO 10 (strict `$` by default)', () => {
+  let server: FakeServer;
+  let driver: any;
+
+  test.beforeEach(async () => {
+    server = await startFakeServer();
+    const { remote } = await importEsm('webdriverio');
+    driver = await remote({
+      protocol: 'http',
+      hostname: '127.0.0.1',
+      port: server.port,
+      path: '/',
+      logLevel: 'silent',
+      connectionRetryCount: 0,
+      capabilities: { platformName: 'iOS', 'appium:automationName': 'XCUITest' } as any,
+    });
+  });
+
+  test.afterEach(async () => {
+    await driver?.deleteSession().catch(() => {});
+    await server?.close();
+  });
+
+  test('the fake server really triggers strict mode: a bare driver.$ throws', async () => {
+    await expect(driver.$(`~${MANY}`)).rejects.toThrow(/strict/i);
+  });
+
+  test('an element on a multi-match selector acts on the first match', async () => {
+    expect(await new PlatformElement(driver, `~${MANY}`).boundingBox()).toEqual(RECT);
+  });
+
+  test('first() on a multi-match selector acts on the first match', async () => {
+    await new PlatformElement(driver, `~${MANY}`).first().longPress({ duration: 100 });
+    const perform = server.requests.find(r => r.method === 'POST' && r.path.endsWith('/actions'))!;
+    expect(perform.body.actions[0].actions[0]).toMatchObject({ x: 125, y: 220 });
+  });
+
+  test('nth(1) on a multi-match selector acts on the second match', async () => {
+    expect(await new PlatformElement(driver, `~${MANY}`).nth(1).boundingBox()).toEqual({ ...RECT, y: RECT.y + 100 });
+  });
+
+  test('repository default resolution of a multi-match element, then an action', async () => {
+    const repo = new ElementRepository(driver, {
+      pages: [{ name: 'ListPage', platform: 'ios', elements: [{ elementName: 'row', selector: { 'accessibility id': MANY } }] }],
+    }, { platform: 'ios', timeout: 2000 });
+    const row = await repo.get('row', 'ListPage');
+    expect(await row.boundingBox()).toEqual(RECT);
+    await row.tapAt({ x: 1, y: 1 });
+    const perform = server.requests.find(r => r.method === 'POST' && r.path.endsWith('/actions'))!;
+    expect(perform.body.actions[0].actions[0]).toMatchObject({ x: 101, y: 201 });
   });
 });
 

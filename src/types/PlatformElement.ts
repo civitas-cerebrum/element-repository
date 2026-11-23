@@ -89,7 +89,10 @@ export class PlatformElement implements Element {
   private async findOne(): Promise<any> {
     if (this.resolvedElement) return this.resolvedElement;
     if (this.byIndex) return this.resolveIndexed();
-    return this.driver.$(this.selector);
+    // WebdriverIO 10's `$` is strict by default and throws when the selector
+    // matches more than once; this element means "the first match", so opt
+    // out. WebdriverIO 9's `$` takes no options and ignores the argument.
+    return this.driver.$(this.selector, { strict: false });
   }
 
   /** Picks the indexed match from `$$`, or throws a clear out-of-range error. */
