@@ -39,6 +39,42 @@ export interface SwipeOptions extends ElementActionOptions {
   distance?: number;
 }
 
+/** Options for {@link Element.longPress}. */
+export interface LongPressOptions extends ElementActionOptions {
+  /** How long to hold the press, in ms. Default `1000`. */
+  duration?: number;
+}
+
+/**
+ * Offset for {@link Element.tapAt}, in CSS pixels (device-independent
+ * points on Appium) measured from the element's top-left corner. Both
+ * values must lie within the element's bounds: `0 <= x <= width` and
+ * `0 <= y <= height`.
+ */
+export interface TapOffset {
+  x: number;
+  y: number;
+}
+
+/** Options for {@link Element.pinch}. */
+export interface PinchOptions extends ElementActionOptions {
+  /**
+   * Ratio of the final finger distance to the starting distance. Must be
+   * between 0 and 1 (exclusive). Default `0.5` (fingers end at half the
+   * distance they started at).
+   */
+  scale?: number;
+}
+
+/** Options for {@link Element.zoom}. */
+export interface ZoomOptions extends ElementActionOptions {
+  /**
+   * Ratio of the final finger distance to the starting distance. Must be
+   * greater than 1. Default `2` (fingers end twice as far apart).
+   */
+  scale?: number;
+}
+
 /**
  * Platform-agnostic element abstraction.
  *
@@ -108,12 +144,17 @@ export interface Element {
   /**
    * Scrolls the element into the visible area of the viewport.
    *
-   * By default performs a single-direction downward sweep (reveals
-   * content below the current viewport). Pass
-   * `{ direction: 'both' }` for a bidirectional vertical sweep,
-   * `{ direction: 'up' }` for a reverse sweep, or
-   * `{ direction: 'horizontal' }` for a left-then-right sweep on
-   * horizontal lists / carousels.
+   * On platform (Appium) elements this sweeps the screen in ONE
+   * direction until the element is displayed, giving up after a fixed
+   * number of swipes. `direction` names where the target is relative to
+   * the current view: `'down'` (default) reveals content below,
+   * `'up'` content above, `'left'` / `'right'` content to that side of a
+   * horizontal list or carousel. There is no bidirectional mode; if the
+   * target's position is unknown, call it twice with different
+   * directions.
+   *
+   * On web elements the browser scrolls whatever is needed and
+   * `direction` is ignored.
    */
   scrollIntoView(options?: ScrollIntoViewOptions): Promise<Element>;
 
@@ -135,6 +176,58 @@ export interface Element {
    * @param options - Optional distance (default ~50% of viewport dim).
    */
   swipe(direction: SwipeDirection, options?: SwipeOptions): Promise<Element>;
+
+  /**
+   * Presses and holds on the element's centre, then releases.
+   *
+   * On platform (Appium) elements, dispatches a single W3C touch pointer:
+   * down, pause for `duration`, up. On web elements, holds the primary
+   * mouse button for `duration`.
+   *
+   * @param options - `duration` in ms (default `1000`); `timeout` for
+   *                  waiting until the element is attached.
+   * @throws When `duration` is negative or not finite, or the element has
+   *         no bounds.
+   */
+  longPress(options?: LongPressOptions): Promise<void>;
+
+  /**
+   * Taps a point inside the element, given as an offset from the
+   * element's top-left corner.
+   *
+   * On platform (Appium) elements, dispatches a W3C touch tap at that
+   * point. On web elements, clicks at that position.
+   *
+   * @param offset  - `{ x, y }` from the top-left corner; must lie within
+   *                  the element's width and height.
+   * @param options - `timeout` for waiting until the element is attached.
+   * @throws When the offset lies outside the element's bounds.
+   */
+  tapAt(offset: TapOffset, options?: ElementActionOptions): Promise<void>;
+
+  /**
+   * Two-finger pinch centred on the element: the fingers start apart on
+   * the horizontal axis and move toward each other.
+   *
+   * Platform (Appium) elements only, dispatched as two W3C touch pointers.
+   * Web elements throw `PlatformNotSupportedError`.
+   *
+   * @param options - `scale` in (0, 1), default `0.5`; `timeout` for
+   *                  waiting until the element is attached.
+   */
+  pinch(options?: PinchOptions): Promise<void>;
+
+  /**
+   * Two-finger zoom (spread) centred on the element: the fingers start
+   * close together on the horizontal axis and move apart.
+   *
+   * Platform (Appium) elements only, dispatched as two W3C touch pointers.
+   * Web elements throw `PlatformNotSupportedError`.
+   *
+   * @param options - `scale` greater than 1, default `2`; `timeout` for
+   *                  waiting until the element is attached.
+   */
+  zoom(options?: ZoomOptions): Promise<void>;
 
   /**
    * Types text one character at a time.

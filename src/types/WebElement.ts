@@ -1,6 +1,11 @@
 import { Locator } from '@playwright/test';
-import { Element, ElementType, ElementActionOptions, ScrollIntoViewOptions, SwipeDirection, SwipeOptions } from './Element';
+import {
+  Element, ElementType, ElementActionOptions, ScrollIntoViewOptions, SwipeDirection, SwipeOptions,
+  LongPressOptions, TapOffset, PinchOptions, ZoomOptions,
+} from './Element';
 import { ElementChain } from './ElementChain';
+import { PlatformNotSupportedError } from '../errors';
+import { checkLongPressDuration, checkTapOffset } from './gestureChecks';
 
 /**
  * Playwright-backed {@link Element} implementation.
@@ -142,6 +147,51 @@ export class WebElement implements Element {
     await page.mouse.move(toX, toY, { steps: 10 });
     await page.mouse.up();
     return this;
+  }
+
+  /**
+   * {@inheritDoc Element.longPress}
+   *
+   * Web: moves the mouse to the element centre, holds the primary button
+   * for `duration` ms, then releases.
+   */
+  async longPress(options?: LongPressOptions): Promise<void> {
+    const duration = checkLongPressDuration(options?.duration);
+    await this.ensureAttached(options?.timeout);
+    const box = await this.locator.boundingBox({ timeout: options?.timeout });
+    if (!box) throw new Error('longPress: could not read the element bounds (not rendered)');
+    const page = this.locator.page();
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    try {
+      await page.waitForTimeout(duration);
+    } finally {
+      await page.mouse.up();
+    }
+  }
+
+  /**
+   * {@inheritDoc Element.tapAt}
+   *
+   * Web: clicks at `offset` via Playwright's `click({ position })`, after
+   * checking the offset lies within the element's bounding box.
+   */
+  async tapAt(offset: TapOffset, options?: ElementActionOptions): Promise<void> {
+    await this.ensureAttached(options?.timeout);
+    const box = await this.locator.boundingBox({ timeout: options?.timeout });
+    if (!box) throw new Error('tapAt: could not read the element bounds (not rendered)');
+    checkTapOffset(offset, box.width, box.height);
+    await this.locator.click({ position: { x: offset.x, y: offset.y }, timeout: options?.timeout });
+  }
+
+  /** Not supported on web: throws {@link PlatformNotSupportedError}. */
+  async pinch(_options?: PinchOptions): Promise<void> {
+    throw new PlatformNotSupportedError('pinch', 'web');
+  }
+
+  /** Not supported on web: throws {@link PlatformNotSupportedError}. */
+  async zoom(_options?: ZoomOptions): Promise<void> {
+    throw new PlatformNotSupportedError('zoom', 'web');
   }
 
   /** {@inheritDoc Element.pressSequentially} */

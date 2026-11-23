@@ -1,4 +1,4 @@
-import { Element } from './Element';
+import { Element, ElementActionOptions, LongPressOptions, TapOffset, PinchOptions, ZoomOptions } from './Element';
 
 /**
  * Thenable fluent builder for performing sequenced actions on an {@link Element}.
@@ -141,6 +141,49 @@ export class ElementChain implements PromiseLike<Element> {
     this.queue.push(async () => {
       await this.element.waitFor({ state: 'visible', timeout: this.timeout });
       await this.element.pressSequentially(text, delay, { timeout: this.timeout });
+    });
+    return this;
+  }
+
+  /**
+   * Wait for visible, then press and hold on the element centre.
+   * An explicit `options.timeout` overrides the chain timeout.
+   */
+  longPress(options?: LongPressOptions): this {
+    this.queue.push(async () => {
+      const opts = { ...options, timeout: options?.timeout ?? this.timeout };
+      await this.element.waitFor({ state: 'visible', timeout: opts.timeout });
+      await this.element.longPress(opts);
+    });
+    return this;
+  }
+
+  /** Wait for visible, then tap at an offset from the element's top-left corner. */
+  tapAt(offset: TapOffset, options?: ElementActionOptions): this {
+    this.queue.push(async () => {
+      const opts = { ...options, timeout: options?.timeout ?? this.timeout };
+      await this.element.waitFor({ state: 'visible', timeout: opts.timeout });
+      await this.element.tapAt(offset, opts);
+    });
+    return this;
+  }
+
+  /** Wait for visible, then pinch (fingers together) on the element. */
+  pinch(options?: PinchOptions): this {
+    this.queue.push(async () => {
+      const opts = { ...options, timeout: options?.timeout ?? this.timeout };
+      await this.element.waitFor({ state: 'visible', timeout: opts.timeout });
+      await this.element.pinch(opts);
+    });
+    return this;
+  }
+
+  /** Wait for visible, then zoom (fingers apart) on the element. */
+  zoom(options?: ZoomOptions): this {
+    this.queue.push(async () => {
+      const opts = { ...options, timeout: options?.timeout ?? this.timeout };
+      await this.element.waitFor({ state: 'visible', timeout: opts.timeout });
+      await this.element.zoom(opts);
     });
     return this;
   }

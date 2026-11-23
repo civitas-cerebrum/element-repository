@@ -1,4 +1,8 @@
-import { Element, ElementType, ElementActionOptions, ScrollIntoViewOptions, SwipeDirection, SwipeOptions } from './Element';
+import {
+  Element, ElementType, ElementActionOptions, ScrollIntoViewOptions, SwipeDirection, SwipeOptions,
+  LongPressOptions, TapOffset, PinchOptions, ZoomOptions,
+} from './Element';
+import { checkLongPressDuration, checkTapOffset } from './gestureChecks';
 import { ElementChain } from './ElementChain';
 
 /**
@@ -216,6 +220,135 @@ export class PlatformElement implements Element {
       .perform();
     await this.driver.pause(200);
     return this;
+  }
+
+  // ── Touch gestures (W3C actions) ─────────────────────────────
+
+  /**
+   * Reads the element's rect for a gesture, throwing a clear error when the
+   * driver has none (unlike swipe, a gesture aimed at the element must not
+   * silently land somewhere else).
+   */
+  private async gestureRect(method: string, timeout?: number): Promise<{ x: number; y: number; width: number; height: number }> {
+    const el = await this.ensureAttached(timeout);
+    const rect = await Promise.resolve().then(() => el.getRect()).catch(() => null);
+    if (!rect || ![rect.x, rect.y, rect.width, rect.height].every(Number.isFinite)) {
+      throw new Error(`${method}: could not read the element bounds for "${this.selector}"`);
+    }
+    return rect;
+  }
+
+  /**
+   * Sends W3C pointer actions through the protocol-level `performActions`
+   * command (present in WebdriverIO 9 and 10) and always releases them,
+   * even on failure. A release error never masks the original one.
+   */
+  private async performTouch(sources: Array<Array<Record<string, unknown>>>): Promise<void> {
+    const actions = sources.map((steps, i) => ({
+      type: 'pointer',
+      id: `finger${i + 1}`,
+      parameters: { pointerType: 'touch' },
+      actions: steps,
+    }));
+    let failed = false;
+    try {
+      await this.driver.performActions(actions);
+    } catch (err) {
+      failed = true;
+      throw err;
+    } finally {
+      try { await this.driver.releaseActions(); }
+      catch (releaseErr) { if (!failed) throw releaseErr; }
+    }
+  }
+
+  /** {@inheritDoc Element.longPress} */
+  async longPress(options?: LongPressOptions): Promise<void> {
+    const duration = checkLongPressDuration(options?.duration);
+    const rect = await this.gestureRect('longPress', options?.timeout);
+    const x = Math.round(rect.x + rect.width / 2);
+    const y = Math.round(rect.y + rect.height / 2);
+    await this.performTouch([[
+      { type: 'pointerMove', duration: 0, origin: 'viewport', x, y },
+      { type: 'pointerDown', button: 0 },
+      { type: 'pause', duration },
+      { type: 'pointerUp', button: 0 },
+    ]]);
+  }
+
+  /** {@inheritDoc Element.tapAt} */
+  async tapAt(offset: TapOffset, options?: ElementActionOptions): Promise<void> {
+    const rect = await this.gestureRect('tapAt', options?.timeout);
+    checkTapOffset(offset, rect.width, rect.height);
+    const x = Math.round(rect.x + offset.x);
+    const y = Math.round(rect.y + offset.y);
+    await this.performTouch([[
+      { type: 'pointerMove', duration: 0, origin: 'viewport', x, y },
+      { type: 'pointerDown', button: 0 },
+      { type: 'pause', duration: PlatformElement.TAP_HOLD_MS },
+      { type: 'pointerUp', button: 0 },
+    ]]);
+  }
+
+  /** {@inheritDoc Element.pinch} */
+  async pinch(options?: PinchOptions): Promise<void> {
+    const scale = options?.scale ?? 0.5;
+    if (!Number.isFinite(scale) || scale <= 0 || scale >= 1) {
+      throw new Error(`pinch: scale must be a finite number between 0 and 1 (exclusive), got ${options?.scale}`);
+    }
+    await this.twoFingerGesture('pinch', scale, options?.timeout);
+  }
+
+  /** {@inheritDoc Element.zoom} */
+  async zoom(options?: ZoomOptions): Promise<void> {
+    const scale = options?.scale ?? 2;
+    if (!Number.isFinite(scale) || scale <= 1) {
+      throw new Error(`zoom: scale must be a finite number greater than 1, got ${options?.scale}`);
+    }
+    await this.twoFingerGesture('zoom', scale, options?.timeout);
+  }
+
+  /** Hold time between down and up for a tap, in ms. */
+  private static readonly TAP_HOLD_MS = 50;
+  /** Duration of the finger travel in a pinch / zoom, in ms. */
+  private static readonly TWO_FINGER_MOVE_MS = 500;
+  /** Smallest distance from the centre to either finger, in px. */
+  private static readonly MIN_HALF_GAP = 10;
+
+  /**
+   * Two touch pointers on the horizontal axis through the element centre.
+   * The wider half-gap is 40% of the element width; the narrower one is
+   * that times `scale` (pinch) or divided by it (zoom), never below
+   * {@link MIN_HALF_GAP}. Coordinates are clamped to the window.
+   */
+  private async twoFingerGesture(method: 'pinch' | 'zoom', scale: number, timeout?: number): Promise<void> {
+    const rect = await this.gestureRect(method, timeout);
+    const windowSize = await this.driver.getWindowSize();
+    const cx = rect.x + rect.width / 2;
+    const cy = rect.y + rect.height / 2;
+    const wide = Math.round(rect.width * 0.4);
+    const min = PlatformElement.MIN_HALF_GAP;
+
+    let startGap: number;
+    let endGap: number;
+    if (method === 'zoom') {
+      startGap = Math.max(min, Math.round(wide / scale));
+      endGap = Math.round(startGap * scale);
+    } else {
+      endGap = Math.round(wide * scale);
+      startGap = wide;
+      if (endGap < min) { endGap = min; startGap = Math.round(min / scale); }
+    }
+
+    const clampX = (v: number) => Math.min(Math.max(Math.round(v), 0), windowSize.width - 1);
+    const y = Math.min(Math.max(Math.round(cy), 0), windowSize.height - 1);
+    const fingerPath = (sign: -1 | 1) => [
+      { type: 'pointerMove', duration: 0, origin: 'viewport', x: clampX(cx + sign * startGap), y },
+      { type: 'pointerDown', button: 0 },
+      { type: 'pointerMove', duration: PlatformElement.TWO_FINGER_MOVE_MS, origin: 'viewport', x: clampX(cx + sign * endGap), y },
+      { type: 'pointerUp', button: 0 },
+    ];
+    await this.performTouch([fingerPath(-1), fingerPath(1)]);
   }
 
   async pressSequentially(text: string, delay: number = 50, options?: ElementActionOptions): Promise<Element> {
