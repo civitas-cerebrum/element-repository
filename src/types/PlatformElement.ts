@@ -1,12 +1,14 @@
 import {
-  Element, ElementType, ElementActionOptions, ScrollIntoViewOptions, SwipeDirection, SwipeOptions,
-  LongPressOptions, TapOffset, PinchOptions, ZoomOptions,
+  Element, ElementType, ElementActionOptions, ClickOptions, ScrollIntoViewOptions, SwipeDirection, SwipeOptions,
+  LongPressOptions, TapOffset, TapAtOptions, PinchOptions, ZoomOptions,
 } from './Element';
 import { checkLongPressDuration, checkTapOffset } from '../utils/gestureChecks';
 import { ElementChain } from './ElementChain';
 import { PlatformNotSupportedError } from './errors';
 import { isFatalDriverError } from '../utils/driverErrors';
 import type { Platform } from '../enum/Platform';
+import { SWIPE_SETTLE_MS, performTouchActions, performTouchSwipe, touchPointers } from '../utils/touch';
+import { detectDriverPlatform, readPlatformText } from '../utils/platformText';
 
 /** Extra construction options for {@link PlatformElement}. */
 export interface PlatformElementOptions {
@@ -16,8 +18,11 @@ export interface PlatformElementOptions {
    */
   index?: number;
   /**
-   * The platform the element belongs to. Used in error messages such as
-   * {@link PlatformNotSupportedError}; read from the driver when omitted.
+   * The platform the element belongs to. It decides platform-specific
+   * behaviour (how text is read, how keys are typed) and is named in
+   * errors such as {@link PlatformNotSupportedError}. When omitted it is
+   * read from the driver's capabilities or WebdriverIO's `isIOS` /
+   * `isAndroid` flags.
    */
   platform?: Platform;
 }
@@ -81,7 +86,7 @@ export class PlatformElement implements Element {
    * @param defaultTimeout  - Default timeout in ms inherited from the repository.
    * @param options         - `index`: act on that match of `selector` (as
    * {@link nth} does); `platform`: the platform this
-   * element belongs to, used in error messages.
+   * element belongs to (see {@link PlatformElementOptions.platform}).
    */
   constructor(
     public readonly driver: any,
@@ -153,9 +158,9 @@ export class PlatformElement implements Element {
   private async findOne(): Promise<any> {
     if (this.resolvedElement) return this.resolvedElement;
     if (this.polled) return this.resolveNow();
-    // WebdriverIO 10's `$` is strict by default and throws when the selector
+    // WebdriverIO's `$` is strict by default and throws when the selector
     // matches more than once; this element means "the first match", so opt
-    // out. WebdriverIO 9's `$` takes no options and ignores the argument.
+    // out.
     return (await this.searchContext()).$(this.selector, { strict: false });
   }
 
@@ -229,22 +234,27 @@ export class PlatformElement implements Element {
   }
 
   /**
-   * The platform this element runs on, for error messages: the
-   * constructor's `platform`, else the driver's `platformName` capability
-   * or WebdriverIO's `isIOS` / `isAndroid` flags, else the selector's
-   * prefix (`-ios ...`), in that order. When none of those tells, it
-   * falls back to `'android'`: that fallback is a guess, not a detection.
-   * Elements built by the repository always carry the page platform, so
-   * the guess only applies to elements constructed directly without one.
+   * The platform this element runs on: the constructor's `platform`, else
+   * the driver's `platformName` capability, else WebdriverIO's `isIOS` /
+   * `isAndroid` flags; `undefined` when none of those tells. Every
+   * platform-specific decision of this element uses this one answer.
+   */
+  private resolvePlatform(): Platform | undefined {
+    return this.platform ?? detectDriverPlatform(this.driver);
+  }
+
+  /**
+   * The platform named in error messages: {@link resolvePlatform}, else the
+   * selector's prefix (`-ios ...`). When nothing tells, it says
+   * `'android'`; that is a guess used only for the message text (the
+   * operations that raise it are unsupported on every Appium platform) and
+   * never for behaviour. Elements built by the repository always carry the
+   * page platform, so the guess only applies to elements constructed
+   * directly without one, on a driver that reports no platform.
    */
   private platformName(): Platform {
-    if (this.platform) return this.platform;
-    const caps = (this.driver?.capabilities ?? {}) as Record<string, unknown>;
-    const raw = String(caps.platformName ?? caps['appium:platformName'] ?? '').toLowerCase().replace(/\s+/g, '');
-    if (raw === 'ios' || raw === 'android' || raw === 'windows') return raw;
-    if (raw === 'mac' || raw === 'macos') return 'macos';
-    if (this.driver?.isIOS === true) return 'ios';
-    if (this.driver?.isAndroid === true) return 'android';
+    const known = this.resolvePlatform();
+    if (known) return known;
     if (this.selector.startsWith('-ios')) return 'ios';
     return 'android';
   }
@@ -285,7 +295,13 @@ export class PlatformElement implements Element {
     return el;
   }
 
-  async click(options?: ElementActionOptions): Promise<Element> {
+  /**
+   * {@inheritDoc Element.click}
+   *
+   * Platform: always the plain WebDriver element click, which never
+   * scrolls; `withoutScrolling` changes nothing.
+   */
+  async click(options?: ClickOptions): Promise<Element> {
     const el = await this.ensureAttached(options?.timeout);
     await el.click();
     return this;
@@ -340,6 +356,7 @@ export class PlatformElement implements Element {
     // looks the element up again and asks isDisplayed(): rows loaded by a
     // swipe only show up in a fresh query, and an indexed match that does
     // not exist yet is simply "not shown yet" rather than an error.
+    const started = Date.now();
     if (this.matchesNothing) await this.resolveNow().catch(err => { throw toPublicError(err); }); // can never match
     const shownNow = async (): Promise<boolean> => {
       try { return !!(await (await this.findOne()).isDisplayed()); }
@@ -387,10 +404,12 @@ export class PlatformElement implements Element {
     const xNear = Math.round(windowSize.width * 0.25);
     const xFar = Math.round(windowSize.width * 0.75);
     const maxSwipesPerDirection = 20;
+    // Only an explicit timeout bounds the sweep; without one, the swipe cap does.
+    const deadline = options?.timeout === undefined ? undefined : started + options.timeout;
 
     const swipeXY = async (fromX: number, fromY: number, toX: number, toY: number): Promise<void> => {
-      await this.touchSwipe(fromX, fromY, toX, toY);
-      await this.driver.pause(200);
+      await performTouchSwipe(this.driver, { x: fromX, y: fromY }, { x: toX, y: toY });
+      await this.driver.pause(SWIPE_SETTLE_MS);
     };
 
     const direction = options?.direction ?? 'down';
@@ -410,11 +429,19 @@ export class PlatformElement implements Element {
     })();
 
     for (let i = 0; i < maxSwipesPerDirection; i++) {
+      if (deadline !== undefined && Date.now() >= deadline) {
+        throw new Error(
+          `scrollIntoView: element not visible within the ${options!.timeout} ms timeout ` +
+          `(${i} of at most ${maxSwipesPerDirection} swipes made, direction=${direction})`,
+        );
+      }
       await swipeXY(fromX, fromY, toX, toY);
       if (await shownNow()) return this;
     }
 
-    throw new Error(`scrollIntoView: element not visible after ${maxSwipesPerDirection} swipes (direction=${direction})`);
+    throw new Error(
+      `scrollIntoView: element not visible after ${maxSwipesPerDirection} swipes, the swipe limit (direction=${direction})`,
+    );
   }
 
   /**
@@ -468,26 +495,9 @@ export class PlatformElement implements Element {
         `for a '${direction}' swipe; nothing to swipe`,
       );
     }
-    await this.touchSwipe(cx, cy, toX, toY);
-    await this.driver.pause(200);
+    await performTouchSwipe(this.driver, { x: cx, y: cy }, { x: toX, y: toY });
+    await this.driver.pause(SWIPE_SETTLE_MS);
     return this;
-  }
-
-  /**
-   * One-finger swipe sent as explicit W3C actions through
-   * {@link performTouch} (so `releaseActions` always runs): an instant
-   * move to the start point, finger down, a short hold so the press
-   * registers as a drag start rather than a flick, a slow move to the end
-   * point, finger up. Coordinates are rounded to integers.
-   */
-  private async touchSwipe(fromX: number, fromY: number, toX: number, toY: number): Promise<void> {
-    await this.performTouch([[
-      { type: 'pointerMove', duration: 0, origin: 'viewport', x: Math.round(fromX), y: Math.round(fromY) },
-      { type: 'pointerDown', button: 0 },
-      { type: 'pause', duration: PlatformElement.SWIPE_HOLD_MS },
-      { type: 'pointerMove', duration: PlatformElement.SWIPE_MOVE_MS, origin: 'viewport', x: Math.round(toX), y: Math.round(toY) },
-      { type: 'pointerUp', button: 0 },
-    ]]);
   }
 
   /** Rounds `value` and clamps it to `[0, size - 1]` (one window axis). */
@@ -495,17 +505,12 @@ export class PlatformElement implements Element {
     return Math.min(Math.max(Math.round(value), 0), size - 1);
   }
 
-  /** Finger hold after pointerDown before a swipe moves, in ms. */
-  private static readonly SWIPE_HOLD_MS = 100;
-  /** Duration of a swipe's travel from start to end point, in ms. */
-  private static readonly SWIPE_MOVE_MS = 600;
-
   // ── Touch gestures (W3C actions) ─────────────────────────────
 
   /**
    * Reads a raw element's rect with the W3C protocol command
-   * `getElementRect(elementId)` (WebdriverIO 9 and 10 elements have no
-   * `getRect()`). Coordinates are native-context viewport coordinates.
+   * `getElementRect(elementId)` (WebdriverIO elements have no `getRect()`).
+   * Coordinates are native-context viewport coordinates.
    */
   private async readRect(el: any): Promise<{ x: number; y: number; width: number; height: number } | null> {
     return (await this.driver.getElementRect(el?.elementId)) ?? null;
@@ -553,32 +558,15 @@ export class PlatformElement implements Element {
   }
 
   /**
-   * Sends W3C pointer actions through the protocol-level `performActions`
-   * command (present in WebdriverIO 9 and 10) and always releases them,
-   * even on failure. A release error never masks the original one; when
-   * the gesture itself succeeded, a release error is thrown.
+   * Sends one W3C touch pointer per finger with `performActions` and always
+   * releases them (see {@link performTouchActions}).
    */
-  private async performTouch(sources: Array<Array<Record<string, unknown>>>): Promise<void> {
-    const actions = sources.map((steps, i) => ({
-      type: 'pointer',
-      id: `finger${i + 1}`,
-      parameters: { pointerType: 'touch' },
-      actions: steps,
-    }));
-    let failed = false;
-    try {
-      await this.driver.performActions(actions);
-    } catch (err) {
-      failed = true;
-      throw err;
-    } finally {
-      try { await this.driver.releaseActions(); }
-      catch (releaseErr) { if (!failed) throw releaseErr; }
-    }
+  private async performTouch(fingers: Array<Array<Record<string, unknown>>>): Promise<void> {
+    await performTouchActions(this.driver, touchPointers(fingers));
   }
 
   /** {@inheritDoc Element.longPress} */
-  async longPress(options?: LongPressOptions): Promise<void> {
+  async longPress(options?: LongPressOptions): Promise<Element> {
     const duration = checkLongPressDuration(options?.duration);
     const rect = await this.gestureRect('longPress', options?.timeout);
     const x = Math.round(rect.x + rect.width / 2);
@@ -590,10 +578,11 @@ export class PlatformElement implements Element {
       { type: 'pause', duration },
       { type: 'pointerUp', button: 0 },
     ]]);
+    return this;
   }
 
   /** {@inheritDoc Element.tapAt} */
-  async tapAt(offset: TapOffset, options?: ElementActionOptions): Promise<void> {
+  async tapAt(offset: TapOffset, options?: TapAtOptions): Promise<Element> {
     const rect = await this.gestureRect('tapAt', options?.timeout);
     checkTapOffset(offset, rect.width, rect.height);
     const x = Math.round(rect.x + offset.x);
@@ -605,24 +594,27 @@ export class PlatformElement implements Element {
       { type: 'pause', duration: PlatformElement.TAP_HOLD_MS },
       { type: 'pointerUp', button: 0 },
     ]]);
+    return this;
   }
 
   /** {@inheritDoc Element.pinch} */
-  async pinch(options?: PinchOptions): Promise<void> {
+  async pinch(options?: PinchOptions): Promise<Element> {
     const scale = options?.scale ?? 0.5;
     if (!Number.isFinite(scale) || scale <= 0 || scale >= 1) {
       throw new Error(`pinch: scale must be a finite number between 0 and 1 (exclusive), got ${options?.scale}`);
     }
     await this.twoFingerGesture('pinch', scale, options?.timeout);
+    return this;
   }
 
   /** {@inheritDoc Element.zoom} */
-  async zoom(options?: ZoomOptions): Promise<void> {
+  async zoom(options?: ZoomOptions): Promise<Element> {
     const scale = options?.scale ?? 2;
     if (!Number.isFinite(scale) || scale <= 1) {
       throw new Error(`zoom: scale must be a finite number greater than 1, got ${options?.scale}`);
     }
     await this.twoFingerGesture('zoom', scale, options?.timeout);
+    return this;
   }
 
   /** Hold time between down and up for a tap, in ms. */
@@ -748,9 +740,14 @@ export class PlatformElement implements Element {
 
   async raw(): Promise<string | null> { return this.selector; }
 
+  /** {@inheritDoc Element.textContent} */
   async textContent(): Promise<string | null> {
-    const text = await (await this.readTarget()).getText();
-    return text?.trim() ?? null;
+    return (await this.rawText())?.trim() ?? null;
+  }
+
+  /** {@inheritDoc Element.rawText} */
+  async rawText(): Promise<string | null> {
+    return readPlatformText(await this.readTarget(), this.resolvePlatform());
   }
 
   async getAttribute(name: string): Promise<string | null> {
@@ -786,11 +783,9 @@ export class PlatformElement implements Element {
     return rawValue ?? '';
   }
 
-  /** Returns true when the underlying driver is Android (UiAutomator2). */
+  /** True when this element runs on Android (UiAutomator2); see {@link resolvePlatform}. */
   private isAndroid(): boolean {
-    const platform = (this.driver.capabilities as Record<string, unknown> | undefined)
-      ?.platformName;
-    return typeof platform === 'string' && platform.toLowerCase() === 'android';
+    return this.resolvePlatform() === 'android';
   }
 
   /**
@@ -799,7 +794,7 @@ export class PlatformElement implements Element {
    */
   async getCssProperty(property: string): Promise<string> {
     const el = await this.readTarget();
-    // Protocol command (WebdriverIO 9/10 elements have no getCSSValue()).
+    // Protocol command (WebdriverIO elements have no getCSSValue()).
     try { return await this.driver.getElementCSSValue(el?.elementId, property); }
     catch (err) { throw new Error(`getCssProperty("${property}") requires a web or hybrid context: ${errorText(err)}`); }
   }

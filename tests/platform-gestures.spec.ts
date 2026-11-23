@@ -70,8 +70,9 @@ function finger(id: string, from: { x: number; y: number }, to: { x: number; y: 
 test.describe('PlatformElement.longPress', () => {
   test('holds one touch pointer on the element centre for the default 1000 ms', async () => {
     const { driver, rec } = createRecordingDriver();
-    const result = await new PlatformElement(driver, '~card').longPress();
-    expect(result).toBeUndefined();
+    const el = new PlatformElement(driver, '~card');
+    const result = await el.longPress();
+    expect(result).toBe(el);
     expect(rec.performed).toEqual([[
       touch('finger1', [
         { type: 'pointerMove', duration: 0, origin: 'viewport', x: 200, y: 250 },
@@ -162,8 +163,9 @@ test.describe('PlatformElement.longPress', () => {
 test.describe('PlatformElement.tapAt', () => {
   test('taps at an offset from the element top-left corner', async () => {
     const { driver, rec } = createRecordingDriver();
-    const result = await new PlatformElement(driver, '~card').tapAt({ x: 10, y: 20 });
-    expect(result).toBeUndefined();
+    const el = new PlatformElement(driver, '~card');
+    const result = await el.tapAt({ x: 10, y: 20 });
+    expect(result).toBe(el);
     expect(rec.performed).toEqual([[
       touch('finger1', [
         { type: 'pointerMove', duration: 0, origin: 'viewport', x: 110, y: 220 },
@@ -252,8 +254,9 @@ test.describe('PlatformElement.tapAt', () => {
 test.describe('PlatformElement.zoom', () => {
   test('moves two touch pointers apart from the centre with the default scale 2', async () => {
     const { driver, rec } = createRecordingDriver();
-    const result = await new PlatformElement(driver, '~map').zoom();
-    expect(result).toBeUndefined();
+    const el = new PlatformElement(driver, '~map');
+    const result = await el.zoom();
+    expect(result).toBe(el);
     expect(rec.performed).toEqual([[
       finger('finger1', { x: 160, y: 250 }, { x: 120, y: 250 }),
       finger('finger2', { x: 240, y: 250 }, { x: 280, y: 250 }),
@@ -349,8 +352,9 @@ test.describe('PlatformElement.zoom', () => {
 test.describe('PlatformElement.pinch', () => {
   test('moves two touch pointers together with the default scale 0.5', async () => {
     const { driver, rec } = createRecordingDriver();
-    const result = await new PlatformElement(driver, '~map').pinch();
-    expect(result).toBeUndefined();
+    const el = new PlatformElement(driver, '~map');
+    const result = await el.pinch();
+    expect(result).toBe(el);
     expect(rec.performed).toEqual([[
       finger('finger1', { x: 120, y: 250 }, { x: 160, y: 250 }),
       finger('finger2', { x: 280, y: 250 }, { x: 240, y: 250 }),
@@ -454,7 +458,7 @@ test.describe('WebElement gestures', () => {
     await page.setContent(GESTURE_PAGE);
     const el = new WebElement(page.locator('#pad'), '#pad');
     const result = await el.longPress({ duration: 300 });
-    expect(result).toBeUndefined();
+    expect(result).toBe(el);
     const events = await page.evaluate(() => (window as any).events);
     const down = events.find((e: any) => e.type === 'mousedown');
     const up = events.find((e: any) => e.type === 'mouseup');
@@ -498,7 +502,7 @@ test.describe('WebElement gestures', () => {
     await page.setContent(GESTURE_PAGE);
     const el = new WebElement(page.locator('#pad'), '#pad');
     const result = await el.tapAt({ x: 10, y: 20 });
-    expect(result).toBeUndefined();
+    expect(result).toBe(el);
     const events = await page.evaluate(() => (window as any).events);
     expect(events.find((e: any) => e.type === 'click')).toMatchObject({ x: 60, y: 60 });
   });

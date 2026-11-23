@@ -15,7 +15,8 @@ function mockRaw(id: string): any {
     isDisplayed: async () => true,
     isExisting: async () => true,
     getText: async () => 'row',
-    getAttribute: async () => 'v',
+    getTagName: async () => 'XCUIElementTypeCell',
+    getAttribute: async (name: string) => (name === 'label' ? 'row' : 'v'),
   };
 }
 

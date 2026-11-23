@@ -54,13 +54,10 @@ test.describe('ElementChain.scrollIntoView', () => {
     expect(log).toEqual([['scrollIntoView', { direction: 'up', timeout: 4000 }]]);
   });
 
-  test('on a web element: waits for attached, then scrolls (direction passed through, ignored by the element)', async () => {
+  test('on a web element: no chain-level wait either; the element waits for itself', async () => {
     const log: any[] = [];
     await new ElementChain(spyElement(log, ElementType.WEB), 4000).scrollIntoView({ direction: 'left' });
-    expect(log).toEqual([
-      ['waitFor', { state: 'attached', timeout: 4000 }],
-      ['scrollIntoView', { direction: 'left', timeout: 4000 }],
-    ]);
+    expect(log).toEqual([['scrollIntoView', { direction: 'left', timeout: 4000 }]]);
   });
 
   test('an explicit option timeout wins over the chain timeout', async () => {
@@ -100,13 +97,10 @@ test.describe('ElementChain.swipe', () => {
     expect(log).toEqual([['swipe', 'left', { distance: 120, timeout: 4000 }]]);
   });
 
-  test('on a web element: waits for visible, then swipes', async () => {
+  test('on a web element: no chain-level wait; the element waits for itself', async () => {
     const log: any[] = [];
     await new ElementChain(spyElement(log, ElementType.WEB), 4000).swipe('down');
-    expect(log).toEqual([
-      ['waitFor', { state: 'visible', timeout: 4000 }],
-      ['swipe', 'down', { timeout: 4000 }],
-    ]);
+    expect(log).toEqual([['swipe', 'down', { timeout: 4000 }]]);
   });
 
   test('an explicit option timeout wins over the chain timeout', async () => {
@@ -120,29 +114,33 @@ test.describe('ElementChain.swipe', () => {
 // c. click({ withoutScrolling }) on platform elements
 // ===========================================================================
 
-test.describe('ElementChain click without scrolling on platform elements', () => {
-  test('click({ withoutScrolling }) waits for attached, then clicks the element (no dispatchEvent)', async () => {
-    const log: any[] = [];
-    await new ElementChain(spyElement(log, ElementType.PLATFORM), 4000).click({ withoutScrolling: true });
-    expect(log).toEqual([
-      ['waitFor', { state: 'attached', timeout: 4000 }],
-      ['click', { timeout: 4000 }],
-    ]);
-  });
+test.describe('ElementChain click without scrolling', () => {
+  for (const type of [ElementType.PLATFORM, ElementType.WEB]) {
+    test(`${type}: click({ withoutScrolling }) waits for attached, then passes the option to the element click`, async () => {
+      const log: any[] = [];
+      await new ElementChain(spyElement(log, type), 4000).click({ withoutScrolling: true });
+      expect(log).toEqual([
+        ['waitFor', { state: 'attached', timeout: 4000 }],
+        ['click', { timeout: 4000, withoutScrolling: true }],
+      ]);
+    });
 
-  test('clickIfPresent({ withoutScrolling }) clicks the element (no dispatchEvent)', async () => {
+    test(`${type}: clickIfPresent({ withoutScrolling }) passes the option to the element click`, async () => {
+      const log: any[] = [];
+      await new ElementChain(spyElement(log, type), 4000).clickIfPresent({ withoutScrolling: true });
+      expect(log).toEqual([['isVisible'], ['click', { timeout: 4000, withoutScrolling: true }]]);
+    });
+  }
+
+  test('clickIfPresent without the option clicks normally', async () => {
     const log: any[] = [];
-    await new ElementChain(spyElement(log, ElementType.PLATFORM), 4000).clickIfPresent({ withoutScrolling: true });
+    await new ElementChain(spyElement(log, ElementType.WEB), 4000).clickIfPresent();
     expect(log).toEqual([['isVisible'], ['click', { timeout: 4000 }]]);
   });
 
-  test('web elements still dispatch a click event', async () => {
-    const log: any[] = [];
-    await new ElementChain(spyElement(log, ElementType.WEB), 4000).click({ withoutScrolling: true });
-    expect(log).toEqual([
-      ['waitFor', { state: 'attached', timeout: 4000 }],
-      ['dispatchEvent', 'click'],
-    ]);
+  test('the chain does not branch on the backend', () => {
+    const source = require('fs').readFileSync(require('path').join(__dirname, '../src/types/ElementChain.ts'), 'utf-8');
+    expect(source).not.toMatch(/isPlatform|isWeb|ElementType/);
   });
 
   test('a real PlatformElement clicks through the chain without throwing', async () => {

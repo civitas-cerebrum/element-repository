@@ -1,7 +1,7 @@
 import { Locator } from '@playwright/test';
 import {
-  Element, ElementType, ElementActionOptions, ScrollIntoViewOptions, SwipeDirection, SwipeOptions,
-  LongPressOptions, TapOffset, PinchOptions, ZoomOptions,
+  Element, ElementType, ElementActionOptions, ClickOptions, ScrollIntoViewOptions, SwipeDirection, SwipeOptions,
+  LongPressOptions, TapOffset, TapAtOptions, PinchOptions, ZoomOptions,
 } from './Element';
 import { ElementChain } from './ElementChain';
 import { PlatformNotSupportedError } from './errors';
@@ -53,10 +53,16 @@ export class WebElement implements Element {
     await this.locator.waitFor({ state: 'attached', timeout });
   }
 
-  /** {@inheritDoc Element.click} */
-  async click(options?: ElementActionOptions): Promise<Element> {
+  /**
+   * {@inheritDoc Element.click}
+   *
+   * Web: with `withoutScrolling`, dispatches a DOM `click` event instead of
+   * Playwright's scrolling, actionability-checked click.
+   */
+  async click(options?: ClickOptions): Promise<Element> {
     await this.ensureAttached(options?.timeout);
-    await this.locator.click({ timeout: options?.timeout });
+    if (options?.withoutScrolling) await this.locator.dispatchEvent('click', undefined, { timeout: options?.timeout });
+    else await this.locator.click({ timeout: options?.timeout });
     return this;
   }
 
@@ -121,9 +127,14 @@ export class WebElement implements Element {
     return this;
   }
 
-  /** {@inheritDoc Element.swipe} */
+  /**
+   * {@inheritDoc Element.swipe}
+   *
+   * Web: waits for the element to be visible first, since the mouse drag
+   * starts at its centre.
+   */
   async swipe(direction: SwipeDirection, options?: SwipeOptions): Promise<Element> {
-    await this.ensureAttached(options?.timeout);
+    await this.locator.waitFor({ state: 'visible', timeout: options?.timeout });
     const box = await this.locator.boundingBox();
     if (!box) throw new Error('swipe: element has no bounding box (not rendered)');
     const page = this.locator.page();
@@ -158,7 +169,7 @@ export class WebElement implements Element {
    * holds the primary button for `duration` ms (rounded to whole ms) and
    * releases.
    */
-  async longPress(options?: LongPressOptions): Promise<void> {
+  async longPress(options?: LongPressOptions): Promise<Element> {
     const duration = checkLongPressDuration(options?.duration);
     const timeout = options?.timeout;
     await this.ensureAttached(timeout);
@@ -177,6 +188,7 @@ export class WebElement implements Element {
     } finally {
       await page.mouse.up();
     }
+    return this;
   }
 
   /**
@@ -185,21 +197,22 @@ export class WebElement implements Element {
    * Web: clicks at `offset` via Playwright's `click({ position })`, after
    * checking the offset lies within the element's bounding box.
    */
-  async tapAt(offset: TapOffset, options?: ElementActionOptions): Promise<void> {
+  async tapAt(offset: TapOffset, options?: TapAtOptions): Promise<Element> {
     await this.ensureAttached(options?.timeout);
     const box = await this.locator.boundingBox({ timeout: options?.timeout });
     if (!box) throw new Error('tapAt: could not read the element bounds (not rendered)');
     checkTapOffset(offset, box.width, box.height);
     await this.locator.click({ position: { x: offset.x, y: offset.y }, timeout: options?.timeout });
+    return this;
   }
 
   /** Not supported on web: throws {@link PlatformNotSupportedError}. */
-  async pinch(_options?: PinchOptions): Promise<void> {
+  async pinch(_options?: PinchOptions): Promise<Element> {
     throw new PlatformNotSupportedError('pinch', 'web');
   }
 
   /** Not supported on web: throws {@link PlatformNotSupportedError}. */
-  async zoom(_options?: ZoomOptions): Promise<void> {
+  async zoom(_options?: ZoomOptions): Promise<Element> {
     throw new PlatformNotSupportedError('zoom', 'web');
   }
 
@@ -275,6 +288,9 @@ export class WebElement implements Element {
 
   /** {@inheritDoc Element.textContent} */
   async textContent(): Promise<string | null> { return this.locator.textContent(); }
+
+  /** {@inheritDoc Element.rawText} */
+  async rawText(): Promise<string | null> { return this.locator.textContent(); }
 
   /** {@inheritDoc Element.getAttribute} */
   async getAttribute(name: string): Promise<string | null> { return this.locator.getAttribute(name); }

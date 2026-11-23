@@ -12,6 +12,9 @@ import {
   PageRepository,
   PageRepositoryInput,
   Platform,
+  Element, WebElement, PlatformElement, isWeb, isPlatform, ClickOptions, TapAtOptions, LongPressOptions,
+  PinchOptions, ZoomOptions, SwipeDirection, SwipeOptions, ScrollIntoViewOptions,
+  SWIPE_HOLD_MS, SWIPE_MOVE_MS, SWIPE_SETTLE_MS, buildTouchSwipe, performTouchSwipe, TouchPointerSource,
 } from '../src';
 import pages from './platform-pages.json';
 
@@ -50,3 +53,23 @@ const badPlatform: PageRepository = { pages: [{ name: 'A', platform: 'mobile', e
 new ElementRepository(driver, strict, 'ios');
 
 void badPlatform;
+
+// Element contract: gestures return the element, the guards narrow, and the
+// gesture option types and touch helpers are exported from the root.
+declare const el: Element;
+async function elementContract(): Promise<void> {
+  const chained: Element = await (await (await (await el.longPress()).tapAt({ x: 1, y: 1 })).pinch()).zoom();
+  const raw: string | null = await chained.rawText();
+  const click: ClickOptions = { withoutScrolling: true, timeout: 1 };
+  const tap: TapAtOptions = { timeout: 1 };
+  const opts: [LongPressOptions, PinchOptions, ZoomOptions, SwipeOptions, ScrollIntoViewOptions] = [{}, {}, {}, {}, {}];
+  const dir: SwipeDirection = 'left';
+  await el.click(click);
+  if (isWeb(el)) { const w: WebElement = el; void w.locator; }
+  if (isPlatform(el)) { const p: PlatformElement = el; void p.driver; }
+  const sequence: TouchPointerSource[] = buildTouchSwipe({ x: 0, y: 0 }, { x: 1, y: 1 });
+  await performTouchSwipe(driver, { x: 0, y: 0 }, { x: 1, y: 1 });
+  const ms: number = SWIPE_HOLD_MS + SWIPE_MOVE_MS + SWIPE_SETTLE_MS;
+  void raw; void tap; void opts; void dir; void sequence; void ms;
+}
+void elementContract;

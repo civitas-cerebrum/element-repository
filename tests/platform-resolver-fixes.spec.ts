@@ -12,14 +12,18 @@ import { SelectionStrategy } from '../src/enum/Options';
 // a platform page is the bug under test, so the getter throws.
 // ---------------------------------------------------------------------------
 
+// The text is both what `getText()` returns (Android) and the iOS `label`
+// attribute; `value` is empty, so either platform's text rule reads `text`.
 function mockNativeElement(text: string | null, id: string): any {
+  const read = async () => {
+    if (text === null) throw new Error('stale element');
+    return text;
+  };
   return {
     elementId: id,
-    getText: async () => {
-      if (text === null) throw new Error('stale element');
-      return text;
-    },
-    getAttribute: async (_n: string) => null,
+    getText: read,
+    getTagName: async () => 'XCUIElementTypeCell',
+    getAttribute: async (name: string) => (name === 'label' ? read() : null),
     waitForExist: async (_opts?: any) => {},
     waitForDisplayed: async (_opts?: any) => {},
     isDisplayed: async () => true,
@@ -238,9 +242,10 @@ test.describe('TEXT on platform pages — driver errors', () => {
     });
   }
 
-  test('getText throwing an invalid-session error is rethrown immediately', async () => {
+  test('a text read throwing an invalid-session error is rethrown immediately', async () => {
     const err = namedError('InvalidSessionIdError', 'invalid session id');
-    const el = { ...mockNativeElement('x', 'a'), getText: async () => { throw err; } };
+    const fail = async () => { throw err; };
+    const el = { ...mockNativeElement('x', 'a'), getText: fail, getAttribute: fail, getTagName: fail };
     const driver = listDriver(async () => [el]);
     const started = Date.now();
     await expect(StrategyResolver.fromSelector(

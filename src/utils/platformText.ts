@@ -1,0 +1,63 @@
+import type { Platform } from '../enum/Platform';
+
+/**
+ * The platform an Appium driver runs, from its `platformName` capability,
+ * else WebdriverIO's `isIOS` / `isAndroid` flags; `undefined` when none of
+ * those tells.
+ */
+export function detectDriverPlatform(driver: any): Platform | undefined {
+  const caps = (driver?.capabilities ?? {}) as Record<string, unknown>;
+  const raw = String(caps.platformName ?? caps['appium:platformName'] ?? '').toLowerCase().replace(/\s+/g, '');
+  if (raw === 'ios' || raw === 'android' || raw === 'windows') return raw;
+  if (raw === 'mac' || raw === 'macos') return 'macos';
+  if (driver?.isIOS === true) return 'ios';
+  if (driver?.isAndroid === true) return 'android';
+  return undefined;
+}
+
+/**
+ * XCUITest element types whose `value` is the text the user typed, so it
+ * is read before the `label`.
+ */
+export const IOS_TEXT_INPUT_TYPES: ReadonlySet<string> = new Set([
+  'XCUIElementTypeTextField',
+  'XCUIElementTypeSecureTextField',
+  'XCUIElementTypeTextView',
+  'XCUIElementTypeSearchField',
+]);
+
+/** True when `s` is a string with something other than whitespace. */
+function hasText(s: unknown): s is string {
+  return typeof s === 'string' && s.trim() !== '';
+}
+
+/**
+ * The visible text of a raw WebdriverIO element, untrimmed, or `null` when
+ * the driver reports none. One rule for every platform text read: the
+ * element's text accessors and the repository's text lookups.
+ *
+ * - `ios`: the `label` attribute, else `value`. For text inputs
+ *   ({@link IOS_TEXT_INPUT_TYPES}) `value` comes first, then `label`.
+ *   XCUITest's own `getText()` returns `value` before `label`, so a
+ *   Settings row with a badge reads as the badge count; the label is what
+ *   the user reads as the row's text. When neither attribute has text, the
+ *   empty one (if any) is returned.
+ * - every other platform (and an unknown one): WebdriverIO `getText()`.
+ *
+ * Driver errors are not caught.
+ *
+ * @param el - A raw WebdriverIO element.
+ * @param platform - The element's platform, if known.
+ */
+export async function readPlatformText(el: any, platform: Platform | undefined): Promise<string | null> {
+  if (platform !== 'ios') return (await el.getText()) ?? null;
+  const [type, label, value] = await Promise.all([
+    el.getTagName(),
+    el.getAttribute('label'),
+    el.getAttribute('value'),
+  ]);
+  const order = IOS_TEXT_INPUT_TYPES.has(type) ? [value, label] : [label, value];
+  const withText = order.find(hasText);
+  if (withText !== undefined) return withText;
+  return order.find(s => typeof s === 'string') ?? null;
+}

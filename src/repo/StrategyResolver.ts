@@ -5,6 +5,7 @@ import { pickRandomIndex } from '../utils/math';
 import { EnhancedResolver } from './EnhancedResolver';
 import { isFatalDriverError } from '../utils/driverErrors';
 import type { Platform } from '../enum/Platform';
+import { detectDriverPlatform, readPlatformText } from '../utils/platformText';
 
 /**
  * Creates platform-appropriate Element wrappers and applies selection
@@ -286,12 +287,13 @@ export class StrategyResolver {
    *
    * There is no lazy text filter in WebDriverIO, so the match is picked
    * eagerly: all matches of `selector` are fetched with `driver.$$`, each
-   * one's text is read with `getText()` (the same source as
-   * {@link PlatformElement.textContent}), and the chosen raw element is
-   * wrapped in a {@link PlatformElement}.
+   * one's text is read with the same rule as
+   * {@link PlatformElement.textContent} (on iOS the `label`, else `value`;
+   * `value` first for text inputs; elsewhere `getText()`), and the chosen
+   * raw element is wrapped in a {@link PlatformElement}.
    *
    * The text compared is the element's OWN text as the driver reports it
-   * through `getText()` — not the text of its descendants, as Playwright's
+   * — not the text of its descendants, as Playwright's
    * `filter({ hasText })` uses on web. The selector must therefore target the
    * text-bearing element itself (the label or cell title), not a container
    * around it. An exact (trimmed) match is preferred; otherwise the first
@@ -304,7 +306,7 @@ export class StrategyResolver {
    * Because the result is picked eagerly it is load-bearing, like ATTRIBUTE
    * and RANDOM: the lookup polls until a match appears or the caller's full
    * `timeout` elapses, rather than the swallowed 2 s attach probe of the web
-   * path. The deadline is also checked between `getText()` calls, so a long
+   * path. The deadline is also checked between text reads, so a long
    * list cannot overrun the timeout by a whole sweep. With no match it throws
    * the same not-found error as `ElementRepository.getByText`.
    *
@@ -327,6 +329,7 @@ export class StrategyResolver {
     const wanted = value.trim();
     const wantedNorm = normalise(value);
     const deadline = Date.now() + timeout;
+    const textPlatform = platform ?? detectDriverPlatform(driver);
     let lastError: unknown;
 
     const remember = (err: unknown) => {
@@ -341,7 +344,7 @@ export class StrategyResolver {
       const texts: Array<string | null> = [];
       for (const raw of raws) {
         if (texts.length > 0 && Date.now() >= deadline) break;
-        try { texts.push(((await raw.getText()) ?? '').trim()); } catch (err) { remember(err); texts.push(null); }
+        try { texts.push(((await readPlatformText(raw, textPlatform)) ?? '').trim()); } catch (err) { remember(err); texts.push(null); }
       }
 
       let index = texts.findIndex(t => t !== null && t === wanted);

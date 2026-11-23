@@ -1,4 +1,6 @@
 import type { ElementChain } from './ElementChain';
+import type { WebElement } from './WebElement';
+import type { PlatformElement } from './PlatformElement';
 
 /** Discriminator for {@link Element} implementations. */
 export enum ElementType {
@@ -9,6 +11,22 @@ export enum ElementType {
 /** Optional timeout configuration for element actions. */
 export interface ElementActionOptions {
   timeout?: number;
+}
+
+/**
+ * Options for {@link Element.click}.
+ */
+export interface ClickOptions extends ElementActionOptions {
+  /**
+   * Click without scrolling the element into view first.
+   *
+   * Web: dispatches a DOM `click` event on the element (no scrolling, no
+   * actionability checks), after waiting for it to be attached.
+   * Platform (Appium): the option changes nothing. A platform element click
+   * is always the plain WebDriver element click, which taps the element
+   * where it is and never scrolls.
+   */
+  withoutScrolling?: boolean;
 }
 
 /** Direction of a {@link Element.swipe} gesture. */
@@ -55,6 +73,9 @@ export interface TapOffset {
   x: number;
   y: number;
 }
+
+/** Options for {@link Element.tapAt}. */
+export interface TapAtOptions extends ElementActionOptions {}
 
 /** Options for {@link Element.pinch}. */
 export interface PinchOptions extends ElementActionOptions {
@@ -117,8 +138,11 @@ export interface Element {
 
   // ── Interaction ──────────────────────────────────────────────
 
-  /** Clicks the element. */
-  click(options?: ElementActionOptions): Promise<Element>;
+  /**
+   * Clicks the element. See {@link ClickOptions.withoutScrolling} for a
+   * click that does not scroll.
+   */
+  click(options?: ClickOptions): Promise<Element>;
 
   /**
    * Clears the input and fills it with the given text.
@@ -155,8 +179,10 @@ export interface Element {
    *
    * On platform elements the sweep makes up to 20 swipes (each about
    * 100 ms hold + 600 ms move + 200 ms settle of gesture time, more on a
-   * real device) and `options.timeout` does NOT bound it: the call can
-   * take longer than `timeout` before it returns or throws.
+   * real device). When `options.timeout` is given, the sweep also stops
+   * once that many ms have passed: no new swipe starts after the deadline,
+   * so the call can overrun it by at most one swipe. Without a timeout only
+   * the 20-swipe limit applies. The error names the bound that was hit.
    *
    * On web elements the browser scrolls whatever is needed,
    * `direction` is ignored and `options.timeout` is the Playwright
@@ -219,7 +245,7 @@ export interface Element {
    * @throws When `duration` is negative or not finite, the element has no
    *         bounds, or (platform) its centre is outside the window.
    */
-  longPress(options?: LongPressOptions): Promise<void>;
+  longPress(options?: LongPressOptions): Promise<Element>;
 
   /**
    * Taps a point inside the element, given as an offset from the
@@ -237,7 +263,7 @@ export interface Element {
    * @throws When the offset lies outside the element's bounds, or
    *         (platform) the point is outside the window.
    */
-  tapAt(offset: TapOffset, options?: ElementActionOptions): Promise<void>;
+  tapAt(offset: TapOffset, options?: TapAtOptions): Promise<Element>;
 
   /**
    * Two-finger pinch centred on the element: the fingers start apart on
@@ -256,7 +282,7 @@ export interface Element {
    * @param options - `scale` in (0, 1), default `0.5`; `timeout` for
    *                  waiting until the element is attached.
    */
-  pinch(options?: PinchOptions): Promise<void>;
+  pinch(options?: PinchOptions): Promise<Element>;
 
   /**
    * Two-finger zoom (spread) centred on the element: the fingers start
@@ -275,7 +301,7 @@ export interface Element {
    * @param options - `scale` greater than 1, default `2`; `timeout` for
    *                  waiting until the element is attached.
    */
-  zoom(options?: ZoomOptions): Promise<void>;
+  zoom(options?: ZoomOptions): Promise<Element>;
 
   /**
    * Types text one character at a time.
@@ -315,8 +341,23 @@ export interface Element {
   /** Returns the raw underlying selector string. */
   raw(): Promise<string | null>;
 
-  /** Returns the text content of the element, or `null` if empty. */
+  /**
+   * Returns the text of the element, or `null` when there is none.
+   *
+   * Web: the DOM `textContent` as Playwright returns it (not trimmed).
+   * Platform: the visible text, trimmed. On iOS that is the `label`
+   * attribute, else `value`; for text inputs (text field, secure text
+   * field, text view, search field) `value` comes first, then `label`.
+   * XCUITest's own `getText()` returns `value` first, so a row with a badge
+   * would read as the badge. Other platforms use the driver's `getText()`.
+   */
   textContent(): Promise<string | null>;
+
+  /**
+   * Returns the element's text as {@link textContent} reads it, but never
+   * trimmed, or `null` when there is none.
+   */
+  rawText(): Promise<string | null>;
 
   /**
    * Returns the value of the given HTML attribute, or `null` if absent.
@@ -407,7 +448,7 @@ export interface Element {
  * Type guard that narrows an {@link Element} to a {@link WebElement}.
  * @param el - The element to check.
  */
-export function isWeb(el: Element): boolean {
+export function isWeb(el: Element): el is WebElement {
   return el._type === ElementType.WEB;
 }
 
@@ -415,6 +456,6 @@ export function isWeb(el: Element): boolean {
  * Type guard that narrows an {@link Element} to a {@link PlatformElement}.
  * @param el - The element to check.
  */
-export function isPlatform(el: Element): boolean {
+export function isPlatform(el: Element): el is PlatformElement {
   return el._type === ElementType.PLATFORM;
 }
