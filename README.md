@@ -40,6 +40,8 @@ This package owns **element acquisition + primitive operations only**. Everythin
 
 **Rule of thumb — classify by implementation, not by name.** A method whose body is a single wrapped primitive call is a primitive and stays here (even if it sounds verification-y — e.g., `ElementChain.isPresent()` is just `element.isVisible()` after queue execution). A method that retries, composes, or formats assertion errors is smart and moves to a consumer.
 
+**Waiting is not retrying.** Acquisition waits that give native elements Playwright-equivalent auto-wait (an action waiting for its element to attach, a lookup polling until a match appears) are primitives and live here; retry-on-mismatch is not.
+
 See `@civitas-cerebrum/element-interactions` (web) and `@civitas-cerebrum/singularity-engine` (web + mobile + desktop) for the smart layer.
 
 ## 🏗️ Configuration
@@ -135,7 +137,7 @@ await (await repo.get('submit', 'LoginPage')).click(); // the "ios" LoginPage bl
 If the page exists only for other platforms, the lookup throws (there is no silent fallback to another platform's block):
 
 ```
-Page "LoginPage" has no entry for platform "ios". Available: web, android.
+ElementRepository: page 'LoginPage' has no entry for platform 'ios'. Available: web, android.
 ```
 
 `Available:` lists the platforms that do declare the page, in file order, or `none`. Without an active platform the repository keeps the behaviour of earlier versions: the **first** page with that name wins, and an unknown page throws `ElementRepository: Page '<name>' not found.`. The active platform is held per instance (no global or static state), so repositories for different platforms can be used side by side in one process.
@@ -268,7 +270,7 @@ const repo = new ElementRepository(page, locatorData);
 const repo = new ElementRepository(page, locatorData, 30000);
 
 // Option D: With an options object — active platform and/or timeout
-const repo = new ElementRepository(page, locatorData, { platform: 'web', timeout: 30000 });
+const repo = new ElementRepository(page, locatorData, { platform: 'web', defaultTimeout: 30000 });
 
 // Access the bound driver
 const driver = repo.driver; // returns the Page/Browser passed to the constructor
@@ -400,7 +402,13 @@ const count = await element.action().getCount()
 
 **Extractions (terminal):** `getText()`, `getAttribute(name)`, `getInputValue()`, `getCount()`, `getRaw()`, `isPresent()`
 
-An explicit `options.timeout` on `scrollIntoView`, `swipe`, `longPress`, `tapAt`, `pinch` or `zoom` overrides the chain timeout. The gesture methods wait for the element to be visible first. On platform (Appium) elements, `scrollIntoView` does **not** wait for the element first — an off-screen row of a lazy list is not in the element tree until it has been scrolled to — and `swipe` delegates straight to the element (which waits for attached itself); on web, `scrollIntoView` waits for attached and `swipe` for visible. On platform elements `scrollIntoView` makes up to 20 swipes and `timeout` does **not** bound the sweep, so it can run longer than `timeout`; on web, `timeout` is the Playwright timeout.
+The chain is a sequencer: it does not branch on the backend. What each step waits for:
+
+- `click()` waits for visible, then clicks. `click({ withoutScrolling: true })` waits for attached, then calls `element.click({ withoutScrolling: true })`; `clickIfPresent({ withoutScrolling: true })` passes the option to the click the same way. What the option means per backend is defined on the element (see [Interaction Methods](#interaction-methods)).
+- `scrollIntoView` and `swipe` do **not** wait in the chain; the element waits for itself. Web `scrollIntoView` waits for attached and web `swipe` for visible. Platform `swipe` waits for attached; platform `scrollIntoView` does not wait at all, because an off-screen row of a lazy list is not in the element tree until it has been scrolled to.
+- `longPress`, `tapAt`, `pinch` and `zoom` wait for visible first.
+
+An explicit `options.timeout` on `scrollIntoView`, `swipe`, `longPress`, `tapAt`, `pinch` or `zoom` overrides the chain timeout; otherwise the chain timeout is passed to the element. For platform `scrollIntoView` that timeout also bounds the sweep (see [Gestures and scrolling per platform](#gestures-and-scrolling-per-platform)), so `element.action(10000).scrollIntoView()` stops swiping after 10 s; a chain without a timeout and a call without `options.timeout` is bounded by the 20-swipe limit only.
 
 Assertions (`verifyText`, `verifyPresence`, …) are not part of this package; they live in the consumer packages (see [Package Contract](#-package-contract)).
 
@@ -410,18 +418,19 @@ Assertions (`verifyText`, `verifyPresence`, …) are not part of this package; t
 
 ### ElementRepository
 
-#### `constructor(driver, dataOrPath, options?)`
+#### `constructor(driver, fileOrData, options?)`
 
 | Param | Type | Description |
 |-------|------|-------------|
 | `driver` | `any` | Playwright `Page` or WebdriverIO `Browser` (from `remote()`) |
-| `dataOrPath` | `string \| PageRepository \| PageRepositoryInput` | Path to the JSON file (relative to the working directory) or the parsed data. `PageRepositoryInput` is the shape a typed JSON import produces (`platform` / `frameIndex` as plain strings); those values are checked at runtime. |
-| `options` | `number \| ElementRepositoryOptions` | A number is the default wait timeout in ms (the earlier positional form). An object is `{ platform?, timeout? }`. Omitted: no active platform, timeout `15000`. |
+| `fileOrData` | `string \| PageRepository \| PageRepositoryInput` | Path to the JSON file (relative to the working directory) or the parsed data. `PageRepositoryInput` is the shape a typed JSON import produces (`platform` / `frameIndex` as plain strings); those values are checked at runtime. |
+| `options` | `number \| ElementRepositoryOptions` | A number is the default wait timeout in ms (the earlier positional form). An object is `{ platform?, defaultTimeout? }` (`timeout` is accepted as an alias). Omitted: no active platform, timeout `15000`. |
 
 ```typescript
 interface ElementRepositoryOptions {
-  platform?: Platform;  // the ACTIVE platform of this instance (see Multi-Platform Configuration)
-  timeout?: number;     // default element wait timeout in ms, default 15000
+  platform?: Platform;      // the ACTIVE platform of this instance (see Multi-Platform Configuration)
+  defaultTimeout?: number;  // default element wait timeout in ms, default 15000 (same value setDefaultTimeout() sets)
+  timeout?: number;         // alias of defaultTimeout; when both are given, defaultTimeout wins
 }
 ```
 
@@ -513,12 +522,12 @@ Returns the page's `Platform` (`'web'` when the page has no `platform`). With an
 
 #### Lookup and the active platform
 
-Every method that takes a `pageName` resolves it the same way: with an active platform, the page whose `name` matches and whose `platform` (missing = `web`) equals it, else `Page "<name>" has no entry for platform "<active>". Available: <list>.`; without one, the first page with that name, else `ElementRepository: Page '<name>' not found.`
+Every method that takes a `pageName` resolves it the same way: with an active platform, the page whose `name` matches and whose `platform` (missing = `web`) equals it, else `ElementRepository: page '<name>' has no entry for platform '<active>'. Available: <list>.`; without one, the first page with that name, else `ElementRepository: Page '<name>' not found.`
 
 #### Selection strategies on platform pages
 
 - **Default (no strategy)** resolves the **first match**. `count()` and `all()` on that element return at most 1 — use `getAll()` or `SelectionStrategy.ALL` to count or iterate every match.
-- **`TEXT`** picks its match eagerly: it fetches every match of the selector and compares each one's **own** text as the driver reports it through `getText()` — not the text of its descendants, as Playwright's `filter({ hasText })` does on web. The selector must therefore target the text-bearing element itself (the label or cell title), not a container around it. An exact (trimmed) match wins; otherwise the first case-insensitive, whitespace-normalised "contains" match. It polls until a match appears or the full timeout elapses, then throws `Element '<el>' on '<page>' with text "<value>" not found.` Fatal driver errors (invalid selector, dead session, lost connection) are rethrown at once. `all()` / `count()` on the result re-query the selector and return every match.
+- **`TEXT`** picks its match eagerly: it fetches every match of the selector and compares each one's **own** text, read with the same rule as `textContent()` (see [Platform elements](#platform-elements-platformelement): on iOS `label`, else `value`; elsewhere the driver's `getText()`) — not the text of its descendants, as Playwright's `filter({ hasText })` does on web. The selector must therefore target the text-bearing element itself (the label or cell title), not a container around it. An exact (trimmed) match wins; otherwise the first case-insensitive, whitespace-normalised "contains" match. It polls until a match appears or the full timeout elapses, then throws `Element '<el>' on '<page>' with text "<value>" not found.` Fatal driver errors (invalid selector, dead session, lost connection) are rethrown at once. `all()` / `count()` on the result re-query the selector and return every match.
 - A blank `TEXT` value throws `options.value is required when using SelectionStrategy.TEXT` (web and platform).
 - Enhanced `role` + `name` and regex `text` selectors on platform pages support only the default and `ALL`; any other strategy throws.
 
@@ -537,7 +546,7 @@ All `get*` methods return an `Element` — a platform-agnostic interface wrappin
 
 | Method | Description |
 |--------|-------------|
-| `click(options?)` | Clicks the element. Returns `Promise<Element>`. |
+| `click(options?)` | Clicks the element. `options`: `ClickOptions` = `{ withoutScrolling?: boolean; timeout? }` (see below). Returns `Promise<Element>`. |
 | `fill(text, options?)` | Clears and fills with text. Returns `Promise<Element>`. |
 | `clear(options?)` | Clears the element's value. Returns `Promise<Element>`. |
 | `check(options?)` | Checks a checkbox/radio. Returns `Promise<Element>`. |
@@ -547,21 +556,26 @@ All `get*` methods return an `Element` — a platform-agnostic interface wrappin
 | `scrollIntoView(options?)` | Scrolls into view. `options`: `{ direction?: 'up' \| 'down' \| 'left' \| 'right'; timeout? }`. Returns `Promise<Element>`. |
 | `swipe(direction, options?)` | Swipes from the element centre. `options`: `{ distance?; timeout? }`. Returns `Promise<Element>`. |
 | `pressSequentially(text, delay?, options?)` | Types character by character. Returns `Promise<Element>`. |
-| `longPress(options?)` | Presses and holds on the element centre. `options`: `{ duration?: number; timeout? }`, `duration` in ms, default `1000`. Returns `Promise<void>`. |
-| `tapAt(offset, options?)` | Taps at `{ x, y }` px from the element's top-left corner; `0 <= x < width`, `0 <= y < height`. Returns `Promise<void>`. |
-| `pinch(options?)` | Two-finger pinch (fingers together). `options`: `{ scale?: number; timeout? }`, `scale` in (0, 1), default `0.5`. **Platform only.** Returns `Promise<void>`. |
-| `zoom(options?)` | Two-finger zoom (fingers apart). `options`: `{ scale?: number; timeout? }`, `scale` > 1, default `2`. **Platform only.** Returns `Promise<void>`. |
-| `setInputFiles(filePath, options?)` | Sets file input value. **Web only.** |
-| `dispatchEvent(event)` | Dispatches a DOM event. **Web only.** |
+| `longPress(options?)` | Presses and holds on the element centre. `options`: `{ duration?: number; timeout? }`, `duration` in ms, default `1000`. Returns `Promise<Element>`. |
+| `tapAt(offset, options?)` | Taps at `{ x, y }` px from the element's top-left corner; `0 <= x < width`, `0 <= y < height`. Returns `Promise<Element>`. |
+| `pinch(options?)` | Two-finger pinch (fingers together). `options`: `{ scale?: number; timeout? }`, `scale` in (0, 1), default `0.5`. **Platform only.** Returns `Promise<Element>`. |
+| `zoom(options?)` | Two-finger zoom (fingers apart). `options`: `{ scale?: number; timeout? }`, `scale` > 1, default `2`. **Platform only.** Returns `Promise<Element>`. |
+| `setInputFiles(filePath, options?)` | Sets file input value. **Web only.** Returns `Promise<Element>`. |
+| `dispatchEvent(event)` | Dispatches a DOM event. **Web only.** Returns `Promise<Element>`. |
 
-All interaction methods accept an optional `{ timeout?: number }`; the ones returning `Promise<Element>` return the element for simple chaining.
+All interaction methods accept an optional `{ timeout?: number }` and return the element for simple chaining.
+
+**`click({ withoutScrolling: true })`** clicks without scrolling the element into view first:
+
+- **Web:** waits for the element to be attached, then dispatches a DOM `click` event on it — no scrolling and no actionability checks.
+- **Platform (Appium):** the option changes nothing. A platform click is always the plain WebDriver element click, which taps the element where it is and never scrolls.
 
 #### Gestures and scrolling per platform
 
 | Method | Platform (Appium) element | Web (Playwright) element |
 |--------|---------------------------|--------------------------|
-| `scrollIntoView` | Sweeps the screen in **one** direction until the element is displayed, up to 20 swipes, then throws. `timeout` does not bound the sweep (each swipe is about 0.9 s of gesture time, more on a real device). `direction` says where the target is: `'down'` (default) reveals content below, `'up'` above, `'left'` / `'right'` to that side. No bidirectional mode — call it twice if the position is unknown. | The browser scrolls whatever is needed; `direction` is ignored; `timeout` is the Playwright timeout. |
-| `swipe` | W3C touch pointer from the element centre (window centre when the driver reports no rect); default distance ~50% of the window in that axis; the start point must be inside the window and the end point is clamped to it (`[0, width-1]` x `[0, height-1]`). | Mouse drag from the element centre. |
+| `scrollIntoView` | Sweeps the screen in **one** direction until the element is displayed, up to 20 swipes, then throws (each swipe is about 0.9 s of gesture time: 100 ms hold, 600 ms move, 200 ms settle; more on a real device). An explicit `timeout` also bounds the sweep: no new swipe starts once that many ms have passed, so the call can overrun it by at most one swipe. Without a timeout only the 20-swipe limit applies. The error names the bound that was hit. It does not wait for the element to attach first. `direction` says where the target is: `'down'` (default) reveals content below, `'up'` above, `'left'` / `'right'` to that side. No bidirectional mode — call it twice if the position is unknown. | The browser scrolls whatever is needed; `direction` is ignored; `timeout` is the Playwright timeout. |
+| `swipe` | Waits for attached, then sends a W3C touch pointer from the element centre (window centre when the driver reports no rect); default distance ~50% of the window in that axis; the start point must be inside the window and the end point is clamped to it (`[0, width-1]` x `[0, height-1]`). | Waits for visible, then a mouse drag from the element centre. |
 | `longPress` | One W3C touch pointer: down, pause `duration`, up. | Scrolls into view, checks the element itself (not a cover over it) receives the pointer, then holds the primary mouse button for `duration`. |
 | `tapAt` | W3C touch tap at the point. | Playwright `click({ position })`. |
 | `pinch` / `zoom` | Two W3C touch pointers on the horizontal axis through the element centre (fingers 40% of the element width from the centre, never closer than 10 px; outer positions clamped to the window). | Throw `PlatformNotSupportedError` (`"pinch" is not supported on platform "web".`). |
@@ -575,7 +589,8 @@ On platform elements, gestures and swipes use **native-context viewport coordina
 - `locateChild(selector)` searches inside the parent's match (WebdriverIO `parent.$` / `parent.$$`), honouring the parent's index: the child of `nth(2)` searches inside the third match. It is lazy, and every child is polled with `$$`: actions wait up to their `timeout`, and reads up to the element's default timeout, for the parent and the child, then fail naming the missing element (`parent "<selector>" not found`, `no element matches "<child>" inside "<parent>"`, or the parent's out-of-range error). A child of a missing parent has `count()` 0 and `isVisible()` / `exists()` `false`, without waiting.
 - `filter({ hasText })` throws `PlatformNotSupportedError` (`"filter" is not supported on platform "<platform>".`) — WebdriverIO has no lazy text filter; use the `TEXT` selection strategy instead. An empty filter returns the element unchanged.
 - `setInputFiles` and `dispatchEvent` throw `PlatformNotSupportedError` naming the element's platform.
-- `textContent()` returns the element's own text from the driver's `getText()`.
+- `textContent()` returns the element's own visible text, trimmed, or `null`. On iOS it reads the `label` attribute, then `value`; for text inputs (`XCUIElementTypeTextField`, `SecureTextField`, `TextView`, `SearchField`) it reads `value` first, then `label`. (XCUITest's own `getText()` returns `value` first, so a Settings row with a badge would read as the badge count.) On Android and other platforms it is the driver's `getText()`. `rawText()` returns the same text untrimmed. The `TEXT` selection strategy and `getByText` use the same rule.
+- `getTagName()` throws for a missing element (as on web). `exists()` returns `false` for a missing element but rethrows a fatal driver error (see `isFatalDriverError` below).
 
 #### State, Extraction, Querying, and Waiting
 
@@ -585,7 +600,8 @@ On platform elements, gestures and swipes use **native-context viewport coordina
 | `isEnabled()` | Returns `true` if enabled. |
 | `isChecked()` | Returns `true` if checked. |
 | `raw()` | Returns the selector string. |
-| `textContent()` | Returns text content or `null`. |
+| `textContent()` | Returns text content or `null` (web: untrimmed DOM `textContent`; platform: trimmed, see above). |
+| `rawText()` | Returns the text as `textContent()` reads it, never trimmed, or `null`. |
 | `getAttribute(name)` | Returns attribute value or `null`. |
 | `inputValue()` | Returns current input value. |
 | `count()` | Returns matched element count. |
@@ -614,7 +630,7 @@ familyOf('web');           // 'playwright'
 familyOf('android');       // 'appium' (ios, macos, windows too)
 ```
 
-`familyOf` throws `Unknown platform '<value>'. Expected one of: web, android, ios, macos, windows.` for a value outside `PLATFORMS`. `macos` and `windows` are declared (they belong to the `appium` family) but desktop support is **not implemented yet**: their pages use the base Appium selector table, with no desktop-specific behaviour.
+`familyOf` throws `ElementRepository: unknown platform '<value>'. Expected one of: web, android, ios, macos, windows.` for a value outside `PLATFORMS`. `macos` and `windows` are declared (they belong to the `appium` family) but desktop support is **not implemented yet**: their pages use the base Appium selector table, with no desktop-specific behaviour.
 
 ### `PlatformNotSupportedError`
 
@@ -636,23 +652,46 @@ try {
 
 This package holds the only definition of the class; consumer packages re-export it, so `instanceof` works across packages.
 
+### Helpers for consumer packages
+
+Consumer packages import these instead of keeping their own copies, so screen-level gestures and error handling behave exactly like the element primitives:
+
+| Export | What it is |
+|--------|------------|
+| `isFatalDriverError(error)` | `true` for a WebDriver / WebdriverIO error that no polling can fix: an invalid selector or argument, an unknown command or unsupported operation, or a session, window or connection that is gone. Every other error (`no such element`, `stale element reference`, anything unrecognised) counts as a transient missing element. The platform element and the repository's polling lookups use this rule. |
+| `SWIPE_HOLD_MS`, `SWIPE_MOVE_MS`, `SWIPE_SETTLE_MS` | Swipe timing in ms: `100` hold after finger down, `600` travel, `200` settle pause before the next read. |
+| `buildTouchSwipe(from, to)` | The W3C touch action sequence of a one-finger swipe (move, down, hold, move, up), coordinates rounded. |
+| `performTouchActions(driver, sources)` | Sends W3C pointer sources with `performActions` and always calls `releaseActions`; a release error never masks the gesture's own error. |
+| `performTouchSwipe(driver, from, to)` | `buildTouchSwipe` sent through `performTouchActions`. It does not pause afterwards; wait `SWIPE_SETTLE_MS` before reading the screen. |
+| `touchPointers(fingers)` | Wraps per-finger action lists as touch pointer sources `finger1`, `finger2`, … |
+| `TouchPoint`, `TouchAction`, `TouchPointerSource` | Types of the touch helpers. Coordinates are native-context viewport coordinates. |
+| `ClickOptions`, `ScrollIntoViewOptions`, `SwipeDirection`, `SwipeOptions`, `LongPressOptions`, `TapOffset`, `TapAtOptions`, `PinchOptions`, `ZoomOptions` | Option and direction types of the `Element` primitives. |
+| `isWeb(el)`, `isPlatform(el)` | Type guards that narrow an `Element` to `WebElement` / `PlatformElement`. |
+
 ### 🔧 Type Safety
 
+`isWeb` and `isPlatform` are type guards, so no cast is needed after them:
+
 ```typescript
-import { Element, isWeb, isPlatform } from '@civitas-cerebrum/element-repository';
+import { isWeb, isPlatform } from '@civitas-cerebrum/element-repository';
 
 const el = await repo.get('submitButton', 'LoginPage');
 
 if (isWeb(el)) {
-  // Access the underlying Playwright Locator
-  await (el as WebElement).locator.click();
+  // el is a WebElement: the underlying Playwright Locator
+  await el.locator.click();
 }
 
 if (isPlatform(el)) {
-  // Access the WebDriverIO selector
-  console.log((el as PlatformElement).selector);
+  // el is a PlatformElement: the WebdriverIO selector and driver
+  console.log(el.selector);
 }
 ```
+
+**Two meanings of "platform".** The word names two different things in this API; neither is renamed, to avoid another break:
+
+- **The `Platform` type** (`'web' | 'android' | 'ios' | 'macos' | 'windows'`) is the platform a page block or a test run targets. It **includes `web`**: `getPagePlatform()` returns `'web'` for a web page, and `isPlatformName('web')` is `true`.
+- **`PlatformElement`, `isPlatform(el)` and `ElementType.PLATFORM`** mean the **non-web backend**: an element driven through WebdriverIO / Appium. A web element is never a `PlatformElement`, so `isPlatform(webElement)` is `false`.
 
 ## ⚠️ Breaking Changes (v0.4.0)
 
@@ -669,11 +708,26 @@ if (isPlatform(el)) {
 | `PlatformElement.filter(...)` with any criterion throws `PlatformNotSupportedError` (it used to return the element unchanged, ignoring the filter). | Use `SelectionStrategy.TEXT` (or `getByText`) instead. An empty filter still returns the element. |
 | `PlatformElement.first()` / `nth(i)` index for real (they used to return the element unchanged). Actions wait for the match, then throw when the index is out of range; `nth(k)` with `k` other than `0` / `-1` on an element that is already a single match matches nothing. | Check calls that relied on `nth(i)` being a no-op: pass the index you mean, call `nth` on the multi-match element (e.g. from `ALL`), or use `getAll()`. |
 | `PlatformElement.locateChild(selector)` searches inside the parent's match, honouring its index (it used to search the whole screen). | Write child selectors relative to the parent, or look the element up on its own when it lies outside the parent. |
-| The `Element` interface has new required methods `longPress`, `tapAt`, `pinch` and `zoom`. | Custom `Element` implementations and test mocks must add them (a stub that throws is enough where unused). |
+| The `Element` interface has new required methods `longPress`, `tapAt`, `pinch` and `zoom` (each returns `Promise<Element>`) and `rawText`. | Custom `Element` implementations and test mocks must add them (a stub that throws is enough where unused). |
 | `PlatformElement.setInputFiles` / `dispatchEvent` throw `PlatformNotSupportedError` (`"<method>" is not supported on platform "<platform>".`) instead of a plain `Error` (`<method> is not supported on platform elements.`). | Update assertions on the message; catch `PlatformNotSupportedError` to tell these apart. |
-| The optional `webdriverio` peer is `^10` (was `^9.27.0`). WebdriverIO 10 needs Node.js `>=22.23.4 <23`, `>=24.22.1 <25` or `>=26.12.1`. | Upgrade WebdriverIO to 10 and Node.js to a supported version. |
+| `PlatformElement.getTagName()` throws for a missing element (it returned `''`). | Check `exists()` first, or catch the error, where a missing element is expected. |
+| `PlatformElement.exists()` rethrows fatal driver errors — invalid selector, dead session, lost connection (see `isFatalDriverError`) — instead of returning `false` for every error. A missing element is still `false`. | Fix the selector or session; catch the error only if a broken session really should read as "not there". |
+| On iOS, `PlatformElement.textContent()` reads the `label` attribute first, then `value` (text inputs: `value` first). It used WebdriverIO `getText()`, which returns `value` first, so a row with a badge read as the badge. The `TEXT` strategy and `getByText` now compare the same text. | Check iOS text assertions and `TEXT` values: use the label the user sees. Read `getAttribute('value')` where you need the value. |
+| `PlatformElement.scrollIntoView({ timeout })` stops sweeping once `timeout` ms have passed (no new swipe starts after the deadline) and throws; it used to ignore `timeout` and stop only at the 20-swipe limit. | Pass a `timeout` large enough for the swipes you need, or omit it to keep the 20-swipe limit only. |
+| `ElementChain.scrollIntoView()` no longer waits for the element to attach before scrolling; the element does its own waiting. On platform elements it starts swiping at once (it waited for attach first), and the chain timeout, which it passes on, now bounds the sweep (row above). | None for most callers. Add `.waitForState('attached')` before it if you relied on the wait. |
+| `ElementChain.click({ withoutScrolling: true })` and `clickIfPresent({ withoutScrolling: true })` call `element.click({ withoutScrolling: true })` instead of `dispatchEvent('click')`. On platform elements they now click (they threw, because platform elements have no `dispatchEvent`). Web behaviour is unchanged (a dispatched DOM `click`). | None, unless you relied on the platform error. |
+| The exported `APPIUM_FORMATTERS.id` returns `~v` (accessibility id) instead of `#v`; `ANDROID_FORMATTERS.id` and `IOS_FORMATTERS.id` have their own rules (see the `id` row above). | Code that calls the formatter tables directly: expect the new output, or format the selector yourself. |
+| Error messages of platform `boundingBox()`, `screenshot()` and `getCssProperty()` changed. `boundingBox()`: `boundingBox() could not read the element rect: <driver error>` (was `boundingBox() is not supported on this platform driver`). `screenshot()` and `getCssProperty()` keep their text and append `: <driver error>`. | Update assertions on these messages. |
+| The optional `webdriverio` peer is `^10` (was `^9.27.0`). The package is built and tested against WebdriverIO 10 only: its wire tests drive a real WebdriverIO 10 client, and its first-match lookups are written for WebdriverIO 10's `$`, which is strict by default (it throws when a selector matches more than once). WebdriverIO 9 is not supported. WebdriverIO 10 needs Node.js `>=22.23.4 <23`, `>=24.22.1 <25` or `>=26.12.1`. | Upgrade WebdriverIO to 10 and Node.js to a supported version. |
 
-Not breaking, but new: the third constructor argument also takes `{ platform?, timeout? }`; with an active platform, lookups use the page block for that platform only (see [Multi-Platform Configuration](#multi-platform-configuration)).
+Not breaking, but new: the third constructor argument also takes `{ platform?, defaultTimeout? }` (`timeout` is an accepted alias); with an active platform, lookups use the page block for that platform only (see [Multi-Platform Configuration](#multi-platform-configuration)). `click` takes `ClickOptions` (`ElementActionOptions` plus `withoutScrolling`), a compatible widening.
+
+## 🧪 Development
+
+- `npm test` runs every spec with the Playwright runner (`npx playwright test`); `npx tsc --noEmit` type-checks `src`.
+- `webdriverio` is a devDependency: the wire tests (`tests/platform-wdio10-wire.spec.ts`) drive a real WebdriverIO 10 client against a local fake WebDriver server. There is no `.npmrc`: both peers (`@playwright/test`, `webdriverio`) are also devDependencies, so an `omit=peer` setting would not keep either out of the install.
+- `tests/*.check.ts` are type-only fixtures. They are not run as tests; specs compile them with the TypeScript compiler API and assert the result.
+- The live device spec lives in `tests/live/`. Its device tests are skipped unless `LIVE_IOS=1`, `APPIUM_URL` (the server URL including its base path) and `CAPABILITIES` (path to a W3C capabilities JSON file; see `tests/live/capabilities.ios.example.json`) are set. Run it with `npx playwright test tests/live/` — the trailing slash matters, because the filter `tests/live` also matches `tests/live-element-location.spec.ts`.
 
 ## ⚠️ Breaking Changes (v0.1.0)
 

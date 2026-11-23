@@ -24,8 +24,9 @@
 
 ## Setup
 ```ts
-// Constructor: (driver, pathOrData: string | PageRepository | PageRepositoryInput, options?: number | { platform?: Platform; timeout?: number })
+// Constructor: (driver, fileOrData: string | PageRepository | PageRepositoryInput, options?: number | { platform?: Platform; defaultTimeout?: number; timeout?: number })
 // driver = Playwright Page (web) or WebdriverIO Browser from remote() (android/ios). A number = timeout ms. Default timeout 15000.
+// `timeout` is an alias of `defaultTimeout`; when both are given, `defaultTimeout` wins.
 const repo = new ElementRepository(page, 'tests/data/page-repository.json', 15000);
 ```
 
@@ -42,7 +43,7 @@ const login = await repo.get('login', 'HomePage');                     // Elemen
 - `get(elementName, pageName, options?: ElementResolutionOptions): Promise<Element>` — first match by default. `options`: `{ strategy?: SelectionStrategy, value?, attribute?, index?, timeout? }`; `SelectionStrategy` = `INDEX` / `TEXT` / `ATTRIBUTE` / `RANDOM` / `ALL` (an unhandled one, e.g. `VALUE`, throws).
 - `getAll(elementName, pageName): Promise<Element[]>` — every match.
 - `getRandom(elementName, pageName, strict?): Promise<Element | null>` — random match (waits for one to be visible).
-- `getByText(elementName, pageName, desiredText, strict?): Promise<Element | null>` — trimmed `textContent()` exact match first, then contains.
+- `getByText(elementName, pageName, desiredText, strict?): Promise<Element | null>` — trimmed `textContent()` exact match first, then contains (platform: the text rule under PlatformElement).
 - `getByAttribute(elementName, pageName, attribute, value, options?: { exact?: boolean; strict?: boolean }): Promise<Element | null>` — `exact` omitted: exact then contains.
 - `getByIndex(elementName, pageName, index, strict?): Promise<Element | null>` — zero-based; out of range → `null` (or throws if strict).
 - `getVisible(elementName, pageName, strict?): Promise<Element | null>` — first match with `isVisible()`.
@@ -58,7 +59,8 @@ const login = await repo.get('login', 'HomePage');                     // Elemen
 - Lookup errors: unknown element → `ElementRepository: Element '<el>' not found on page '<page>'.`; unknown page → see Platforms (Lookup rule).
 
 ## Platforms (0.4.0+)
-- **Vocabulary:** `type Platform = 'web' | 'android' | 'ios' | 'macos' | 'windows'`; `type DriverFamily = 'playwright' | 'appium'`; `PLATFORMS` (frozen array); `isPlatformName(v)` (exact, case-sensitive); `familyOf(p)` — `web` → `playwright`, rest → `appium`. `macos` / `windows` are declared, not implemented yet (base Appium formatters).
+- **Vocabulary:** `type Platform = 'web' | 'android' | 'ios' | 'macos' | 'windows'`; `type DriverFamily = 'playwright' | 'appium'`; `PLATFORMS` (frozen array); `isPlatformName(v)` (exact, case-sensitive); `familyOf(p)` — `web` → `playwright`, rest → `appium`; an unknown value (in `familyOf` or the constructor's `options.platform`) throws `ElementRepository: unknown platform '<v>'. Expected one of: web, android, ios, macos, windows.` `macos` / `windows` are declared, not implemented yet (base Appium formatters).
+- **Two meanings of "platform":** the `Platform` type is the page/run platform and INCLUDES `web`. `PlatformElement`, `isPlatform(el)`, `ElementType.PLATFORM` mean the non-web (WebdriverIO/Appium) backend: `isPlatform(webElement)` is `false`.
 - **JSON:** one file may hold the same page `name` once per platform. `"platform"` missing = `web`. Same `elementName` per logical element on every platform. Invalid platform (e.g. `"mobile"`), duplicate `name`+`platform`, or `frameIndex` other than `"first"`/`"last"`/integer → constructor throws `ElementRepository: invalid repository — ...`.
 ```json
 { "pages": [
@@ -72,20 +74,24 @@ const login = await repo.get('login', 'HomePage');                     // Elemen
 const repo = new ElementRepository(driver, 'tests/data/page-repository.json', { platform: 'ios' });
 const submit = await repo.get('submit', 'LoginPage'); // the "ios" LoginPage block
 ```
-- **Lookup rule:** active platform set → page with matching `name` AND `(platform ?? 'web') === active`, else throws `Page "<name>" has no entry for platform "<active>". Available: <list>.` (`<list>` = platforms declaring the page, or `none`). No active platform → first page with that name, else `ElementRepository: Page '<name>' not found.` No cross-platform fallback; no global state.
+- **Lookup rule:** active platform set → page with matching `name` AND `(platform ?? 'web') === active`, else throws `ElementRepository: page '<name>' has no entry for platform '<active>'. Available: <list>.` (`<list>` = platforms declaring the page, or `none`). No active platform → first page with that name, else `ElementRepository: Page '<name>' not found.` No cross-platform fallback; no global state.
 - **Selector keys on platform pages:** `accessibility id` (`~v`), `id`, `xpath`, `class name`, `uiautomator` (`android=v`), `predicate` (`-ios predicate string:v`), `class chain` (`-ios class chain:v`), `text`, enhanced `role` + `name`.
   - `id`: android → `id=v` (resource-id; a short id gets the app package prefix); ios → predicate `name == "v"`; macos/windows → `~v`. Never CSS.
   - `text`: android → `UiSelector().text("v")` (only `"` escaped; a value ending in `\` cannot be expressed — the formatter throws and points to `xpath`); ios → predicate `label == "v"`.
-- **Strategies on platform pages:** default = first match (`count()`/`all()` on it return at most 1; use `getAll` / `SelectionStrategy.ALL` to count). `TEXT` compares each match's OWN `getText()` (the selector must target the text-bearing element), exact then case-insensitive contains, polls up to the full timeout. A blank `TEXT` value throws (web too).
+- **Strategies on platform pages:** default = first match (`count()`/`all()` on it return at most 1; use `getAll` / `SelectionStrategy.ALL` to count). `TEXT` compares each match's OWN text, read with the `textContent()` rule (see PlatformElement; the selector must target the text-bearing element), exact then case-insensitive contains, polls up to the full timeout. A blank `TEXT` value throws (web too).
 - **Fallback:** primary not attached within `options.timeout ?? defaultTimeout`, or primary throws during resolution (platform TEXT, ATTRIBUTE / RANDOM / INDEX with no match) → walks `selector.fallback`; if the whole chain fails, the primary's error is rethrown.
-- **Element primitives (new):**
+- **Element primitives:** every interaction takes an optional `{ timeout? }` and returns `Promise<Element>` (the element itself), gestures included.
+  - `click({ withoutScrolling?, timeout? })` (`ClickOptions`) — `withoutScrolling` on web: wait attached, then dispatch a DOM `click` (no scrolling, no actionability checks); on platform it changes nothing: a platform click is always the plain WebDriver element click, which never scrolls.
   - `longPress({ duration = 1000, timeout? })` — platform: touch down / pause / up; web: mouse hold.
   - `tapAt({ x, y }, { timeout? })` — px from the top-left, inside the bounds; web: `click({ position })`.
   - `pinch({ scale = 0.5, timeout? })` — scale in (0, 1); `zoom({ scale = 2, timeout? })` — scale > 1. Platform only; web throws `PlatformNotSupportedError`.
-  - `scrollIntoView({ direction = 'down', timeout? })` — platform: one-direction sweep, max 20 swipes, and `timeout` does NOT bound the sweep; web ignores `direction` and `timeout` is the Playwright timeout. `swipe(direction, { distance?, timeout? })` — platform: end point clamped to the window `[0, width-1]` x `[0, height-1]`, start point unchanged.
+  - `scrollIntoView({ direction = 'down', timeout? })` — platform: no attach wait, one-direction sweep, max 20 swipes; an explicit `timeout` also bounds it (no new swipe after the deadline, so it can overrun by one swipe); without one only the swipe limit applies. Web ignores `direction` and `timeout` is the Playwright timeout. `swipe(direction, { distance?, timeout? })` — platform: waits attached, end point clamped to the window `[0, width-1]` x `[0, height-1]`, start point unchanged; web: waits visible.
   - Platform gestures and swipe use native-context viewport coordinates; the point must be inside the window (scroll first).
-  - `ElementChain` has `scrollIntoView(options?)`, `swipe(direction, options?)`, `longPress`, `tapAt`, `pinch`, `zoom`.
+  - `ElementChain` has `scrollIntoView(options?)`, `swipe(direction, options?)`, `longPress`, `tapAt`, `pinch`, `zoom`. It never branches on the backend: `scrollIntoView` / `swipe` do not wait in the chain (the element waits for itself); the four gestures wait for visible first; `click({ withoutScrolling })` waits attached and passes the option to `element.click`, as `clickIfPresent({ withoutScrolling })` does. An explicit `options.timeout` overrides the chain timeout; otherwise the chain timeout is passed on (and bounds a platform sweep).
 - **PlatformElement:** `first()` / `nth(i)` index for real, lazily (negative counts from the end; non-integer throws). `first()` / `nth(0)` use WebdriverIO `$` and its waiting (except on a `locateChild` child, which is always polled with `$$`); other indexes poll `$$`: actions wait up to their `timeout`, reads up to the default timeout, then throw `nth(<i>): no element at that index for "<selector>" (found <n>)`; `isVisible()` / `exists()` do not wait (`false`). On an already-single match (from `first`/`nth`/`all()`): `first()`, `nth(0)`, `nth(-1)` return itself; any other index matches nothing (`count()` 0, `exists()` / `isVisible()` false, actions and reads fail at once with `nth(<i>): "<selector>" is already a single match, so this index matches nothing`). `locateChild(sel)` searches inside the parent's match, honouring its index; every child is polled: actions wait up to their `timeout`, reads up to the default timeout, then fail naming the missing element (`parent "<selector>" not found`, `no element matches "<child>" inside "<parent>"`, or the parent's out-of-range error); a child of a missing parent has `count()` 0 and `isVisible()` / `exists()` false without waiting. `filter({ hasText })` (any criterion), `setInputFiles`, `dispatchEvent` throw `PlatformNotSupportedError`; an empty filter returns the element.
+- **Platform text:** `textContent()` = trimmed visible text or `null`. iOS: `label`, then `value`; text inputs (TextField, SecureTextField, TextView, SearchField) `value` first, then `label`. Android/other: driver `getText()`. `rawText()` = same, untrimmed (web: DOM `textContent`). The `TEXT` strategy and `getByText` use the same rule.
+- **Platform errors:** `getTagName()` throws for a missing element. `exists()` is `false` for a missing element but rethrows fatal driver errors (`isFatalDriverError`).
 - **Errors:** `class PlatformNotSupportedError extends Error { method: string; platform: Platform }`, message `"<method>" is not supported on platform "<platform>".` Single definition; consumer packages re-export it.
-- **Peer:** optional `webdriverio ^10` (Node `>=22.23.4 <23 || >=24.22.1 <25 || >=26.12.1`).
+- **Exports for consumers (use, do not copy):** `isFatalDriverError(err)` (invalid selector/argument, unknown command, unsupported operation, gone session/window/connection = fatal; everything else transient); touch helpers `SWIPE_HOLD_MS` (100), `SWIPE_MOVE_MS` (600), `SWIPE_SETTLE_MS` (200), `buildTouchSwipe(from, to)`, `performTouchActions(driver, sources)` (always releases), `performTouchSwipe(driver, from, to)` (no settle pause), `touchPointers(fingers)`, types `TouchPoint`, `TouchAction`, `TouchPointerSource`; option/direction types `ClickOptions`, `ScrollIntoViewOptions`, `SwipeDirection`, `SwipeOptions`, `LongPressOptions`, `TapOffset`, `TapAtOptions`, `PinchOptions`, `ZoomOptions`; type guards `isWeb(el)`, `isPlatform(el)`.
+- **Peer:** optional `webdriverio ^10` only (built and tested against 10; 9 is not supported). Node `>=22.23.4 <23 || >=24.22.1 <25 || >=26.12.1`.
 
