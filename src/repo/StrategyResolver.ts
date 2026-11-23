@@ -341,13 +341,18 @@ export class StrategyResolver {
       let raws: any[] = [];
       try { raws = Array.from((await driver.$$(selector)) ?? []); } catch (err) { remember(err); raws = []; }
 
+      // An exact match wins, so the first one ends the reads; otherwise the
+      // texts read are kept for the "contains" fallback.
       const texts: Array<string | null> = [];
+      let index = -1;
       for (const raw of raws) {
         if (texts.length > 0 && Date.now() >= deadline) break;
-        try { texts.push(((await readPlatformText(raw, textPlatform)) ?? '').trim()); } catch (err) { remember(err); texts.push(null); }
+        let text: string | null;
+        try { text = ((await readPlatformText(raw, textPlatform)) ?? '').trim(); } catch (err) { remember(err); text = null; }
+        texts.push(text);
+        if (text !== null && text === wanted) { index = texts.length - 1; break; }
       }
 
-      let index = texts.findIndex(t => t !== null && t === wanted);
       if (index < 0) index = texts.findIndex(t => t !== null && normalise(t).includes(wantedNorm));
       if (index >= 0) return new PlatformElement(driver, selector, raws[index], timeout, { platform });
 

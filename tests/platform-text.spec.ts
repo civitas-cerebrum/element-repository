@@ -170,3 +170,102 @@ test.describe('platform text lookups on ios', () => {
     expect(await el!.textContent()).toBe('General');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Driver round trips of an iOS text read
+// ---------------------------------------------------------------------------
+
+/** A {@link nativeElement} that records each driver read as `<id>:tag`, `<id>:label`, `<id>:value` or `<id>:text`. */
+function countingElement(id: string, fields: NativeFields, reads: string[]): any {
+  const el = nativeElement(id, fields);
+  return {
+    ...el,
+    getTagName: async () => { reads.push(`${id}:tag`); return el.getTagName(); },
+    getAttribute: async (name: string) => { reads.push(`${id}:${name}`); return el.getAttribute(name); },
+    getText: async () => { reads.push(`${id}:text`); return el.getText(); },
+  };
+}
+
+test.describe('readPlatformText round trips on ios', () => {
+  test('a row with a label: type and label only (2 reads)', async () => {
+    const reads: string[] = [];
+    expect(await readPlatformText(countingElement('a', { label: 'General', value: '1' }, reads), 'ios')).toBe('General');
+    expect(reads.sort()).toEqual(['a:label', 'a:tag']);
+  });
+
+  test('a text input: type, label and value (3 reads)', async () => {
+    const reads: string[] = [];
+    const el = countingElement('a', { type: 'XCUIElementTypeTextField', label: 'Name', value: 'typed' }, reads);
+    expect(await readPlatformText(el, 'ios')).toBe('typed');
+    expect(reads.sort()).toEqual(['a:label', 'a:tag', 'a:value']);
+  });
+
+  for (const label of ['', '   ', null]) {
+    test(`a row whose label is ${JSON.stringify(label)} also reads value (3 reads)`, async () => {
+      const reads: string[] = [];
+      expect(await readPlatformText(countingElement('a', { label, value: 'On' }, reads), 'ios')).toBe('On');
+      expect(reads.sort()).toEqual(['a:label', 'a:tag', 'a:value']);
+    });
+  }
+
+  test('results are unchanged when neither attribute has text', async () => {
+    const reads: string[] = [];
+    expect(await readPlatformText(countingElement('a', { label: '  ', value: '' }, reads), 'ios')).toBe('  ');
+    expect(await readPlatformText(countingElement('b', { label: null, value: '' }, reads), 'ios')).toBe('');
+    expect(await readPlatformText(countingElement('c', { label: null, value: null }, reads), 'ios')).toBeNull();
+    const input = { type: 'XCUIElementTypeSearchField' };
+    expect(await readPlatformText(countingElement('d', { ...input, label: '', value: ' ' }, reads), 'ios')).toBe(' ');
+    expect(await readPlatformText(countingElement('e', { ...input, label: '', value: null }, reads), 'ios')).toBe('');
+  });
+
+  test('android: one getText() read', async () => {
+    const reads: string[] = [];
+    expect(await readPlatformText(countingElement('a', { text: 'Wi-Fi' }, reads), 'android')).toBe('Wi-Fi');
+    expect(reads).toEqual(['a:text']);
+  });
+});
+
+test.describe('platform text lookups stop reading early', () => {
+  function rows(reads: string[]): any[] {
+    return [
+      countingElement('wifi', { label: 'Wi-Fi', value: 'Home' }, reads),
+      countingElement('general-tab', { label: 'General settings', value: '' }, reads),
+      countingElement('general', { label: 'General', value: '1' }, reads),
+      countingElement('privacy', { label: 'Privacy', value: '' }, reads),
+    ];
+  }
+
+  test('the TEXT strategy stops at the first exact match, and exact still wins over an earlier contains match', async () => {
+    const reads: string[] = [];
+    const raws = rows(reads);
+    const repo = new ElementRepository(driverOf(raws), IOS_PAGES, { platform: 'ios', timeout: 500 });
+    const el = await repo.get('rows', 'Settings', { strategy: SelectionStrategy.TEXT, value: 'General' });
+    expect((el as PlatformElement).resolvedElement).toBe(raws[2]);
+    expect(reads.some(r => r.startsWith('privacy:'))).toBe(false);
+  });
+
+  test('the TEXT strategy falls back to the first contains match after reading every row once', async () => {
+    const reads: string[] = [];
+    const raws = rows(reads);
+    const repo = new ElementRepository(driverOf(raws), IOS_PAGES, { platform: 'ios', timeout: 500 });
+    const el = await repo.get('rows', 'Settings', { strategy: SelectionStrategy.TEXT, value: 'general' });
+    expect((el as PlatformElement).resolvedElement).toBe(raws[1]);
+    expect(reads.filter(r => r.endsWith(':label'))).toEqual(['wifi:label', 'general-tab:label', 'general:label', 'privacy:label']);
+  });
+
+  test('getByText reads each row once for both the exact and the contains pass', async () => {
+    const reads: string[] = [];
+    const repo = new ElementRepository(driverOf(rows(reads)), IOS_PAGES, { platform: 'ios', timeout: 500 });
+    const contains = await repo.getByText('rows', 'Settings', 'Priv', true);
+    expect(reads.filter(r => r.endsWith(':label'))).toEqual(['wifi:label', 'general-tab:label', 'general:label', 'privacy:label']);
+    expect(await contains!.textContent()).toBe('Privacy');
+  });
+
+  test('getByText stops reading at the first exact match, and exact still wins over an earlier contains match', async () => {
+    const reads: string[] = [];
+    const repo = new ElementRepository(driverOf(rows(reads)), IOS_PAGES, { platform: 'ios', timeout: 500 });
+    const el = await repo.getByText('rows', 'Settings', 'General', true);
+    expect(reads.filter(r => r.endsWith(':label'))).toEqual(['wifi:label', 'general-tab:label', 'general:label']);
+    expect(await el!.textContent()).toBe('General');
+  });
+});

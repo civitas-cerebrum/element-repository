@@ -44,6 +44,10 @@ function hasText(s: unknown): s is string {
  *   empty one (if any) is returned.
  * - every other platform (and an unknown one): WebdriverIO `getText()`.
  *
+ * On iOS the element type and `label` are read first; `value` is read only
+ * for a text input or when the label has no text, so a typical row costs
+ * two driver round trips rather than three.
+ *
  * Driver errors are not caught.
  *
  * @param el - A raw WebdriverIO element.
@@ -51,11 +55,10 @@ function hasText(s: unknown): s is string {
  */
 export async function readPlatformText(el: any, platform: Platform | undefined): Promise<string | null> {
   if (platform !== 'ios') return (await el.getText()) ?? null;
-  const [type, label, value] = await Promise.all([
-    el.getTagName(),
-    el.getAttribute('label'),
-    el.getAttribute('value'),
-  ]);
+  const [type, label] = await Promise.all([el.getTagName(), el.getAttribute('label')]);
+  const isInput = IOS_TEXT_INPUT_TYPES.has(type);
+  if (!isInput && hasText(label)) return label;
+  const value = await el.getAttribute('value');
   const order = IOS_TEXT_INPUT_TYPES.has(type) ? [value, label] : [label, value];
   const withText = order.find(hasText);
   if (withText !== undefined) return withText;

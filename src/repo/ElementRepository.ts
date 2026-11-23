@@ -458,17 +458,17 @@ export class ElementRepository {
   public async getByText(elementName: string, pageName: string, desiredText: string, strict: boolean = false): Promise<Element | null> {
     const allElements = await this.getAll(elementName, pageName);
 
-    // First pass: exact match
+    // Each element's text is read once. An exact match wins, so the first
+    // one returns at once; the texts read are kept for the contains pass.
+    const texts: Array<string | undefined> = [];
     for (const element of allElements) {
-      const text = await element.textContent();
-      if (text?.trim() === desiredText) return element;
+      const text = (await element.textContent())?.trim();
+      if (text === desiredText) return element;
+      texts.push(text);
     }
 
-    // Second pass: contains match
-    for (const element of allElements) {
-      const text = await element.textContent();
-      if (text?.trim().includes(desiredText)) return element;
-    }
+    const index = texts.findIndex(text => text?.includes(desiredText));
+    if (index >= 0) return allElements[index];
 
     const msg = `Element '${elementName}' on '${pageName}' with text "${desiredText}" not found.`;
     if (strict) throw new Error(msg);
