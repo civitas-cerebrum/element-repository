@@ -1,0 +1,42 @@
+{
+  "pages": [
+    {
+      "name": "SettingsHome",
+      "platform": "android",
+      "elements": [
+        { "elementName": "generalByAccessibilityId", "selector": { "accessibility id": "android-only-general" } },
+        { "elementName": "generalByPredicate", "selector": { "uiautomator": "new UiSelector().description(\"android-only-general\")" } },
+        { "elementName": "generalByClassChain", "selector": { "xpath": "//android.widget.TextView[@content-desc='android-only-general']" } },
+        { "elementName": "generalById", "selector": { "id": "com.example.android:id/general" } },
+        { "elementName": "cells", "selector": { "class name": "android.widget.LinearLayout" }, "list": true },
+        { "elementName": "privacyRow", "selector": { "accessibility id": "android-only-privacy" } },
+        { "elementName": "settingsList", "selector": { "class name": "androidx.recyclerview.widget.RecyclerView" } }
+      ]
+    },
+    {
+      "name": "SettingsHome",
+      "elements": [
+        { "elementName": "generalByAccessibilityId", "selector": { "css": "[data-testid='web-only-general']" } },
+        { "elementName": "generalByPredicate", "selector": { "css": "#web-only-general" } },
+        { "elementName": "generalByClassChain", "selector": { "xpath": "//*[@id='web-only-general']" } },
+        { "elementName": "generalById", "selector": { "css": "#web-only-general" } },
+        { "elementName": "cells", "selector": { "css": "li.web-only-row" }, "list": true },
+        { "elementName": "privacyRow", "selector": { "css": "#web-only-privacy" } },
+        { "elementName": "settingsList", "selector": { "css": "ul.web-only-list" } }
+      ]
+    },
+    {
+      "name": "SettingsHome",
+      "platform": "ios",
+      "elements": [
+        { "elementName": "generalByAccessibilityId", "selector": { "accessibility id": "com.apple.settings.general" } },
+        { "elementName": "generalByPredicate", "selector": { "predicate": "type == \"XCUIElementTypeCell\" AND name ENDSWITH \".general\"" } },
+        { "elementName": "generalByClassChain", "selector": { "class chain": "**/XCUIElementTypeCell[`name == \"com.apple.settings.general\"`]" } },
+        { "elementName": "generalById", "selector": { "id": "com.apple.settings.general" } },
+        { "elementName": "cells", "selector": { "class name": "XCUIElementTypeCell" }, "list": true },
+        { "elementName": "privacyRow", "selector": { "predicate": "name BEGINSWITH \"com.apple.settings.privacy\" OR label BEGINSWITH \"Privacy\"" } },
+        { "elementName": "settingsList", "selector": { "predicate": "type IN {\"XCUIElementTypeTable\", \"XCUIElementTypeCollectionView\"}" } }
+      ]
+    }
+  ]
+}
