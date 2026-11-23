@@ -29,6 +29,7 @@ new ElementRepository(driver, fileOrData, maybeOptions);
 // Each form on its own.
 new ElementRepository(driver, pages);
 new ElementRepository(driver, pages, 5000);
+new ElementRepository(driver, pages, { platform, defaultTimeout: 1000 });
 new ElementRepository(driver, pages, { platform, timeout: 1000 });
 new ElementRepository(driver, pages, {});
 

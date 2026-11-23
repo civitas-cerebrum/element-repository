@@ -32,7 +32,16 @@ export interface ElementRepositoryOptions {
    * desktop-specific behaviour.
    */
   platform?: Platform;
-  /** Default element wait timeout in milliseconds. Default `15000`. */
+  /**
+   * Default element wait timeout in milliseconds, the same value
+   * {@link ElementRepository.setDefaultTimeout} sets. Default `15000`.
+   */
+  defaultTimeout?: number;
+  /**
+   * Alias of {@link ElementRepositoryOptions.defaultTimeout}, kept for
+   * callers written against the earlier name. When both are given,
+   * `defaultTimeout` wins.
+   */
   timeout?: number;
 }
 
@@ -78,7 +87,8 @@ export class ElementRepository {
    *   produces it (string `platform` / `frameIndex`, checked at runtime).
    * @param options Either a number — the default element wait timeout in
    *   milliseconds (earlier versions' positional form) — or
-   *   `{ platform?, timeout? }` (see {@link ElementRepositoryOptions}).
+   *   `{ platform?, defaultTimeout? }` (see {@link ElementRepositoryOptions};
+   *   `timeout` is accepted as an alias of `defaultTimeout`).
    *   Omitted: no active platform, timeout 15000.
    * @throws Error when the repository is invalid, or when `options.platform`
    *   is not a known {@link Platform}.
@@ -100,14 +110,14 @@ export class ElementRepository {
     ElementRepository.validate(this.pageData);
 
     const opts: ElementRepositoryOptions =
-      typeof options === 'number' ? { timeout: options } : (options ?? {});
+      typeof options === 'number' ? { defaultTimeout: options } : (options ?? {});
     if (opts.platform !== undefined && !isPlatformName(opts.platform)) {
       throw new Error(
         `ElementRepository: unknown platform '${String(opts.platform)}'. Expected one of: ${PLATFORMS.join(', ')}.`,
       );
     }
     this._platform = opts.platform;
-    this.defaultTimeout = opts.timeout ?? DEFAULT_TIMEOUT;
+    this.defaultTimeout = opts.defaultTimeout ?? opts.timeout ?? DEFAULT_TIMEOUT;
   }
 
   /**

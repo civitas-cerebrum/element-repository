@@ -270,6 +270,35 @@ test.describe('ElementRepository — constructor forms', () => {
     expect(capturedTimeout).toBe(1234);
   });
 
+  test('options form with defaultTimeout: the default timeout applies', async () => {
+    let capturedTimeout: number | undefined;
+    const driver = {
+      locator: () => {
+        const loc = createMockLocator();
+        loc.waitFor = async (opts?: any) => { capturedTimeout = opts?.timeout; };
+        return loc;
+      },
+    };
+    const repo = new ElementRepository(driver, samePageData, { defaultTimeout: 1500 });
+    expect(repo.platform).toBeUndefined();
+    await repo.get('submitButton', 'LoginPage');
+    expect(capturedTimeout).toBe(1500);
+  });
+
+  test('options form with both defaultTimeout and timeout: defaultTimeout wins', async () => {
+    let capturedTimeout: number | undefined;
+    const driver = {
+      locator: () => {
+        const loc = createMockLocator();
+        loc.waitFor = async (opts?: any) => { capturedTimeout = opts?.timeout; };
+        return loc;
+      },
+    };
+    const repo = new ElementRepository(driver, samePageData, { defaultTimeout: 1500, timeout: 1234 });
+    await repo.get('submitButton', 'LoginPage');
+    expect(capturedTimeout).toBe(1500);
+  });
+
   test('options form with an empty object behaves like the positional form', () => {
     const repo = new ElementRepository(createRecordingDriver().driver, samePageData, {});
     expect(repo.platform).toBeUndefined();
