@@ -16,7 +16,7 @@ function createMockWdioElement(overrides: Record<string, any> = {}): any {
     isDisplayed: async () => true,
     waitForExist: async (_opts?: any) => {},
     waitForDisplayed: async (_opts?: any) => {},
-    // No getRect: WebdriverIO 9/10 elements have none. The rect comes from
+    // No getRect: WebdriverIO 10 elements have none. The rect comes from
     // the protocol command driver.getElementRect(elementId).
     elementId: 'mock-elem-id',
     ...overrides,
