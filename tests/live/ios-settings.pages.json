@@ -30,11 +30,11 @@
       "platform": "ios",
       "elements": [
         { "elementName": "generalByAccessibilityId", "selector": { "accessibility id": "com.apple.settings.general" } },
-        { "elementName": "generalByPredicate", "selector": { "predicate": "type == \"XCUIElementTypeCell\" AND name ENDSWITH \".general\"" } },
-        { "elementName": "generalByClassChain", "selector": { "class chain": "**/XCUIElementTypeCell[`name == \"com.apple.settings.general\"`]" } },
+        { "elementName": "generalByPredicate", "selector": { "predicate": "type == \"XCUIElementTypeButton\" AND name == \"com.apple.settings.general\"" } },
+        { "elementName": "generalByClassChain", "selector": { "class chain": "**/XCUIElementTypeButton[`name == \"com.apple.settings.general\"`]" } },
         { "elementName": "generalById", "selector": { "id": "com.apple.settings.general" } },
         { "elementName": "cells", "selector": { "class name": "XCUIElementTypeCell" }, "list": true },
-        { "elementName": "privacyRow", "selector": { "predicate": "name BEGINSWITH \"com.apple.settings.privacy\" OR label BEGINSWITH \"Privacy\"" } },
+        { "elementName": "privacyRow", "selector": { "accessibility id": "com.apple.settings.privacyAndSecurity" } },
         { "elementName": "settingsList", "selector": { "predicate": "type IN {\"XCUIElementTypeTable\", \"XCUIElementTypeCollectionView\"}" } }
       ]
     }

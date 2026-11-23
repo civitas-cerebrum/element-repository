@@ -31,6 +31,8 @@ const PAGES = path.join(__dirname, 'ios-settings.pages.json');
 const PAGE = 'SettingsHome';
 const SETTINGS_BUNDLE_ID = 'com.apple.Preferences';
 const GENERAL_NAME = 'com.apple.settings.general';
+const PRIVACY_NAME = 'com.apple.settings.privacyAndSecurity';
+const GENERAL_KINDS = ['generalByAccessibilityId', 'generalByPredicate', 'generalByClassChain', 'generalById'];
 
 const LIVE = process.env.LIVE_IOS === '1';
 const APPIUM_URL = process.env.APPIUM_URL;
@@ -83,8 +85,11 @@ test.describe('ios-settings pages file (offline)', () => {
     expect(ios.getPagePlatform(PAGE)).toBe('ios');
     expect(ios.getSelector('generalByAccessibilityId', PAGE)).toBe(`~${GENERAL_NAME}`);
     expect(ios.getSelector('generalById', PAGE)).toBe(`-ios predicate string:name == "${GENERAL_NAME}"`);
-    expect(ios.getSelector('generalByPredicate', PAGE)).toMatch(/^-ios predicate string:/);
-    expect(ios.getSelector('generalByClassChain', PAGE)).toMatch(/^-ios class chain:/);
+    expect(ios.getSelector('generalByPredicate', PAGE))
+      .toBe(`-ios predicate string:type == "XCUIElementTypeButton" AND name == "${GENERAL_NAME}"`);
+    expect(ios.getSelector('generalByClassChain', PAGE))
+      .toBe(`-ios class chain:**/XCUIElementTypeButton[\`name == "${GENERAL_NAME}"\`]`);
+    expect(ios.getSelector('privacyRow', PAGE)).toBe(`~${PRIVACY_NAME}`);
 
     // Without an active platform the first SettingsHome block (android) wins,
     // so the ios answers above come from the platform-aware lookup.
@@ -102,6 +107,19 @@ test.describe.serial('live iOS Settings (read-only)', () => {
   let repo: ElementRepository;
 
   const get = (name: string): Promise<Element> => repo.get(name, PAGE);
+
+  /**
+   * Scrolls the Settings list back to its top with plain swipes on the list
+   * (finger moves DOWN, so the content moves down and rows above appear).
+   * Read-only: a swipe is never a tap. Called before each test that needs a
+   * known starting position, so a failure in one test does not leave the
+   * list scrolled for the next.
+   */
+  async function toTop(): Promise<void> {
+    const list = await get('settingsList');
+    const { height } = await driver.getWindowSize();
+    for (let i = 0; i < 3; i++) await list.swipe('down', { distance: Math.round(height * 0.4) });
+  }
 
   test.beforeAll(async () => {
     test.setTimeout(240_000);
@@ -122,8 +140,14 @@ test.describe.serial('live iOS Settings (read-only)', () => {
     test.setTimeout(120_000);
     if (driver) {
       const d = driver;
-      driver = undefined;
-      await d.deleteSession();
+      try {
+        // Best effort: leave Settings at the top of its list for the next run.
+        if (repo) await toTop();
+      } catch { /* the session is deleted regardless */ }
+      finally {
+        driver = undefined;
+        await d.deleteSession();
+      }
     }
   });
 
@@ -132,44 +156,18 @@ test.describe.serial('live iOS Settings (read-only)', () => {
     expect(repo.getPagePlatform(PAGE)).toBe('ios');
   });
 
-  for (const name of ['generalByAccessibilityId', 'generalByPredicate', 'generalByClassChain', 'generalById']) {
-    test(`resolves and reads the General row: ${name}`, async () => {
-      const el = await get(name);
-      expect(isPlatform(el)).toBe(true);
-      expect(await el.getAttribute('name')).toBe(GENERAL_NAME);
-      expect(await el.isVisible()).toBe(true);
-      expect(await el.textContent()).toMatch(/\S/);
-      const box = await el.boundingBox();
-      expect(box).not.toBeNull();
-      expect(box!.width).toBeGreaterThan(0);
-      expect(box!.height).toBeGreaterThan(0);
-    });
-  }
-
-  test('all four selector kinds resolve to the same row', async () => {
-    const boxes = [];
-    for (const name of ['generalByAccessibilityId', 'generalByPredicate', 'generalByClassChain', 'generalById']) {
-      boxes.push(await (await get(name)).boundingBox());
-    }
-    for (const box of boxes.slice(1)) expect(box).toEqual(boxes[0]);
-  });
-
-  test('ElementChain reads through action()', async () => {
-    const el = await get('generalByAccessibilityId');
-    const chain = el.action(20_000);
-    expect(await chain.waitForState('visible').getAttribute('name')).toBe(GENERAL_NAME);
-    expect(await el.action(20_000).getText()).toMatch(/\S/);
-    expect(await el.action(20_000).isPresent()).toBe(true);
-  });
-
-  test('a multi-match selector counts, indexes and lists cells', async () => {
+  test('a multi-match selector counts and indexes cells (bounds only)', async () => {
+    await toTop();
     const cells = await repo.get('cells', PAGE, { strategy: SelectionStrategy.ALL });
     const count = await cells.count();
     expect(count).toBeGreaterThan(1);
 
+    // Bounds only: the first cell at the top of Settings is the account
+    // entry, so no text of any cell is read.
     const first = cells.first();
     const second = cells.nth(1);
-    const [firstBox, secondBox] = [await first.boundingBox(), await second.boundingBox()];
+    const firstBox = await first.boundingBox();
+    const secondBox = await second.boundingBox();
     expect(firstBox).not.toBeNull();
     expect(secondBox).not.toBeNull();
     expect(secondBox!.y).not.toBe(firstBox!.y);
@@ -179,34 +177,82 @@ test.describe.serial('live iOS Settings (read-only)', () => {
     expect(listed.length).toBe(count);
   });
 
+  test('scrollIntoView down brings the General row (present, below the fold) into view', async () => {
+    await toTop();
+    // At the top the General row is in the tree but below the fold
+    // (isDisplayed false). `direction: 'down'` means "reveal content further
+    // DOWN the list": the finger swipes UP (75% -> 25% of the window height),
+    // so the content moves up and lower rows come into view.
+    const general = await get('generalByAccessibilityId');
+    await general.scrollIntoView({ direction: 'down', timeout: 60_000 });
+    expect(await general.isVisible()).toBe(true);
+  });
+
+  for (const name of GENERAL_KINDS) {
+    test(`resolves and reads the General row: ${name}`, async () => {
+      const el = await get(name);
+      expect(isPlatform(el)).toBe(true);
+      expect(await el.getAttribute('name')).toBe(GENERAL_NAME);
+      expect(await el.isVisible()).toBe(true);
+      const box = await el.boundingBox();
+      expect(box).not.toBeNull();
+      expect(box!.width).toBeGreaterThan(0);
+      expect(box!.height).toBeGreaterThan(0);
+    });
+  }
+
+  test('all four selector kinds resolve to the same row', async () => {
+    const boxes = [];
+    for (const name of GENERAL_KINDS) boxes.push(await (await get(name)).boundingBox());
+    expect(boxes[0]).not.toBeNull();
+    for (const box of boxes.slice(1)) expect(box).toEqual(boxes[0]);
+  });
+
+  test('ElementChain reads through action()', async () => {
+    const el = await get('generalByAccessibilityId');
+    expect(await el.action(20_000).scrollIntoView({ direction: 'down' }).waitForState('visible').getAttribute('name'))
+      .toBe(GENERAL_NAME);
+    expect(await el.action(20_000).getText()).toMatch(/\S/);
+    expect(await el.action(20_000).isPresent()).toBe(true);
+  });
+
   test('swipe up then down on the list moves the rows and back', async () => {
+    // The scroll container reports isDisplayed false on iOS: never assert
+    // its visibility, only swipe on it.
     const list = await get('settingsList');
     const general = await get('generalByAccessibilityId');
+    await general.scrollIntoView({ direction: 'down', timeout: 60_000 });
     const { height } = await driver.getWindowSize();
     const distance = Math.round(height * 0.3);
 
     const before = (await general.boundingBox())!;
+    // Finger up: content moves up.
     await list.swipe('up', { distance });
-    const general2 = await get('generalByAccessibilityId');
-    const after = await general2.boundingBox().catch(() => null);
+    const after = await (await get('generalByAccessibilityId')).boundingBox().catch(() => null);
     // Either the row moved up or it scrolled out of the tree.
     if (after) expect(after.y).toBeLessThan(before.y);
 
+    // Finger down: content moves back down.
     await list.swipe('down', { distance });
-    await list.swipe('down', { distance });
-    const general3 = await get('generalByAccessibilityId');
-    await expect.poll(() => general3.isVisible(), { timeout: 20_000 }).toBe(true);
+    const back = await (await get('generalByAccessibilityId')).boundingBox();
+    expect(back).not.toBeNull();
+    if (after) expect(back!.y).toBeGreaterThan(after.y);
   });
 
-  test('scrollIntoView down reaches a row far down the list, then back up', async () => {
+  test('scrollIntoView down reaches a row not yet in the tree, then back up', async () => {
+    await toTop();
+    // Privacy & Security is not in the tree at the top of the list; each
+    // swipe re-queries it until it is loaded and displayed.
     const privacy = await get('privacyRow');
     await privacy.scrollIntoView({ direction: 'down', timeout: 60_000 });
     expect(await privacy.isVisible()).toBe(true);
-    expect(await privacy.textContent()).toMatch(/\S/);
+    expect(await privacy.getAttribute('name')).toBe(PRIVACY_NAME);
 
-    // Chain form, then return to the top of the list for the next run.
+    // Chain form, direction 'up' (finger swipes down, content above comes
+    // back), then return to the top of the list for the next run.
     const general = await get('generalByAccessibilityId');
     await general.action(60_000).scrollIntoView({ direction: 'up' });
     expect(await general.isVisible()).toBe(true);
+    await toTop();
   });
 });
