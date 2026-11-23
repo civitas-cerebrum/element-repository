@@ -6,9 +6,9 @@ export * from './schema';
 // and friends, which would clash with the `./schema` exports above.
 export type { PageRepository, PageRepositoryInput } from './schema/repository';
 
-// Export the platform vocabulary and shared errors
-export * from './platform';
-export * from './errors';
+// Export the platform vocabulary and the shared platform error
+export * from './enum/Platform';
+export { PlatformNotSupportedError } from './types/errors';
 
 // Export enums and options
 export * from './enum/Options';

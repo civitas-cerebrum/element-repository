@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { WebElement, PlatformElement, ElementType, isWeb, isPlatform } from '../src/types';
-import { PlatformNotSupportedError } from '../src/errors';
+import { PlatformNotSupportedError } from '../src/types/errors';
 
 // ---------------------------------------------------------------------------
 // W3C touch-action recorder for swipe / scrollIntoView

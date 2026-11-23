@@ -1,4 +1,4 @@
-import type { TapOffset } from './Element';
+import type { TapOffset } from '../types/Element';
 
 /** Default hold time for {@link Element.longPress}, in ms. */
 export const DEFAULT_LONG_PRESS_MS = 1000;

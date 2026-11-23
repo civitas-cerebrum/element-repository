@@ -1,4 +1,4 @@
-import { Platform } from './platform';
+import { Platform } from './enum/Platform';
 
 export interface Selector {
   [key: string]: string;

@@ -1,5 +1,6 @@
 import { PageObject, RegexPattern, Selector, SelectorValue } from '../schema/repository';
-import { SelectorFormatter, escapeUiSelectorString } from './formatters';
+import { SelectorFormatter } from './formatters';
+import { escapeUiSelectorString } from '../utils/escape';
 
 /**
  * Resolves enhanced selector types that go beyond simple strategy-to-value

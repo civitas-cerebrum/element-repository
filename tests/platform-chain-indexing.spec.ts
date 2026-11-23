@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { PlatformElement, ElementType } from '../src/types';
 import { ElementChain } from '../src/types/ElementChain';
-import { PlatformNotSupportedError } from '../src/errors';
+import { PlatformNotSupportedError } from '../src/types/errors';
 
 // ---------------------------------------------------------------------------
 // Spies and mocks

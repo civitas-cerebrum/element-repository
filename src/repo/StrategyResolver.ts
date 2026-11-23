@@ -4,7 +4,7 @@ import { ElementResolutionOptions, SelectionStrategy } from '../enum/Options';
 import { pickRandomIndex } from '../utils/math';
 import { EnhancedResolver } from './EnhancedResolver';
 import { isFatalDriverError } from '../utils/driverErrors';
-import type { Platform } from '../platform';
+import type { Platform } from '../enum/Platform';
 
 /**
  * Creates platform-appropriate Element wrappers and applies selection

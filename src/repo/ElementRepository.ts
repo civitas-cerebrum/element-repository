@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 import { PageRepository, PageRepositoryInput, PageObject, ElementMeta } from '../schema/repository';
-import { Platform, PLATFORMS, isPlatformName } from '../platform';
+import { Platform, PLATFORMS, isPlatformName } from '../enum/Platform';
 import { pickRandomIndex } from '../utils/math';
 import { Element } from '../types';
 import {

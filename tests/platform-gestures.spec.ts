@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { WebElement, PlatformElement } from '../src/types';
 import { ElementChain } from '../src/types/ElementChain';
-import { PlatformNotSupportedError } from '../src/errors';
+import { PlatformNotSupportedError } from '../src/types/errors';
 
 // ---------------------------------------------------------------------------
 // Mock WebdriverIO element + driver that records W3C actions

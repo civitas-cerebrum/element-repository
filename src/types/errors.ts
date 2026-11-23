@@ -1,4 +1,4 @@
-import { Platform } from './platform';
+import { Platform } from '../enum/Platform';
 
 /**
  * Thrown when an operation exists in the API but cannot be performed on the

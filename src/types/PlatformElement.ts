@@ -2,11 +2,11 @@ import {
   Element, ElementType, ElementActionOptions, ScrollIntoViewOptions, SwipeDirection, SwipeOptions,
   LongPressOptions, TapOffset, PinchOptions, ZoomOptions,
 } from './Element';
-import { checkLongPressDuration, checkTapOffset } from './gestureChecks';
+import { checkLongPressDuration, checkTapOffset } from '../utils/gestureChecks';
 import { ElementChain } from './ElementChain';
-import { PlatformNotSupportedError } from '../errors';
+import { PlatformNotSupportedError } from './errors';
 import { isFatalDriverError } from '../utils/driverErrors';
-import type { Platform } from '../platform';
+import type { Platform } from '../enum/Platform';
 
 /** Extra construction options for {@link PlatformElement}. */
 export interface PlatformElementOptions {

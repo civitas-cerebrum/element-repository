@@ -4,8 +4,8 @@ import {
   LongPressOptions, TapOffset, PinchOptions, ZoomOptions,
 } from './Element';
 import { ElementChain } from './ElementChain';
-import { PlatformNotSupportedError } from '../errors';
-import { checkLongPressDuration, checkTapOffset } from './gestureChecks';
+import { PlatformNotSupportedError } from './errors';
+import { checkLongPressDuration, checkTapOffset } from '../utils/gestureChecks';
 
 /**
  * Playwright-backed {@link Element} implementation.

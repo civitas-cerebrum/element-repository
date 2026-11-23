@@ -1,4 +1,4 @@
-import { Platform } from '../platform';
+import { Platform } from '../enum/Platform';
 
 /** A regex pattern with optional flags, used for text or accessible-name matching. */
 export interface RegexPattern {
