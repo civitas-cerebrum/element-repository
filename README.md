@@ -205,15 +205,21 @@ Add a nested `fallback` selector to handle DOM variations (per country, per bran
 ```
 
 **Rules:**
-- Primary attaches within the repo's `defaultTimeout` (15s default) → fallback is never consulted. `waitFor` resolves the moment the element appears, so the common case pays no timeout cost.
-- Primary does not attach within `defaultTimeout` → walk into `selector.fallback`.
+- The probe timeout is the call's `options.timeout` when given, otherwise the repository's `defaultTimeout` (15 s by default).
+- Primary attaches within the probe timeout → fallback is never consulted. `waitFor` resolves the moment the element appears, so the common case pays no timeout cost.
+- Primary does not attach within the probe timeout → walk into `selector.fallback`.
 - Primary **throws while it is being resolved** → walk into `selector.fallback` as well. This covers the strategies that pick their match eagerly: `TEXT` on a platform page that finds no match, and `ATTRIBUTE`, `RANDOM` and `INDEX` (web and platform) that find no match or an out-of-range index. If the rest of the chain fails too, the primary's error is rethrown.
 - The probe waits on the first match only, so a primary that matches several elements counts as attached (`getAll()` / `ALL` still return every match of the primary).
-- Entries without a `fallback` key skip the fallback probe. The element is returned after a best-effort attach wait, capped at 2 s for standard selectors and web enhanced selectors (its failure is swallowed); the full timeout applies when you act on the element (`click()`, `fill()`, …).
+- Entries without a `fallback` key skip the fallback probe. Every lookup (each node of a chain too) still waits while it resolves, by path, where *timeout* is `options.timeout` when given, else `defaultTimeout`:
+  - **Default (no strategy), `ALL`, and `TEXT` on web** — standard selectors on any platform and enhanced selectors on web: a best-effort attach wait of at most 2 s (the smaller of 2 s and the timeout); its failure is swallowed and the element is returned. The full timeout applies when you act on the element (`click()`, `fill()`, …).
+  - **Enhanced `role` + `name` and regex `text` on platform pages** (default and `ALL`, the only strategies they support): an attach wait of the full timeout; its failure is swallowed.
+  - **`TEXT` on platform pages**: polls for a match for the full timeout, then throws `Element '<el>' on '<page>' with text "<value>" not found.`
+  - **`ATTRIBUTE` and `RANDOM`** (web and platform): wait the full timeout for the first match (attached for `ATTRIBUTE`, visible for `RANDOM`), then throw `No elements found for '<el>' on '<page>'`; `ATTRIBUTE` also throws when no match has the attribute value.
+  - **`INDEX`**: no wait; reads the current matches and throws `Index <i> out of bounds for '<el>' on '<page>' (found <n> elements).` when the index is out of range.
 - Chains are recursive: `fallback.fallback.fallback` is legal.
 - Fallbacks can mix strategies freely — CSS primary with role+name fallback, id primary with xpath fallback, etc.
 
-**Worst-case latency** on an N-level chain where no node matches: `N × defaultTimeout`. In practice fallbacks cover real DOM variants, so the first or second level matches on pages where the primary doesn't.
+**Worst-case latency** on an N-level chain where no node matches: about `N ×` the probe timeout (a node whose strategy waits the full timeout while resolving can add that wait on top). In practice fallbacks cover real DOM variants, so the first or second level matches on pages where the primary doesn't.
 
 **Common uses:**
 - **Multi-country DOM variants** — one entry serves every country instead of country-specific repo files.
@@ -514,7 +520,7 @@ Every method that takes a `pageName` resolves it the same way: with an active pl
 - **Default (no strategy)** resolves the **first match**. `count()` and `all()` on that element return at most 1 — use `getAll()` or `SelectionStrategy.ALL` to count or iterate every match.
 - **`TEXT`** picks its match eagerly: it fetches every match of the selector and compares each one's **own** text as the driver reports it through `getText()` — not the text of its descendants, as Playwright's `filter({ hasText })` does on web. The selector must therefore target the text-bearing element itself (the label or cell title), not a container around it. An exact (trimmed) match wins; otherwise the first case-insensitive, whitespace-normalised "contains" match. It polls until a match appears or the full timeout elapses, then throws `Element '<el>' on '<page>' with text "<value>" not found.` Fatal driver errors (invalid selector, dead session, lost connection) are rethrown at once. `all()` / `count()` on the result re-query the selector and return every match.
 - A blank `TEXT` value throws `options.value is required when using SelectionStrategy.TEXT` (web and platform).
-- Enhanced `role` + `name` selectors on platform pages support only the default and `ALL`; any other strategy throws.
+- Enhanced `role` + `name` and regex `text` selectors on platform pages support only the default and `ALL`; any other strategy throws.
 
 #### Strict Mode
 
@@ -564,7 +570,9 @@ On platform elements, gestures and swipes use **native-context viewport coordina
 
 #### Platform elements (`PlatformElement`)
 
-- `first()` and `nth(index)` index for real: `nth(i)` acts on the i-th match of the selector (negative counts from the end, `-1` is the last) and throws `nth(<i>): no element at that index for "<selector>" (found <n>)` when there is none. `count()` / `all()` on an element made by `first()` / `nth()` return at most that one match.
+- `first()` and `nth(index)` index for real: `nth(i)` acts on the i-th match of the selector (negative counts from the end, `-1` is the last; a non-integer index throws `nth: index must be an integer, got <i>`). They are lazy, like Playwright: the match is looked up when the element is used. `first()` / `nth(0)` use WebdriverIO's `$` and its own waiting, like an unindexed element. Any other index polls `$$`: actions wait up to their `timeout`, and reads (`textContent()`, `getAttribute()`, `inputValue()`, …) up to the element's default timeout, for the match to appear, then throw `nth(<i>): no element at that index for "<selector>" (found <n>)`; `isVisible()` and `exists()` do not wait (a missing match is `false`). `count()` / `all()` on an element made by `first()` / `nth()` return at most that one match.
+- On an element that is already a single match (made by `first()` / `nth()`, or taken from `all()`), `first()`, `nth(0)` and `nth(-1)` return the element itself, and any other index returns an element that matches nothing: `count()` is 0, `exists()` and `isVisible()` are `false`, and actions and reads fail at once with `nth(<i>): "<selector>" is already a single match, so this index matches nothing`.
+- `locateChild(selector)` searches inside the parent's match (WebdriverIO `parent.$` / `parent.$$`), honouring the parent's index: the child of `nth(2)` searches inside the third match. It is lazy; a child of a missing indexed parent waits like an action, then fails with the parent's out-of-range error, and its `count()` is 0.
 - `filter({ hasText })` throws `PlatformNotSupportedError` (`"filter" is not supported on platform "<platform>".`) — WebdriverIO has no lazy text filter; use the `TEXT` selection strategy instead. An empty filter returns the element unchanged.
 - `setInputFiles` and `dispatchEvent` throw `PlatformNotSupportedError` naming the element's platform.
 - `textContent()` returns the element's own text from the driver's `getText()`.
@@ -582,10 +590,10 @@ On platform elements, gestures and swipes use **native-context viewport coordina
 | `inputValue()` | Returns current input value. |
 | `count()` | Returns matched element count. |
 | `all()` | Returns array of all matched elements. |
-| `first()` | Returns the first match. |
-| `nth(index)` | Returns element at index. |
-| `filter({ hasText })` | Filters by text content. |
-| `locateChild(selector)` | Locates a descendant. |
+| `first()` | Returns the first match (platform: see [Platform elements](#platform-elements-platformelement)). |
+| `nth(index)` | Returns the element at the index; negative counts from the end (platform: see above). |
+| `filter({ hasText })` | Filters by text content (web; platform throws `PlatformNotSupportedError`). |
+| `locateChild(selector)` | Locates a descendant inside this element's match (platform: honours the parent's index). |
 | `waitFor(options?)` | Waits for state: `"visible"`, `"hidden"`, `"attached"`, `"detached"`. |
 | `action(timeout?)` | Returns a fluent `ElementChain` builder. |
 
@@ -656,7 +664,14 @@ if (isPlatform(el)) {
 | The root `PageObject.platform` (and `PageRepository`'s) is typed `Platform`, not `string`. | Type your values as `Platform`, or pass JSON imports as `PageRepositoryInput` (checked at runtime). |
 | A blank `TEXT` strategy value throws `options.value is required when using SelectionStrategy.TEXT`, on web too. | Pass a non-blank value, or omit the strategy. |
 | A default-resolved platform element is the first match, so `count()` / `all()` on it return at most 1. | Use `getAll()` or `SelectionStrategy.ALL` to count or iterate. |
-| The optional `webdriverio` peer is `^10` (was `^9.27.0 \|\| ^10.0.0`). WebdriverIO 10 needs Node.js `>=22.23.4 <23`, `>=24.22.1 <25` or `>=26.12.1`. | Upgrade WebdriverIO to 10 and Node.js to a supported version. |
+| `id` on a platform page is no longer a CSS `#v`: android → `id=v` (resource-id; a short id gets the app package prefix), ios → predicate `name == "v"`, macos / windows → `~v` (accessibility id). | Check every platform `id` entry still finds its element; switch to `accessibility id`, `xpath` or a full android resource id (`com.example:id/v`) where it does not. |
+| `text` on platform pages is now escaped: android escapes `"` (backslashes unchanged), ios escapes `"` and `\`. An android value that ends in `\` throws (pointing to `xpath`); so do enhanced android `role` + `name` and regex `text` selectors whose name or pattern ends in `\`. | Remove hand-written escaping from `text` values (pre-escaped values are now escaped twice). Use an `xpath` selector for an android value that ends in `\`. |
+| `PlatformElement.filter(...)` with any criterion throws `PlatformNotSupportedError` (it used to return the element unchanged, ignoring the filter). | Use `SelectionStrategy.TEXT` (or `getByText`) instead. An empty filter still returns the element. |
+| `PlatformElement.first()` / `nth(i)` index for real (they used to return the element unchanged). Actions wait for the match, then throw when the index is out of range; `nth(k)` with `k` other than `0` / `-1` on an element that is already a single match matches nothing. | Check calls that relied on `nth(i)` being a no-op: pass the index you mean, call `nth` on the multi-match element (e.g. from `ALL`), or use `getAll()`. |
+| `PlatformElement.locateChild(selector)` searches inside the parent's match, honouring its index (it used to search the whole screen). | Write child selectors relative to the parent, or look the element up on its own when it lies outside the parent. |
+| The `Element` interface has new required methods `longPress`, `tapAt`, `pinch` and `zoom`. | Custom `Element` implementations and test mocks must add them (a stub that throws is enough where unused). |
+| `PlatformElement.setInputFiles` / `dispatchEvent` throw `PlatformNotSupportedError` (`"<method>" is not supported on platform "<platform>".`) instead of a plain `Error` (`<method> is not supported on platform elements.`). | Update assertions on the message; catch `PlatformNotSupportedError` to tell these apart. |
+| The optional `webdriverio` peer is `^10` (was `^9.27.0`). WebdriverIO 10 needs Node.js `>=22.23.4 <23`, `>=24.22.1 <25` or `>=26.12.1`. | Upgrade WebdriverIO to 10 and Node.js to a supported version. |
 
 Not breaking, but new: the third constructor argument also takes `{ platform?, timeout? }`; with an active platform, lookups use the page block for that platform only (see [Multi-Platform Configuration](#multi-platform-configuration)).
 
