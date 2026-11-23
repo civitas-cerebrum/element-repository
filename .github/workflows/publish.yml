@@ -25,10 +25,6 @@ jobs:
 
       - name: 🧩  Install dependencies
         run: npm ci
-        env:
-          # WebdriverIO 10's dev chain would otherwise download browser drivers.
-          EDGEDRIVER_SKIP_DOWNLOAD: 'true'
-          GECKODRIVER_SKIP_DOWNLOAD: 'true'
 
       - name: 🛠️  Build package
         run: npm run build --if-present

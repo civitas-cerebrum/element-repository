@@ -40,10 +40,6 @@ jobs:
 
       - name: 🧩 Install dependencies
         run: npm ci
-        env:
-          # WebdriverIO 10's dev chain would otherwise download browser drivers.
-          EDGEDRIVER_SKIP_DOWNLOAD: 'true'
-          GECKODRIVER_SKIP_DOWNLOAD: 'true'
 
       # Full audit including devDependencies — PR CI only audits runtime deps.
       # `continue-on-error` is deliberate: a finding is the TRIGGER for the

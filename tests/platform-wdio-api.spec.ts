@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { PlatformElement } from '../src/types';
 
-// The mock element only carries what a WebdriverIO 9/10 element really has
+// The mock element only carries what a WebdriverIO 10 element really has
 // for these paths: an `elementId`. Rect, CSS value and element screenshot are
 // protocol commands on the driver that take the element id, so calling a
 // non-existent element method (getRect, getCSSValue, takeElementScreenshot
