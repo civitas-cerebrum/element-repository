@@ -1,7 +1,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
-import { PageRepository, PageObject, ElementMeta } from '../schema/repository';
+import { PageRepository, PageRepositoryInput, PageObject, ElementMeta } from '../schema/repository';
+import { Platform, PLATFORMS, isPlatformName } from '../platform';
 import { pickRandomIndex } from '../utils/math';
 import { Element } from '../types';
 import {
@@ -12,6 +13,25 @@ import { ElementResolutionOptions, SelectionStrategy } from '../enum/Options';
 import { EnhancedResolver } from './EnhancedResolver';
 import { StrategyResolver } from './StrategyResolver';
 
+/** Default element wait timeout in milliseconds. */
+const DEFAULT_TIMEOUT = 15000;
+
+/**
+ * Options for the {@link ElementRepository} constructor's options-object form.
+ */
+export interface ElementRepositoryOptions {
+  /**
+   * The ACTIVE platform of this repository instance. When set, every lookup
+   * by page name only considers page blocks whose `platform` (missing means
+   * `'web'`) equals it, so one file can hold `LoginPage` once per platform.
+   * When omitted, lookup takes the first page with the given name (the
+   * behaviour of earlier versions).
+   */
+  platform?: Platform;
+  /** Default element wait timeout in milliseconds. Default `15000`. */
+  timeout?: number;
+}
+
 /**
  * Platform-agnostic element lookup engine backed by a JSON repository.
  *
@@ -19,10 +39,21 @@ import { StrategyResolver } from './StrategyResolver';
  * returns unified {@link Element} wrappers (either {@link WebElement} for
  * Playwright or {@link PlatformElement} for WebDriverIO/Appium). Every
  * element is automatically waited for before it is returned.
+ *
+ * **Active platform.** A repository built with `{ platform }` resolves every
+ * page name against the page block for that platform only. If the name exists
+ * only for other platforms, lookups throw
+ * `Page "<name>" has no entry for platform "<active>". Available: <platforms>.`
+ * — there is no silent fallback to another platform's block. The active
+ * platform is held per instance (no static or global state), so repositories
+ * for different platforms can be used side by side over the same data.
  */
 export class ElementRepository {
   private pageData: PageRepository;
   private defaultTimeout: number;
+
+  /** The active platform of this instance, or `undefined` for first-match lookup. */
+  private readonly _platform: Platform | undefined;
 
   /**
    * The Playwright `Page` or WebDriverIO `Browser`/`Driver` instance used for
@@ -44,19 +75,51 @@ export class ElementRepository {
    * @param data The parsed JSON object matching the PageObjectSchema.
    * @param defaultTimeout Default wait timeout in milliseconds (defaults to 15000).
    */
-  constructor(driver: any, data: PageRepository, defaultTimeout?: number);
+  constructor(driver: any, data: PageRepository | PageRepositoryInput, defaultTimeout?: number);
 
-  constructor(driver: any, dataOrPath: string | PageRepository, defaultTimeout: number = 15000) {
+  /**
+   * Initializes the repository with a driver, a JSON file path or pre-parsed
+   * data, and an options object.
+   * @param driver The Playwright `Page` or WebDriverIO `Browser`/`Driver` instance.
+   * @param fileOrData Path to the JSON file (relative to the project root) or the parsed data.
+   * @param options `{ platform?, timeout? }` — see {@link ElementRepositoryOptions}.
+   * @throws Error when `options.platform` is not a known {@link Platform}.
+   */
+  constructor(driver: any, fileOrData: string | PageRepository | PageRepositoryInput, options?: ElementRepositoryOptions);
+
+  constructor(
+    driver: any,
+    dataOrPath: string | PageRepository | PageRepositoryInput,
+    options?: number | ElementRepositoryOptions,
+  ) {
     this._driver = driver;
     if (typeof dataOrPath === 'string') {
       const absolutePath = path.resolve(process.cwd(), dataOrPath);
       const rawData = fs.readFileSync(absolutePath, 'utf-8');
       this.pageData = JSON.parse(rawData);
     } else {
-      this.pageData = dataOrPath;
+      this.pageData = dataOrPath as PageRepository;
     }
     ElementRepository.validate(this.pageData);
-    this.defaultTimeout = defaultTimeout;
+
+    const opts: ElementRepositoryOptions =
+      typeof options === 'number' ? { timeout: options } : (options ?? {});
+    if (opts.platform !== undefined && !isPlatformName(opts.platform)) {
+      throw new Error(
+        `ElementRepository: unknown platform '${String(opts.platform)}'. Expected one of: ${PLATFORMS.join(', ')}.`,
+      );
+    }
+    this._platform = opts.platform;
+    this.defaultTimeout = opts.timeout ?? DEFAULT_TIMEOUT;
+  }
+
+  /**
+   * The active platform of this instance, as given in the constructor's
+   * options; `undefined` when none was given (first-name-match lookup).
+   * Read-only.
+   */
+  public get platform(): Platform | undefined {
+    return this._platform;
   }
 
   /** Entry-level boolean keys and the only values they accept. */
@@ -104,15 +167,16 @@ export class ElementRepository {
   }
 
   /**
-   * Returns the platform string for the given page, or `'web'` if not specified.
+   * Returns the platform of the given page, or `'web'` if not specified.
+   * With an active platform set, this is the active platform whenever the
+   * page exists for it.
    * @param pageName The name of the page block in the JSON repository.
-   * @returns The platform string (e.g. `'web'`, `'android'`, `'ios'`).
-   * @throws Error if the page is not found.
+   * @returns The platform (e.g. `'web'`, `'android'`, `'ios'`).
+   * @throws Error if the page is not found (see {@link ElementRepository} for
+   * the message when an active platform is set).
    */
-  public getPagePlatform(pageName: string): string {
-    const page = this.findPage(pageName);
-    if (!page) throw new Error(`ElementRepository: Page '${pageName}' not found.`);
-    return page.platform ?? 'web';
+  public getPagePlatform(pageName: string): Platform {
+    return this.requirePage(pageName).platform ?? 'web';
   }
 
   // ══════════════════════════════════════════════════════════════
@@ -134,8 +198,7 @@ export class ElementRepository {
    * @throws Error if the page is not found.
    */
   private async resolveElement(elementName: string, pageName: string, options?: ElementResolutionOptions): Promise<Element> {
-    const pageObj = this.findPage(pageName);
-    if (!pageObj) throw new Error(`ElementRepository: Page '${pageName}' not found.`);
+    const pageObj = this.requirePage(pageName);
 
     const elementDef = pageObj.elements.find((e) => e.elementName === elementName);
     if (!elementDef) throw new Error(`ElementRepository: Element '${elementName}' not found on page '${pageName}'.`);
@@ -456,8 +519,7 @@ export class ElementRepository {
    * @throws Error if the page or element is not found.
    */
   public getElementMeta(elementName: string, pageName: string): ElementMeta {
-    const page = this.findPage(pageName);
-    if (!page) throw new Error(`ElementRepository: Page '${pageName}' not found.`);
+    const page = this.requirePage(pageName);
     const element = (page.elements ?? []).find((e) => e.elementName === elementName);
     if (!element) throw new Error(`ElementRepository: Element '${elementName}' not found on page '${pageName}'.`);
     return { provisional: element.provisional === true, list: element.list === true };
@@ -492,8 +554,7 @@ export class ElementRepository {
    * @throws Error if the page, element, or selector is not found.
    */
   public getSelectorRaw(elementName: string, pageName: string): { strategy: string; value: string } {
-    const page = this.findPage(pageName);
-    if (!page) throw new Error(`ElementRepository: Page '${pageName}' not found.`);
+    const page = this.requirePage(pageName);
 
     const element = page.elements.find((e) => e.elementName === elementName);
     if (!element) throw new Error(`ElementRepository: Element '${elementName}' not found on page '${pageName}'.`);
@@ -536,7 +597,7 @@ export class ElementRepository {
    */
   public getSelector(elementName: string, pageName: string): string {
     const { strategy, value } = this.getSelectorRaw(elementName, pageName);
-    const page = this.findPage(pageName)!;
+    const page = this.requirePage(pageName);
     const formatters = this.getFormattersForPlatform(page.platform ?? 'web');
     const formatter = formatters[strategy.toLowerCase()];
     return formatter ? formatter(value) : value;
@@ -547,12 +608,46 @@ export class ElementRepository {
   // ══════════════════════════════════════════════════════════════
 
   /**
-   * Finds a page by name.
+   * Finds a page by name, honouring the active platform.
+   *
+   * - Active platform set: the page whose `name` matches AND whose
+   *   `platform ?? 'web'` equals the active platform.
+   * - No active platform: the first page whose `name` matches.
    * @param pageName The name of the page block in the JSON repository.
    * @returns The matching PageObject, or undefined if not found.
    */
   private findPage(pageName: string): PageObject | undefined {
-    return this.pageData.pages.find((p) => p.name === pageName);
+    const active = this._platform;
+    if (active === undefined) return this.pageData.pages.find((p) => p.name === pageName);
+    return this.pageData.pages.find((p) => p.name === pageName && (p.platform ?? 'web') === active);
+  }
+
+  /**
+   * Like {@link findPage}, but throws when no page matches. Every public
+   * method that takes a `pageName` resolves it through here.
+   * @param pageName The name of the page block in the JSON repository.
+   * @returns The matching PageObject.
+   * @throws Error — without an active platform:
+   *   `ElementRepository: Page '<name>' not found.`; with one:
+   *   `Page "<name>" has no entry for platform "<active>". Available: <list>.`
+   *   where `<list>` is the comma-separated platforms that do declare the
+   *   page, in file order, or `none`.
+   */
+  private requirePage(pageName: string): PageObject {
+    const page = this.findPage(pageName);
+    if (page) return page;
+    if (this._platform === undefined) {
+      throw new Error(`ElementRepository: Page '${pageName}' not found.`);
+    }
+    const available: string[] = [];
+    for (const p of this.pageData.pages) {
+      if (p.name !== pageName) continue;
+      const platform = p.platform ?? 'web';
+      if (!available.includes(platform)) available.push(platform);
+    }
+    throw new Error(
+      `Page "${pageName}" has no entry for platform "${this._platform}". Available: ${available.length ? available.join(', ') : 'none'}.`,
+    );
   }
 
   /**

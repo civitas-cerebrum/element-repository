@@ -1,3 +1,5 @@
+import { Platform } from '../platform';
+
 /** A regex pattern with optional flags, used for text or accessible-name matching. */
 export interface RegexPattern {
   regex: string;
@@ -70,7 +72,12 @@ export interface FrameSelector {
  */
 export interface PageObject {
   name: string;
-  platform?: string;
+  /**
+   * The platform this page block belongs to; missing means `'web'`. One file
+   * may hold the same page `name` once per platform — an
+   * {@link ElementRepository} with an active platform picks the matching block.
+   */
+  platform?: Platform;
   /** Iframe scope — elements on this page live inside this frame. */
   frame?: FrameSelector | FrameSelector[];
   /** Disambiguate when multiple frames match: `'first'`, `'last'`, or a zero-based index. */
@@ -81,4 +88,14 @@ export interface PageObject {
 /** Top-level shape of the JSON element repository file. */
 export interface PageRepository {
   pages: PageObject[];
+}
+
+/**
+ * The repository shape the {@link ElementRepository} constructor accepts.
+ * Identical to {@link PageRepository} except that a page's `platform` may be
+ * any string, so data parsed from JSON (where TypeScript widens string
+ * literals to `string`) can be passed in without a cast.
+ */
+export interface PageRepositoryInput {
+  pages: Array<Omit<PageObject, 'platform'> & { platform?: string }>;
 }
