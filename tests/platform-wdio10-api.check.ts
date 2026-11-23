@@ -78,4 +78,9 @@ export async function elementCalls(el: WebdriverIO.Element, target: WebdriverIO.
   await el.waitForExist({ timeout: 1000, reverse: true });
   await el.waitForDisplayed({ timeout: 1000 });
   await el.waitForDisplayed({ timeout: 1000, reverse: true });
+
+  // Child lookups under a parent element (locateChild).
+  const child: WebdriverIO.Element = await el.$('~child', { strict: false });
+  const children: WebdriverIO.Element[] = Array.from(await el.$$('~child'));
+  void child; void children;
 }

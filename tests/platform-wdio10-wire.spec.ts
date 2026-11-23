@@ -22,6 +22,8 @@ const WINDOW = { x: 0, y: 0, width: 400, height: 800 };
 /** A selector value the fake server answers with several matches. */
 const MANY = 'many';
 const MANY_IDS = [ELEMENT, 'el-2', 'el-3'];
+/** A selector value the fake server finds nothing for. */
+const MISSING = 'missing';
 
 interface Recorded { method: string; path: string; body: any }
 
@@ -44,6 +46,16 @@ async function startFakeServer(): Promise<FakeServer> {
       let status = 200;
       if (method === 'POST' && url === '/session') {
         value = { sessionId: session, capabilities: { platformName: 'iOS', 'appium:automationName': 'XCUITest' } };
+      } else if (method === 'POST' && url === `${s}/element` && body?.value === MISSING) {
+        status = 404;
+        value = { error: 'no such element', message: 'fake server: no such element', stacktrace: '' };
+      } else if (method === 'POST' && url === `${s}/elements` && body?.value === MISSING) {
+        value = [];
+      } else if (method === 'POST' && /\/element\/[^/]+\/element$/.test(url) && url.startsWith(s)) {
+        // Element-scoped find: a child of any element.
+        value = { [W3C_ELEMENT_KEY]: ELEMENT };
+      } else if (method === 'POST' && /\/element\/[^/]+\/elements$/.test(url) && url.startsWith(s)) {
+        value = [{ [W3C_ELEMENT_KEY]: ELEMENT }];
       } else if (method === 'POST' && url === `${s}/element`) {
         value = { [W3C_ELEMENT_KEY]: ELEMENT };
       } else if (method === 'POST' && url === `${s}/elements`) {
@@ -239,6 +251,22 @@ test.describe('multi-match selectors on WebdriverIO 10 (strict `$` by default)',
 
   test('nth(1) on a multi-match selector acts on the second match', async () => {
     expect(await new PlatformElement(driver, `~${MANY}`).nth(1).boundingBox()).toEqual({ ...RECT, y: RECT.y + 100 });
+  });
+
+  test('locateChild under nth(1) sends an element-scoped find on the second match', async () => {
+    const child = new PlatformElement(driver, `~${MANY}`, undefined, 2000).nth(1).locateChild('~label');
+    expect(await child.boundingBox()).toEqual(RECT);
+    const scoped = server.requests.filter(r => r.method === 'POST' && /\/element\/[^/]+\/elements?$/.test(r.path));
+    expect(scoped.map(r => [r.path.replace(`/session/${server.session}`, ''), r.body?.value])).toEqual([
+      ['/element/el-2/elements', 'label'],
+    ]);
+  });
+
+  test('a gesture on a missing element fails with "not found within N ms", not a malformed elementId', async () => {
+    await expect(new PlatformElement(driver, `~${MISSING}`).longPress({ timeout: 300 }))
+      .rejects.toThrow(/^longPress: element "~missing" not found within 300 ms$/);
+    expect(server.requests.some(r => /\/rect$/.test(r.path) && !r.path.endsWith('/window/rect'))).toBe(false);
+    expect(server.requests.some(r => r.path.endsWith('/actions'))).toBe(false);
   });
 
   test('repository default resolution of a multi-match element, then an action', async () => {

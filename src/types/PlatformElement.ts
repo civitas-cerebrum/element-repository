@@ -5,6 +5,7 @@ import {
 import { checkLongPressDuration, checkTapOffset } from './gestureChecks';
 import { ElementChain } from './ElementChain';
 import { PlatformNotSupportedError } from '../errors';
+import { isFatalDriverError } from '../utils/driverErrors';
 import type { Platform } from '../platform';
 
 /** Extra construction options for {@link PlatformElement}. */
@@ -27,6 +28,18 @@ function errorText(err: unknown): string {
 }
 
 /**
+ * A lookup found no match. Polled through until the deadline, unless
+ * `final` says no amount of waiting can produce one (an element made by
+ * `nth(k)` on an element that is already a single match).
+ */
+class NoMatchError extends Error {
+  constructor(message: string, readonly final = false) {
+    super(message);
+    this.name = 'NoMatchError';
+  }
+}
+
+/**
  * WebDriverIO-backed {@link Element} implementation for mobile and desktop platforms.
  *
  * Uses the WebDriverIO `$` / `$$` commands to locate native elements via Appium selectors.
@@ -40,6 +53,13 @@ export class PlatformElement implements Element {
   private readonly index?: number;
   /** Platform given at construction, if any (see {@link platformName}). */
   private readonly platform?: Platform;
+  /** The element {@link locateChild} was called on; lookups run under its match. */
+  private parent?: PlatformElement;
+  /**
+   * Set by {@link nth} with an index other than 0 / -1 on an element that is
+   * already a single match: like Playwright, such an element matches nothing.
+   */
+  private matchesNothing = false;
 
   /**
    * @param driver          - The WebDriverIO browser/driver instance.
@@ -72,55 +92,100 @@ export class PlatformElement implements Element {
   private static readonly INDEX_POLL_MS = 200;
 
   /**
-   * True when this element picks a match by position from `$$`. Index 0
-   * (from {@link first} / `nth(0)`) uses `$`, which already returns the
-   * first match and keeps WebdriverIO's own waiting.
+   * A new element on the same driver and platform, keeping this element's
+   * parent unless `parent` is given.
    */
-  private get byIndex(): boolean {
-    return !this.resolvedElement && this.index !== undefined && this.index !== 0;
+  private derive(options: { selector?: string; index?: number; parent?: PlatformElement; matchesNothing?: boolean; resolved?: any }): PlatformElement {
+    const el = new PlatformElement(
+      this.driver, options.selector ?? this.selector, options.resolved, this.defaultTimeout,
+      { index: options.index, platform: this.platform },
+    );
+    el.parent = options.parent ?? this.parent;
+    el.matchesNothing = options.matchesNothing ?? false;
+    return el;
+  }
+
+  /**
+   * True when this element has no lazy WebdriverIO element of its own and is
+   * looked up by polling `$$`: it picks a match by position (index 0, from
+   * {@link first} / `nth(0)`, uses `$`, which already returns the first
+   * match and keeps WebdriverIO's own waiting), matches nothing, or lives
+   * under a parent that is looked up that way.
+   */
+  private get polled(): boolean {
+    if (this.resolvedElement) return false;
+    return this.matchesNothing || (this.index !== undefined && this.index !== 0) || !!this.parent?.polled;
+  }
+
+  /** Where this element's selector is searched: the parent's match, else the driver. */
+  private async searchContext(): Promise<any> {
+    return this.parent ? this.parent.findOne() : this.driver;
   }
 
   /**
    * Returns the underlying raw element.
    * If a {@link resolvedElement} was provided (e.g. from {@link all}), it is
-   * returned directly; an element made by {@link nth} picks its match from
-   * `$$` (throwing when there is none); otherwise the driver is queried via `$`.
+   * returned directly; a polled element (see {@link polled}) picks its match
+   * from `$$` now (throwing when there is none); otherwise `$` is queried
+   * on the driver, or on the parent's match for a child.
    */
   private async findOne(): Promise<any> {
     if (this.resolvedElement) return this.resolvedElement;
-    if (this.byIndex) return this.resolveIndexed();
+    if (this.polled) return this.resolveNow();
     // WebdriverIO 10's `$` is strict by default and throws when the selector
     // matches more than once; this element means "the first match", so opt
     // out. WebdriverIO 9's `$` takes no options and ignores the argument.
-    return this.driver.$(this.selector, { strict: false });
+    return (await this.searchContext()).$(this.selector, { strict: false });
   }
 
-  /** Picks the indexed match from `$$`, or throws a clear out-of-range error. */
-  private async resolveIndexed(): Promise<any> {
+  /** How errors name this element: `nth(i) of "<selector>"`, plus its parent. */
+  private describe(): string {
+    const own = this.index === undefined ? `"${this.selector}"` : `nth(${this.index}) of "${this.selector}"`;
+    return this.parent ? `${own} inside ${this.parent.describe()}` : own;
+  }
+
+  /**
+   * Picks this element's match from `$$` now (index 0 when unindexed), or
+   * throws a {@link NoMatchError} naming the index and the matches found.
+   */
+  private async resolveNow(): Promise<any> {
+    if (this.matchesNothing) {
+      throw new NoMatchError(
+        `nth(${this.index}): "${this.selector}" is already a single match, so this index matches nothing`, true,
+      );
+    }
     const raws = await this.queryAll();
     const index = this.index ?? 0;
     const i = index < 0 ? raws.length + index : index;
     if (i >= 0 && i < raws.length) return raws[i];
-    throw new Error(`nth(${index}): no element at that index for "${this.selector}" (found ${raws.length})`);
+    if (this.index === undefined) throw new NoMatchError(`no element matches ${this.describe()}`);
+    throw new NoMatchError(`nth(${index}): no element at that index for "${this.selector}" (found ${raws.length})`);
   }
 
-  /** All matches of the selector, as a plain array. */
+  /** All matches of the selector (under the parent's match for a child), as a plain array. */
   private async queryAll(): Promise<any[]> {
-    return Array.from((await this.driver.$$(this.selector)) ?? []);
+    return Array.from((await (await this.searchContext()).$$(this.selector)) ?? []);
   }
 
   /**
    * Locates all matching elements using `$$`. An element made by
-   * {@link first} / {@link nth} yields at most its own match.
+   * {@link first} / {@link nth} yields at most its own match; a child of a
+   * missing parent match yields none.
    */
   private async findAll(): Promise<any[]> {
-    if (this.resolvedElement || this.index === undefined) return this.queryAll();
-    try { return [await this.resolveIndexed()]; } catch { return []; }
+    if (this.matchesNothing) return [];
+    if (this.resolvedElement || this.index === undefined) {
+      try { return await this.queryAll(); }
+      catch (err) { if (err instanceof NoMatchError) return []; throw err; }
+    }
+    try { return [await this.resolveNow()]; } catch { return []; }
   }
 
   /**
    * Polls `check` until it returns true or `timeout` ms pass. On timeout,
-   * throws the last error `check` raised, or `onTimeout()`.
+   * throws the last error `check` raised, or `onTimeout()`. A fatal driver
+   * error (see `isFatalDriverError`, shared with the repository's strategy
+   * resolver) or a final {@link NoMatchError} is rethrown at once.
    */
   private async pollUntil(check: () => Promise<boolean>, timeout: number, onTimeout: () => Error): Promise<void> {
     const deadline = Date.now() + timeout;
@@ -129,7 +194,10 @@ export class PlatformElement implements Element {
       try {
         if (await check()) return;
         lastError = undefined;
-      } catch (err) { lastError = err; }
+      } catch (err) {
+        if (isFatalDriverError(err) || (err instanceof NoMatchError && err.final)) throw err;
+        lastError = err;
+      }
       const remaining = deadline - Date.now();
       if (remaining <= 0) break;
       await new Promise(resolve => setTimeout(resolve, Math.min(PlatformElement.INDEX_POLL_MS, remaining)));
@@ -141,8 +209,10 @@ export class PlatformElement implements Element {
    * The platform this element runs on, for error messages: the
    * constructor's `platform`, else the driver's `platformName` capability
    * or WebdriverIO's `isIOS` / `isAndroid` flags, else the selector's
-   * prefix (`-ios ...` / `android=`). When none of those tells, it falls
-   * back to `'android'`.
+   * prefix (`-ios ...`), in that order. When none of those tells, it
+   * falls back to `'android'`: that fallback is a guess, not a detection.
+   * Elements built by the repository always carry the page platform, so
+   * the guess only applies to elements constructed directly without one.
    */
   private platformName(): Platform {
     if (this.platform) return this.platform;
@@ -164,14 +234,14 @@ export class PlatformElement implements Element {
    * surface as "element never attached" rather than an opaque driver error.
    */
   private async ensureAttached(timeout?: number): Promise<any> {
-    if (this.byIndex) {
+    if (this.polled) {
       // No lazy WebdriverIO element exists for "the i-th match": poll `$$`
       // until it is there, and fail with the out-of-range error otherwise.
       let el: any;
       await this.pollUntil(
-        async () => { el = await this.resolveIndexed(); return true; },
+        async () => { el = await this.resolveNow(); return true; },
         timeout ?? this.defaultTimeout ?? 30000,
-        () => new Error(`nth(${this.index}): no element at that index for "${this.selector}"`),
+        () => new Error(`${this.describe()}: no matching element`),
       );
       return el;
     }
@@ -232,11 +302,17 @@ export class PlatformElement implements Element {
     // off-window items only exist in the tree after they've been
     // recycled in. Waiting up to defaultTimeout for attach here would
     // burn 30s on the happy scroll-and-find path before a single
-    // swipe runs. Instead, resolve the lazy locator and let the
-    // per-iteration isDisplayed() drive the loop.
-    const el = await this.findOne();
+    // swipe runs. Instead, every check (the fast path and each swipe)
+    // looks the element up again and asks isDisplayed(): rows loaded by a
+    // swipe only show up in a fresh query, and an indexed match that does
+    // not exist yet is simply "not shown yet" rather than an error.
+    if (this.matchesNothing) await this.resolveNow(); // throws: can never match
+    const shownNow = async (): Promise<boolean> => {
+      try { return !!(await (await this.findOne()).isDisplayed()); }
+      catch (err) { if (isFatalDriverError(err)) throw err; return false; }
+    };
     // Fast path — already on-screen.
-    if (await el.isDisplayed().catch(() => false)) return this;
+    if (await shownNow()) return this;
 
     // Best-effort keyboard dismiss cascade. See earlier history — the
     // swipe gesture starts near y=75% which is inside the soft keyboard
@@ -306,7 +382,7 @@ export class PlatformElement implements Element {
 
     for (let i = 0; i < maxSwipesPerDirection; i++) {
       await swipeXY(fromX, fromY, toX, toY);
-      if (await el.isDisplayed().catch(() => false)) return this;
+      if (await shownNow()) return this;
     }
 
     throw new Error(`scrollIntoView: element not visible after ${maxSwipesPerDirection} swipes (direction=${direction})`);
@@ -362,7 +438,15 @@ export class PlatformElement implements Element {
    * silently land somewhere else). The driver's error, if any, is appended.
    */
   private async gestureRect(method: string, timeout?: number): Promise<{ x: number; y: number; width: number; height: number }> {
-    const el = await this.ensureAttached(timeout);
+    let el = await this.ensureAttached(timeout);
+    // WebdriverIO resolves a missing element to an object without an
+    // `elementId` and does not fill it in when the element appears later;
+    // look it up once more, and report "not found" rather than sending the
+    // rect command a missing id.
+    if (!el?.elementId && !this.resolvedElement) el = await this.findOne().catch(() => null);
+    if (!el?.elementId) {
+      throw new Error(`${method}: element "${this.selector}" not found within ${timeout ?? this.defaultTimeout ?? 30000} ms`);
+    }
     let rect: { x: number; y: number; width: number; height: number } | null;
     try {
       rect = await this.readRect(el);
@@ -560,31 +644,41 @@ export class PlatformElement implements Element {
 
   // ── State ────────────────────────────────────────────────────
 
+  /**
+   * The raw element a read acts on. The default path returns WebdriverIO's
+   * lazy element, whose commands wait (implicit wait); a polled element
+   * (see {@link polled}) has no lazy element, so it polls `$$` for its
+   * match up to the element's default timeout, as an action does.
+   */
+  private async readTarget(): Promise<any> {
+    return this.polled ? this.ensureAttached() : this.findOne();
+  }
+
   async isVisible(): Promise<boolean> {
-    if (this.byIndex) {
+    if (this.polled) {
       // Like Playwright, a missing nth match is simply not visible.
-      try { return await (await this.resolveIndexed()).isDisplayed(); } catch { return false; }
+      try { return await (await this.resolveNow()).isDisplayed(); } catch { return false; }
     }
     return (await this.findOne()).isDisplayed();
   }
-  async isEnabled(): Promise<boolean> { return (await this.findOne()).isEnabled(); }
-  async isChecked(): Promise<boolean> { return (await this.findOne()).isSelected(); }
+  async isEnabled(): Promise<boolean> { return (await this.readTarget()).isEnabled(); }
+  async isChecked(): Promise<boolean> { return (await this.readTarget()).isSelected(); }
 
   // ── Extraction ───────────────────────────────────────────────
 
   async raw(): Promise<string | null> { return this.selector; }
 
   async textContent(): Promise<string | null> {
-    const text = await (await this.findOne()).getText();
+    const text = await (await this.readTarget()).getText();
     return text?.trim() ?? null;
   }
 
   async getAttribute(name: string): Promise<string | null> {
-    return (await this.findOne()).getAttribute(name);
+    return (await this.readTarget()).getAttribute(name);
   }
 
   async inputValue(): Promise<string> {
-    const el = await this.findOne();
+    const el = await this.readTarget();
     if (this.isAndroid()) {
       // UiAutomator2 doesn't expose a `value` attribute — `text` is the
       // equivalent. When the EditText is empty, `text` returns the hint
@@ -624,15 +718,19 @@ export class PlatformElement implements Element {
    * hybrid web contexts; throws on pure native contexts where there's no CSS.
    */
   async getCssProperty(property: string): Promise<string> {
-    const el = await this.findOne();
+    const el = await this.readTarget();
     // Protocol command (WebdriverIO 9/10 elements have no getCSSValue()).
     try { return await this.driver.getElementCSSValue(el?.elementId, property); }
     catch (err) { throw new Error(`getCssProperty("${property}") requires a web or hybrid context: ${errorText(err)}`); }
   }
 
+  /**
+   * The element's tag name (on native contexts, the element class such as
+   * `XCUIElementTypeButton`). Like the web element, a missing element is an
+   * error, not an empty string.
+   */
   async getTagName(): Promise<string> {
-    const el = await this.findOne();
-    try { return await el.getTagName(); } catch { return ''; }
+    return (await this.readTarget()).getTagName();
   }
 
   async exists(): Promise<boolean> {
@@ -652,7 +750,7 @@ export class PlatformElement implements Element {
   }
 
   async boundingBox(): Promise<{ x: number; y: number; width: number; height: number } | null> {
-    const el = await this.findOne();
+    const el = await this.readTarget();
     try {
       const rect = await this.readRect(el);
       if (!rect) return null;
@@ -663,7 +761,7 @@ export class PlatformElement implements Element {
   }
 
   async screenshot(_options?: { path?: string }): Promise<Buffer> {
-    const el = await this.findOne();
+    const el = await this.readTarget();
     try {
       // Protocol command; it needs the element id as its argument.
       const raw = await this.driver.takeElementScreenshot(el?.elementId);
@@ -675,8 +773,15 @@ export class PlatformElement implements Element {
 
   // ── Querying ─────────────────────────────────────────────────
 
+  /**
+   * An element for `selector` searched inside this element's match
+   * (WebdriverIO `parent.$(selector)` / `parent.$$(selector)`), honouring
+   * this element's index. Lazy: the parent is looked up when the child is
+   * used. A child of a missing indexed parent waits for it like an action
+   * does, then fails with the parent's out-of-range error; its `count()` is 0.
+   */
   locateChild(selector: string): Element {
-    return new PlatformElement(this.driver, selector, undefined, this.defaultTimeout, { platform: this.platform });
+    return this.derive({ selector, parent: this });
   }
 
   /**
@@ -687,7 +792,7 @@ export class PlatformElement implements Element {
 
   async all(): Promise<Element[]> {
     const elements = await this.findAll();
-    return elements.map(el => new PlatformElement(this.driver, this.selector, el, this.defaultTimeout, { platform: this.platform }));
+    return elements.map(el => this.derive({ resolved: el }));
   }
 
   /** The first match: same as `nth(0)`. */
@@ -701,17 +806,20 @@ export class PlatformElement implements Element {
    *
    * On an element that is already a single match (made by `first` / `nth`
    * or resolved from `all()`), `nth(0)`, `nth(-1)` and `first()` return
-   * the element itself and any other index throws.
+   * the element itself, and any other index returns an element that, as in
+   * Playwright, matches nothing: `count()` is 0, `exists()` and
+   * `isVisible()` are false, and actions and reads fail at once with a
+   * "matches nothing" error.
    *
    * @throws When `index` is not an integer.
    */
   nth(index: number): Element {
     if (!Number.isInteger(index)) throw new Error(`nth: index must be an integer, got ${index}`);
-    if (this.resolvedElement || this.index !== undefined) {
+    if (this.resolvedElement || this.index !== undefined || this.matchesNothing) {
       if (index === 0 || index === -1) return this;
-      throw new Error(`nth(${index}): out of range, "${this.selector}" is already a single match`);
+      return this.derive({ index, matchesNothing: true });
     }
-    return new PlatformElement(this.driver, this.selector, undefined, this.defaultTimeout, { index, platform: this.platform });
+    return this.derive({ index });
   }
 
   /**
@@ -731,7 +839,7 @@ export class PlatformElement implements Element {
 
   async waitFor(options?: { state?: string; timeout?: number }): Promise<void> {
     const timeout = options?.timeout ?? 30000;
-    if (this.byIndex) return this.waitForIndexed(options?.state ?? 'visible', timeout);
+    if (this.polled) return this.waitForPolled(options?.state ?? 'visible', timeout);
     const el = await this.findOne();
     switch (options?.state) {
       case 'hidden':
@@ -750,15 +858,15 @@ export class PlatformElement implements Element {
     }
   }
 
-  /** {@link waitFor} for an element made by {@link nth}: polls `$$`. */
-  private async waitForIndexed(state: string, timeout: number): Promise<void> {
-    const present = async () => { try { await this.resolveIndexed(); return true; } catch { return false; } };
-    const shown = async () => { try { return !!(await (await this.resolveIndexed()).isDisplayed()); } catch { return false; } };
+  /** {@link waitFor} for a polled element (see {@link polled}): polls `$$`. */
+  private async waitForPolled(state: string, timeout: number): Promise<void> {
+    const present = async () => { try { await this.resolveNow(); return true; } catch { return false; } };
+    const shown = async () => { try { return !!(await (await this.resolveNow()).isDisplayed()); } catch { return false; } };
     const timedOut = (what: string) => () =>
-      new Error(`nth(${this.index}) of "${this.selector}" did not become ${what} within ${timeout} ms`);
+      new Error(`${this.describe()} did not become ${what} within ${timeout} ms`);
     switch (state) {
       case 'attached':
-        return this.pollUntil(async () => { await this.resolveIndexed(); return true; }, timeout, timedOut('attached'));
+        return this.pollUntil(async () => { await this.resolveNow(); return true; }, timeout, timedOut('attached'));
       case 'detached':
         return this.pollUntil(async () => !(await present()), timeout, timedOut('detached'));
       case 'hidden':
@@ -766,7 +874,7 @@ export class PlatformElement implements Element {
       case 'visible':
       default:
         return this.pollUntil(
-          async () => { const el = await this.resolveIndexed(); return !!(await el.isDisplayed()); },
+          async () => { const el = await this.resolveNow(); return !!(await el.isDisplayed()); },
           timeout,
           timedOut('visible'),
         );

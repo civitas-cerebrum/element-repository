@@ -244,14 +244,15 @@ test.describe('PlatformElement indexing', () => {
     expect(() => el.nth(1.5)).toThrow(/nth: index must be an integer/);
   });
 
-  test('nth on an already indexed or resolved element follows Playwright: 0 and -1 are itself, others are out of range', async () => {
+  test('nth on an already indexed or resolved element follows Playwright: 0 and -1 are itself, others match nothing', async () => {
     const log: string[] = [];
     const el = new PlatformElement(listDriver(['a', 'b', 'c'], log), '~row', undefined, 1000);
     const second = el.nth(1);
     expect(second.nth(0)).toBe(second);
     expect(second.first()).toBe(second);
     expect(second.nth(-1)).toBe(second);
-    expect(() => second.nth(1)).toThrow(/nth\(1\).*single/);
+    expect(await second.nth(1).count()).toBe(0);
+    await expect(second.nth(1).click()).rejects.toThrow(/nth\(1\).*single.*matches nothing/);
     const resolved = new PlatformElement(listDriver(['a'], log), '~row', rawElement('r', log));
     expect(resolved.first()).toBe(resolved);
   });

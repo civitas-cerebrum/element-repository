@@ -18,8 +18,11 @@ export function escapeDoubleQuoted(value: string): string {
  * to `\`, so a backslash is passed through unchanged (`C:\dir` stays
  * `C:\dir`). Consequently a value that ends in `\` or contains `\"` cannot
  * be expressed in `UiSelector().text(...)`; use an `xpath` selector for it.
+ * Shared with the enhanced (role / regex) Android selectors.
+ *
+ * @internal
  */
-function escapeUiSelectorString(value: string): string {
+export function escapeUiSelectorString(value: string): string {
   return value.replace(/"/g, '\\"');
 }
 
