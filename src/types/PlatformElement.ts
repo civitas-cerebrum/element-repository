@@ -5,6 +5,11 @@ import {
 import { checkLongPressDuration, checkTapOffset } from './gestureChecks';
 import { ElementChain } from './ElementChain';
 
+/** Message of an unknown thrown value, for appending a cause to an error. */
+function errorText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
 /**
  * WebDriverIO-backed {@link Element} implementation for mobile and desktop platforms.
  *
@@ -194,9 +199,14 @@ export class PlatformElement implements Element {
     throw new Error(`scrollIntoView: element not visible after ${maxSwipesPerDirection} swipes (direction=${direction})`);
   }
 
+  /**
+   * Swipes from the element centre. Coordinates are native-context
+   * viewport coordinates (the same space as `getElementRect` and
+   * `getWindowSize`).
+   */
   async swipe(direction: SwipeDirection, options?: SwipeOptions): Promise<Element> {
     const el = await this.ensureAttached(options?.timeout);
-    const rect = await el.getRect().catch(() => null);
+    const rect = await this.readRect(el).catch(() => null);
     const windowSize = await this.driver.getWindowSize();
     // Origin: element center when the element has a rect; fall back to
     // viewport center so a missing rect (iOS XCUITest returns null for
@@ -225,23 +235,52 @@ export class PlatformElement implements Element {
   // ── Touch gestures (W3C actions) ─────────────────────────────
 
   /**
+   * Reads a raw element's rect with the W3C protocol command
+   * `getElementRect(elementId)` (WebdriverIO 9 and 10 elements have no
+   * `getRect()`). Coordinates are native-context viewport coordinates.
+   */
+  private async readRect(el: any): Promise<{ x: number; y: number; width: number; height: number } | null> {
+    return (await this.driver.getElementRect(el?.elementId)) ?? null;
+  }
+
+  /**
    * Reads the element's rect for a gesture, throwing a clear error when the
    * driver has none (unlike swipe, a gesture aimed at the element must not
-   * silently land somewhere else).
+   * silently land somewhere else). The driver's error, if any, is appended.
    */
   private async gestureRect(method: string, timeout?: number): Promise<{ x: number; y: number; width: number; height: number }> {
     const el = await this.ensureAttached(timeout);
-    const rect = await Promise.resolve().then(() => el.getRect()).catch(() => null);
+    let rect: { x: number; y: number; width: number; height: number } | null;
+    try {
+      rect = await this.readRect(el);
+    } catch (err) {
+      throw new Error(`${method}: could not read the element bounds for "${this.selector}": ${errorText(err)}`);
+    }
     if (!rect || ![rect.x, rect.y, rect.width, rect.height].every(Number.isFinite)) {
-      throw new Error(`${method}: could not read the element bounds for "${this.selector}"`);
+      throw new Error(`${method}: could not read the element bounds for "${this.selector}": the driver returned no rect`);
     }
     return rect;
   }
 
   /**
+   * Throws unless the point lies inside the window (`0 <= x < width`,
+   * `0 <= y < height`). A gesture aimed off-screen would land on whatever
+   * the driver clips it to, or fail with an opaque driver error.
+   */
+  private static assertInWindow(method: string, x: number, y: number, win: { width: number; height: number }): void {
+    if (!(x >= 0 && x < win.width && y >= 0 && y < win.height)) {
+      throw new Error(
+        `${method}: element is outside the window (point (${x}, ${y}) is not inside ${win.width}x${win.height}); ` +
+        'call scrollIntoView first',
+      );
+    }
+  }
+
+  /**
    * Sends W3C pointer actions through the protocol-level `performActions`
    * command (present in WebdriverIO 9 and 10) and always releases them,
-   * even on failure. A release error never masks the original one.
+   * even on failure. A release error never masks the original one; when
+   * the gesture itself succeeded, a release error is thrown.
    */
   private async performTouch(sources: Array<Array<Record<string, unknown>>>): Promise<void> {
     const actions = sources.map((steps, i) => ({
@@ -268,6 +307,7 @@ export class PlatformElement implements Element {
     const rect = await this.gestureRect('longPress', options?.timeout);
     const x = Math.round(rect.x + rect.width / 2);
     const y = Math.round(rect.y + rect.height / 2);
+    PlatformElement.assertInWindow('longPress', x, y, await this.driver.getWindowSize());
     await this.performTouch([[
       { type: 'pointerMove', duration: 0, origin: 'viewport', x, y },
       { type: 'pointerDown', button: 0 },
@@ -282,6 +322,7 @@ export class PlatformElement implements Element {
     checkTapOffset(offset, rect.width, rect.height);
     const x = Math.round(rect.x + offset.x);
     const y = Math.round(rect.y + offset.y);
+    PlatformElement.assertInWindow('tapAt', x, y, await this.driver.getWindowSize());
     await this.performTouch([[
       { type: 'pointerMove', duration: 0, origin: 'viewport', x, y },
       { type: 'pointerDown', button: 0 },
@@ -314,18 +355,29 @@ export class PlatformElement implements Element {
   private static readonly TWO_FINGER_MOVE_MS = 500;
   /** Smallest distance from the centre to either finger, in px. */
   private static readonly MIN_HALF_GAP = 10;
+  /** Hold after both fingers touch down, before they move, in ms. */
+  private static readonly TWO_FINGER_SETTLE_MS = 100;
 
   /**
-   * Two touch pointers on the horizontal axis through the element centre.
+   * Two touch pointers on the horizontal axis through the element centre,
+   * in native-context viewport coordinates.
+   *
    * The wider half-gap is 40% of the element width; the narrower one is
    * that times `scale` (pinch) or divided by it (zoom), never below
-   * {@link MIN_HALF_GAP}. Coordinates are clamped to the window.
+   * {@link MIN_HALF_GAP}. Because of that minimum, a small element or a
+   * large zoom scale can put the outer finger positions past the element.
+   *
+   * The element centre must be inside the window. Only the outer finger
+   * positions (pinch start, zoom end) are clamped to the window; when an
+   * inner position is off-window, or clamping would leave a finger without
+   * movement, the gesture throws instead of silently degrading.
    */
   private async twoFingerGesture(method: 'pinch' | 'zoom', scale: number, timeout?: number): Promise<void> {
     const rect = await this.gestureRect(method, timeout);
     const windowSize = await this.driver.getWindowSize();
     const cx = rect.x + rect.width / 2;
-    const cy = rect.y + rect.height / 2;
+    const y = Math.round(rect.y + rect.height / 2);
+    PlatformElement.assertInWindow(method, Math.round(cx), y, windowSize);
     const wide = Math.round(rect.width * 0.4);
     const min = PlatformElement.MIN_HALF_GAP;
 
@@ -339,15 +391,27 @@ export class PlatformElement implements Element {
       startGap = wide;
       if (endGap < min) { endGap = min; startGap = Math.round(min / scale); }
     }
+    const innerGap = method === 'zoom' ? startGap : endGap;
+    const outerGap = method === 'zoom' ? endGap : startGap;
 
-    const clampX = (v: number) => Math.min(Math.max(Math.round(v), 0), windowSize.width - 1);
-    const y = Math.min(Math.max(Math.round(cy), 0), windowSize.height - 1);
-    const fingerPath = (sign: -1 | 1) => [
-      { type: 'pointerMove', duration: 0, origin: 'viewport', x: clampX(cx + sign * startGap), y },
-      { type: 'pointerDown', button: 0 },
-      { type: 'pointerMove', duration: PlatformElement.TWO_FINGER_MOVE_MS, origin: 'viewport', x: clampX(cx + sign * endGap), y },
-      { type: 'pointerUp', button: 0 },
-    ];
+    const tooClose = () => new Error(
+      `${method}: the element centre (${Math.round(cx)}, ${y}) is too close to the window edge ` +
+      `(${windowSize.width}x${windowSize.height}) for a two-finger gesture; scroll it further into view or use a scale closer to 1`,
+    );
+    const fingerPath = (sign: -1 | 1) => {
+      const inner = Math.round(cx + sign * innerGap);
+      if (inner < 0 || inner >= windowSize.width) throw tooClose();
+      const outer = Math.min(Math.max(Math.round(cx + sign * outerGap), 0), windowSize.width - 1);
+      if ((outer - inner) * sign <= 0) throw tooClose();
+      const [from, to] = method === 'zoom' ? [inner, outer] : [outer, inner];
+      return [
+        { type: 'pointerMove', duration: 0, origin: 'viewport', x: from, y },
+        { type: 'pointerDown', button: 0 },
+        { type: 'pause', duration: PlatformElement.TWO_FINGER_SETTLE_MS },
+        { type: 'pointerMove', duration: PlatformElement.TWO_FINGER_MOVE_MS, origin: 'viewport', x: to, y },
+        { type: 'pointerUp', button: 0 },
+      ];
+    };
     await this.performTouch([fingerPath(-1), fingerPath(1)]);
   }
 
@@ -442,8 +506,9 @@ export class PlatformElement implements Element {
    */
   async getCssProperty(property: string): Promise<string> {
     const el = await this.findOne();
-    try { return await el.getCSSValue(property); }
-    catch { throw new Error(`getCssProperty("${property}") requires a web or hybrid context`); }
+    // Protocol command (WebdriverIO 9/10 elements have no getCSSValue()).
+    try { return await this.driver.getElementCSSValue(el?.elementId, property); }
+    catch (err) { throw new Error(`getCssProperty("${property}") requires a web or hybrid context: ${errorText(err)}`); }
   }
 
   async getTagName(): Promise<string> {
@@ -470,21 +535,22 @@ export class PlatformElement implements Element {
   async boundingBox(): Promise<{ x: number; y: number; width: number; height: number } | null> {
     const el = await this.findOne();
     try {
-      const rect = await el.getRect();
+      const rect = await this.readRect(el);
       if (!rect) return null;
       return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
-    } catch {
-      throw new Error('boundingBox() is not supported on this platform driver');
+    } catch (err) {
+      throw new Error(`boundingBox() could not read the element rect: ${errorText(err)}`);
     }
   }
 
   async screenshot(_options?: { path?: string }): Promise<Buffer> {
     const el = await this.findOne();
     try {
-      const raw = await el.takeElementScreenshot();
+      // Protocol command; it needs the element id as its argument.
+      const raw = await this.driver.takeElementScreenshot(el?.elementId);
       return Buffer.from(raw as string, 'base64');
-    } catch {
-      throw new Error('screenshot() is not supported on this platform driver');
+    } catch (err) {
+      throw new Error(`screenshot() is not supported on this platform driver: ${errorText(err)}`);
     }
   }
 

@@ -158,7 +158,10 @@ export class ElementChain implements PromiseLike<Element> {
     return this;
   }
 
-  /** Wait for visible, then tap at an offset from the element's top-left corner. */
+  /**
+   * Wait for visible, then tap at an offset from the element's top-left corner.
+   * An explicit `options.timeout` overrides the chain timeout.
+   */
   tapAt(offset: TapOffset, options?: ElementActionOptions): this {
     this.queue.push(async () => {
       const opts = { ...options, timeout: options?.timeout ?? this.timeout };
@@ -168,7 +171,10 @@ export class ElementChain implements PromiseLike<Element> {
     return this;
   }
 
-  /** Wait for visible, then pinch (fingers together) on the element. */
+  /**
+   * Wait for visible, then pinch (fingers together) on the element.
+   * An explicit `options.timeout` overrides the chain timeout.
+   */
   pinch(options?: PinchOptions): this {
     this.queue.push(async () => {
       const opts = { ...options, timeout: options?.timeout ?? this.timeout };
@@ -178,7 +184,10 @@ export class ElementChain implements PromiseLike<Element> {
     return this;
   }
 
-  /** Wait for visible, then zoom (fingers apart) on the element. */
+  /**
+   * Wait for visible, then zoom (fingers apart) on the element.
+   * An explicit `options.timeout` overrides the chain timeout.
+   */
   zoom(options?: ZoomOptions): this {
     this.queue.push(async () => {
       const opts = { ...options, timeout: options?.timeout ?? this.timeout };

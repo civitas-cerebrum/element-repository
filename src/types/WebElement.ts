@@ -152,13 +152,22 @@ export class WebElement implements Element {
   /**
    * {@inheritDoc Element.longPress}
    *
-   * Web: moves the mouse to the element centre, holds the primary button
-   * for `duration` ms, then releases.
+   * Web: scrolls the element into view, runs Playwright's actionability
+   * and hit-target checks by hovering its centre (so an element covered by
+   * another one fails instead of the press landing on the cover), then
+   * holds the primary button for `duration` ms (rounded to whole ms) and
+   * releases.
    */
   async longPress(options?: LongPressOptions): Promise<void> {
     const duration = checkLongPressDuration(options?.duration);
-    await this.ensureAttached(options?.timeout);
-    const box = await this.locator.boundingBox({ timeout: options?.timeout });
+    const timeout = options?.timeout;
+    await this.ensureAttached(timeout);
+    await this.locator.scrollIntoViewIfNeeded({ timeout });
+    const before = await this.locator.boundingBox({ timeout });
+    if (!before) throw new Error('longPress: could not read the element bounds (not rendered)');
+    await this.locator.hover({ timeout, position: { x: before.width / 2, y: before.height / 2 } });
+    // Re-read after hover: actionability may have scrolled the page.
+    const box = await this.locator.boundingBox({ timeout });
     if (!box) throw new Error('longPress: could not read the element bounds (not rendered)');
     const page = this.locator.page();
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);

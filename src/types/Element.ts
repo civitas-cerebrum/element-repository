@@ -48,8 +48,8 @@ export interface LongPressOptions extends ElementActionOptions {
 /**
  * Offset for {@link Element.tapAt}, in CSS pixels (device-independent
  * points on Appium) measured from the element's top-left corner. Both
- * values must lie within the element's bounds: `0 <= x <= width` and
- * `0 <= y <= height`.
+ * values must lie within the element's bounds: `0 <= x < width` and
+ * `0 <= y < height` (the far edges belong to the next pixel outside).
  */
 export interface TapOffset {
   x: number;
@@ -167,27 +167,38 @@ export interface Element {
    * until a target becomes visible.
    *
    * On mobile, dispatches a W3C pointer action from the element's center
-   * toward the given direction for the requested distance. On web,
+   * toward the given direction for the requested distance, in
+   * native-context viewport coordinates (the space of the element rect
+   * and the window size; a webview context's CSS pixels may differ). On web,
    * delegates to the driver's native mouse/touch wheel emulation where
    * available; throws on backends that don't support programmatic
    * swipes.
    *
    * @param direction - 'up' | 'down' | 'left' | 'right'.
-   * @param options - Optional distance (default ~50% of viewport dim).
+   * @param options - Optional distance (default ~50% of viewport dim) and
+   *                  `timeout` for waiting until the element is attached.
    */
   swipe(direction: SwipeDirection, options?: SwipeOptions): Promise<Element>;
 
   /**
    * Presses and holds on the element's centre, then releases.
    *
-   * On platform (Appium) elements, dispatches a single W3C touch pointer:
-   * down, pause for `duration`, up. On web elements, holds the primary
-   * mouse button for `duration`.
+   * On platform (Appium) elements, dispatches a single W3C touch pointer
+   * in native-context viewport coordinates: down, pause for `duration`,
+   * up. The element centre must be inside the window; call
+   * {@link Element.scrollIntoView} first for an off-screen element. On web
+   * elements, scrolls the element into view, checks that it (not a cover
+   * over it) receives the pointer, then holds the primary mouse button
+   * for `duration`.
    *
-   * @param options - `duration` in ms (default `1000`); `timeout` for
-   *                  waiting until the element is attached.
-   * @throws When `duration` is negative or not finite, or the element has
-   *         no bounds.
+   * The pointer is always released. If the gesture failed, that error is
+   * thrown; if only the release failed, the release error is thrown.
+   *
+   * @param options - `duration` in ms (default `1000`, rounded to whole
+   *                  ms); `timeout` for waiting until the element is
+   *                  attached (web: also actionable).
+   * @throws When `duration` is negative or not finite, the element has no
+   *         bounds, or (platform) its centre is outside the window.
    */
   longPress(options?: LongPressOptions): Promise<void>;
 
@@ -196,12 +207,16 @@ export interface Element {
    * element's top-left corner.
    *
    * On platform (Appium) elements, dispatches a W3C touch tap at that
-   * point. On web elements, clicks at that position.
+   * point in native-context viewport coordinates; the point must be
+   * inside the window (call {@link Element.scrollIntoView} first). The
+   * pointer is always released, as for {@link Element.longPress}. On web
+   * elements, clicks at that position.
    *
-   * @param offset  - `{ x, y }` from the top-left corner; must lie within
-   *                  the element's width and height.
+   * @param offset  - `{ x, y }` from the top-left corner;
+   *                  `0 <= x < width` and `0 <= y < height`.
    * @param options - `timeout` for waiting until the element is attached.
-   * @throws When the offset lies outside the element's bounds.
+   * @throws When the offset lies outside the element's bounds, or
+   *         (platform) the point is outside the window.
    */
   tapAt(offset: TapOffset, options?: ElementActionOptions): Promise<void>;
 
@@ -209,7 +224,14 @@ export interface Element {
    * Two-finger pinch centred on the element: the fingers start apart on
    * the horizontal axis and move toward each other.
    *
-   * Platform (Appium) elements only, dispatched as two W3C touch pointers.
+   * Platform (Appium) elements only, dispatched as two W3C touch pointers
+   * in native-context viewport coordinates. The fingers start 40% of the
+   * element width from the centre; they never end closer than 10 px to
+   * it, so on a small element or a small `scale` the start positions can
+   * lie past the element. Those outer positions are clamped to the window.
+   * Throws when the element centre is outside the window, or when the
+   * centre is so close to the window edge that a finger would not move.
+   * The pointers are always released, as for {@link Element.longPress}.
    * Web elements throw `PlatformNotSupportedError`.
    *
    * @param options - `scale` in (0, 1), default `0.5`; `timeout` for
@@ -221,7 +243,14 @@ export interface Element {
    * Two-finger zoom (spread) centred on the element: the fingers start
    * close together on the horizontal axis and move apart.
    *
-   * Platform (Appium) elements only, dispatched as two W3C touch pointers.
+   * Platform (Appium) elements only, dispatched as two W3C touch pointers
+   * in native-context viewport coordinates. The fingers end 40% of the
+   * element width from the centre, but start no closer than 10 px to it,
+   * so a large `scale` can carry the end positions past the element.
+   * Those outer positions are clamped to the window. Throws when the
+   * element centre is outside the window, or when the centre is so close
+   * to the window edge that a finger would not move. The pointers are
+   * always released, as for {@link Element.longPress}.
    * Web elements throw `PlatformNotSupportedError`.
    *
    * @param options - `scale` greater than 1, default `2`; `timeout` for

@@ -522,7 +522,6 @@ test.describe('PlatformElement interaction methods', () => {
     const mockEl = createMockWdioElement({
       elementId: 'el-42',
       isDisplayed: async () => true,
-      getRect: async () => ({ x: 100, y: 200, width: 200, height: 100 }),
       waitForExist: async () => {},
     });
     let moveStart: { x: number; y: number } | null = null;
@@ -532,6 +531,10 @@ test.describe('PlatformElement interaction methods', () => {
       $$: async () => [mockEl],
       pause: async () => {},
       getWindowSize: async () => ({ width: 1000, height: 2000 }),
+      getElementRect: async (id: string) => {
+        if (id !== 'el-42') throw new Error(`unexpected element id ${id}`);
+        return { x: 100, y: 200, width: 200, height: 100 };
+      },
       action: () => ({
         move: (p: { x: number; y: number }) => {
           moveStart = p;
@@ -554,7 +557,6 @@ test.describe('PlatformElement interaction methods', () => {
     const mockEl = createMockWdioElement({
       elementId: 'el-42',
       isDisplayed: async () => true,
-      getRect: async () => ({ x: 100, y: 200, width: 200, height: 100 }),
       waitForExist: async () => {},
     });
     let moveEnd: { x: number; y: number } | null = null;
@@ -563,6 +565,7 @@ test.describe('PlatformElement interaction methods', () => {
       $$: async () => [mockEl],
       pause: async () => {},
       getWindowSize: async () => ({ width: 1000, height: 2000 }),
+      getElementRect: async () => ({ x: 100, y: 200, width: 200, height: 100 }),
       action: () => ({
         move: () => ({ down: () => ({ move: (p: { x: number; y: number }) => { moveEnd = p; return { up: () => ({ perform: async () => {} }) }; } }) }),
       }),

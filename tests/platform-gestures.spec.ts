@@ -16,7 +16,8 @@ function createMockWdioElement(overrides: Record<string, any> = {}): any {
     isDisplayed: async () => true,
     waitForExist: async (_opts?: any) => {},
     waitForDisplayed: async (_opts?: any) => {},
-    getRect: async () => ({ ...RECT }),
+    // No getRect: WebdriverIO 9/10 elements have none. The rect comes from
+    // the protocol command driver.getElementRect(elementId).
     elementId: 'mock-elem-id',
     ...overrides,
   };
@@ -26,19 +27,21 @@ interface Recorder {
   performed: any[][];
   released: number;
   calls: string[];
+  rectIds: string[];
 }
 
 function createRecordingDriver(
   elementOverrides: Record<string, any> = {},
   driverOverrides: Record<string, any> = {},
 ): { driver: any; rec: Recorder } {
-  const rec: Recorder = { performed: [], released: 0, calls: [] };
+  const rec: Recorder = { performed: [], released: 0, calls: [], rectIds: [] };
   const mockEl = createMockWdioElement(elementOverrides);
   const driver = {
     $: async () => mockEl,
     $$: async () => [mockEl],
     pause: async () => {},
     getWindowSize: async () => ({ ...WINDOW }),
+    getElementRect: async (id: string) => { rec.rectIds.push(id); return { ...RECT }; },
     performActions: async (actions: any[]) => { rec.calls.push('performActions'); rec.performed.push(actions); },
     releaseActions: async () => { rec.calls.push('releaseActions'); rec.released++; },
     ...driverOverrides,
@@ -54,6 +57,7 @@ function finger(id: string, from: { x: number; y: number }, to: { x: number; y: 
   return touch(id, [
     { type: 'pointerMove', duration: 0, origin: 'viewport', x: from.x, y: from.y },
     { type: 'pointerDown', button: 0 },
+    { type: 'pause', duration: 100 },
     { type: 'pointerMove', duration: 500, origin: 'viewport', x: to.x, y: to.y },
     { type: 'pointerUp', button: 0 },
   ]);
@@ -110,9 +114,37 @@ test.describe('PlatformElement.longPress', () => {
   });
 
   test('throws a clear error when the element has no rect', async () => {
-    const { driver, rec } = createRecordingDriver({ getRect: async () => null });
+    const { driver, rec } = createRecordingDriver({}, { getElementRect: async () => null });
     await expect(new PlatformElement(driver, '~card').longPress()).rejects.toThrow(/longPress.*bounds/);
     expect(rec.performed).toHaveLength(0);
+  });
+
+  test('reads the rect through driver.getElementRect with the element id', async () => {
+    const { driver, rec } = createRecordingDriver();
+    await new PlatformElement(driver, '~card').longPress({ duration: 10 });
+    expect(rec.rectIds).toEqual(['mock-elem-id']);
+  });
+
+  test('rounds a fractional duration to an integer pause', async () => {
+    const { driver, rec } = createRecordingDriver();
+    await new PlatformElement(driver, '~card').longPress({ duration: 1500.6 });
+    expect(rec.performed[0][0].actions[2]).toEqual({ type: 'pause', duration: 1501 });
+  });
+
+  test('throws when the element centre is outside the window, without sending actions', async () => {
+    const { driver, rec } = createRecordingDriver({}, {
+      getElementRect: async () => ({ x: 100, y: 2500, width: 200, height: 100 }),
+    });
+    await expect(new PlatformElement(driver, '~card').longPress())
+      .rejects.toThrow(/longPress: element is outside the window.*scrollIntoView/);
+    expect(rec.performed).toHaveLength(0);
+  });
+
+  test('a release failure after a successful gesture is thrown', async () => {
+    const { driver } = createRecordingDriver({}, {
+      releaseActions: async () => { throw new Error('release failed'); },
+    });
+    await expect(new PlatformElement(driver, '~card').longPress({ duration: 10 })).rejects.toThrow('release failed');
   });
 
   test('waits for the element to exist with the given timeout', async () => {
@@ -143,13 +175,32 @@ test.describe('PlatformElement.tapAt', () => {
     expect(rec.calls).toEqual(['performActions', 'releaseActions']);
   });
 
-  test('accepts offsets on the element edges', async () => {
+  test('accepts the top-left corner and the last pixel inside the element', async () => {
     const { driver, rec } = createRecordingDriver();
     const el = new PlatformElement(driver, '~card');
     await el.tapAt({ x: 0, y: 0 });
-    await el.tapAt({ x: 200, y: 100 });
+    await el.tapAt({ x: 199, y: 99 });
     expect(rec.performed[0][0].actions[0]).toMatchObject({ x: 100, y: 200 });
-    expect(rec.performed[1][0].actions[0]).toMatchObject({ x: 300, y: 300 });
+    expect(rec.performed[1][0].actions[0]).toMatchObject({ x: 299, y: 299 });
+  });
+
+  test('throws when the tap point is outside the window, without sending actions', async () => {
+    const { driver, rec } = createRecordingDriver({}, {
+      getElementRect: async () => ({ x: 100, y: 1950, width: 200, height: 100 }),
+    });
+    // 1950 + 60 = 2010 is below the 2000 px window.
+    await expect(new PlatformElement(driver, '~card').tapAt({ x: 10, y: 60 }))
+      .rejects.toThrow(/tapAt: element is outside the window.*scrollIntoView/);
+    expect(rec.performed).toHaveLength(0);
+  });
+
+  test('a point on the window edge (x == window width) is outside', async () => {
+    const { driver, rec } = createRecordingDriver({}, {
+      getElementRect: async () => ({ x: 900, y: 0, width: 200, height: 100 }),
+    });
+    await expect(new PlatformElement(driver, '~card').tapAt({ x: 100, y: 10 }))
+      .rejects.toThrow(/tapAt: element is outside the window/);
+    expect(rec.performed).toHaveLength(0);
   });
 
   test('rounds fractional coordinates to integers', async () => {
@@ -161,6 +212,8 @@ test.describe('PlatformElement.tapAt', () => {
   for (const offset of [
     { x: -1, y: 10 },
     { x: 10, y: -1 },
+    { x: 200, y: 10 },
+    { x: 10, y: 100 },
     { x: 201, y: 10 },
     { x: 10, y: 101 },
     { x: Number.NaN, y: 10 },
@@ -182,9 +235,10 @@ test.describe('PlatformElement.tapAt', () => {
     expect(rec.released).toBe(1);
   });
 
-  test('throws a clear error when the element rect cannot be read', async () => {
-    const { driver } = createRecordingDriver({ getRect: async () => { throw new Error('no rect'); } });
-    await expect(new PlatformElement(driver, '~card').tapAt({ x: 1, y: 1 })).rejects.toThrow(/tapAt.*bounds/);
+  test('a rect read failure names the method and appends the cause', async () => {
+    const { driver } = createRecordingDriver({}, { getElementRect: async () => { throw new Error('stale element'); } });
+    await expect(new PlatformElement(driver, '~card').tapAt({ x: 1, y: 1 }))
+      .rejects.toThrow(/tapAt: could not read the element bounds for "~card": stale element/);
   });
 });
 
@@ -226,13 +280,47 @@ test.describe('PlatformElement.zoom', () => {
     ]);
   });
 
-  test('clamps pointer coordinates to the window', async () => {
-    const { driver, rec } = createRecordingDriver({ getRect: async () => ({ x: 900, y: 1950, width: 200, height: 100 }) });
+  test('clamps only the outer finger positions to the window', async () => {
+    const { driver, rec } = createRecordingDriver({}, {
+      getElementRect: async () => ({ x: 850, y: 200, width: 200, height: 100 }),
+    });
     await new PlatformElement(driver, '~map').zoom();
-    // Centre (1000, 2000) is outside the 1000x2000 window: clamp to (999, 1999).
-    expect(rec.performed[0][1].actions[0]).toMatchObject({ x: 999, y: 1999 });
-    expect(rec.performed[0][1].actions[2]).toMatchObject({ x: 999, y: 1999 });
-    expect(rec.performed[0][0].actions[2]).toMatchObject({ x: 920, y: 1999 });
+    // Centre (950, 250): inner 40 px each side, outer 80 px -> right end 1030, clamped to 999.
+    expect(rec.performed[0]).toEqual([
+      finger('finger1', { x: 910, y: 250 }, { x: 870, y: 250 }),
+      finger('finger2', { x: 990, y: 250 }, { x: 999, y: 250 }),
+    ]);
+  });
+
+  test('throws when clamping would leave a finger without movement', async () => {
+    const { driver, rec } = createRecordingDriver({}, {
+      getElementRect: async () => ({ x: 900, y: 200, width: 196, height: 100 }),
+    });
+    // Centre (998, 250): the right inner finger (998 + 39 = 1037) is already off the window.
+    await expect(new PlatformElement(driver, '~map').zoom())
+      .rejects.toThrow(/zoom: .*too close to the window edge/);
+    expect(rec.performed).toHaveLength(0);
+  });
+
+  test('throws when the element centre is outside the window', async () => {
+    const { driver, rec } = createRecordingDriver({}, {
+      getElementRect: async () => ({ x: 900, y: 1950, width: 200, height: 100 }),
+    });
+    await expect(new PlatformElement(driver, '~map').zoom())
+      .rejects.toThrow(/zoom: element is outside the window.*scrollIntoView/);
+    expect(rec.performed).toHaveLength(0);
+  });
+
+  test('each finger pauses 100 ms after touching down and both lists have equal length', async () => {
+    const { driver, rec } = createRecordingDriver();
+    await new PlatformElement(driver, '~map').zoom();
+    const [a, b] = rec.performed[0];
+    expect(a.actions).toHaveLength(b.actions.length);
+    expect(a.actions[2]).toEqual({ type: 'pause', duration: 100 });
+    expect(b.actions[2]).toEqual({ type: 'pause', duration: 100 });
+    for (const step of [...a.actions, ...b.actions]) {
+      if ('duration' in step) expect(Number.isInteger(step.duration)).toBe(true);
+    }
   });
 
   for (const scale of [1, 0.5, 0, -2, Number.NaN, Number.POSITIVE_INFINITY]) {
@@ -253,7 +341,7 @@ test.describe('PlatformElement.zoom', () => {
   });
 
   test('throws a clear error when the element has no rect', async () => {
-    const { driver } = createRecordingDriver({ getRect: async () => null });
+    const { driver } = createRecordingDriver({}, { getElementRect: async () => null });
     await expect(new PlatformElement(driver, '~map').zoom()).rejects.toThrow(/zoom.*bounds/);
   });
 });
@@ -280,12 +368,33 @@ test.describe('PlatformElement.pinch', () => {
   });
 
   test('keeps a 10 px minimum half-gap at the end of the pinch', async () => {
-    const { driver, rec } = createRecordingDriver({ getRect: async () => ({ x: 100, y: 100, width: 20, height: 20 }) });
+    const { driver, rec } = createRecordingDriver({}, { getElementRect: async () => ({ x: 100, y: 100, width: 20, height: 20 }) });
     await new PlatformElement(driver, '~dot').pinch();
     // Centre (110, 110). outer 8 * 0.5 = 4 -> end raised to 10, start = 10 / 0.5 = 20.
     expect(rec.performed[0]).toEqual([
       finger('finger1', { x: 90, y: 110 }, { x: 100, y: 110 }),
       finger('finger2', { x: 130, y: 110 }, { x: 120, y: 110 }),
+    ]);
+  });
+
+  test('throws when the element centre is outside the window', async () => {
+    const { driver, rec } = createRecordingDriver({}, {
+      getElementRect: async () => ({ x: -300, y: 200, width: 200, height: 100 }),
+    });
+    await expect(new PlatformElement(driver, '~map').pinch())
+      .rejects.toThrow(/pinch: element is outside the window.*scrollIntoView/);
+    expect(rec.performed).toHaveLength(0);
+  });
+
+  test('clamps the outer (start) finger positions to the window', async () => {
+    const { driver, rec } = createRecordingDriver({}, {
+      getElementRect: async () => ({ x: -50, y: 200, width: 200, height: 100 }),
+    });
+    await new PlatformElement(driver, '~map').pinch();
+    // Centre (50, 250): start 80 px each side -> left start -30 clamped to 0; end 40 px each side.
+    expect(rec.performed[0]).toEqual([
+      finger('finger1', { x: 0, y: 250 }, { x: 10, y: 250 }),
+      finger('finger2', { x: 130, y: 250 }, { x: 90, y: 250 }),
     ]);
   });
 
@@ -322,6 +431,24 @@ const GESTURE_PAGE = `<!doctype html>
   }
 </script>`;
 
+const RECORD_SCRIPT = `<script>
+  window.events = [];
+  for (const id of ['pad', 'cover']) {
+    const node = document.getElementById(id);
+    if (!node) continue;
+    for (const type of ['mousedown', 'mouseup']) node.addEventListener(type, () => window.events.push({ id, type }));
+  }
+</script>`;
+
+const BELOW_FOLD_PAGE = `<!doctype html>
+<style>body { margin: 0 } #pad { position: absolute; left: 50px; top: 3000px; width: 200px; height: 100px; background: #ccc }</style>
+<div style="height: 4000px"></div><div id="pad"></div>${RECORD_SCRIPT}`;
+
+const OVERLAY_PAGE = `<!doctype html>
+<style>body { margin: 0 } #pad { position: absolute; left: 50px; top: 40px; width: 200px; height: 100px; background: #ccc }
+#cover { position: fixed; inset: 0; background: rgba(0,0,0,.3) }</style>
+<div id="pad"></div><div id="cover"></div>${RECORD_SCRIPT}`;
+
 test.describe('WebElement gestures', () => {
   test('longPress holds the mouse button on the element centre for the duration', async ({ page }) => {
     await page.setContent(GESTURE_PAGE);
@@ -334,6 +461,31 @@ test.describe('WebElement gestures', () => {
     expect(down).toMatchObject({ x: 150, y: 90 });
     expect(up).toMatchObject({ x: 150, y: 90 });
     expect(up.t - down.t).toBeGreaterThanOrEqual(250);
+  });
+
+  test('longPress scrolls an element below the fold into view and presses it', async ({ page }) => {
+    await page.setViewportSize({ width: 800, height: 600 });
+    await page.setContent(BELOW_FOLD_PAGE);
+    const el = new WebElement(page.locator('#pad'), '#pad');
+    await el.longPress({ duration: 50 });
+    const events = await page.evaluate(() => (window as any).events);
+    expect(events.map((e: any) => e.type)).toEqual(expect.arrayContaining(['mousedown', 'mouseup']));
+  });
+
+  test('longPress on an element under an overlay fails clearly and presses nothing', async ({ page }) => {
+    await page.setContent(OVERLAY_PAGE);
+    const el = new WebElement(page.locator('#pad'), '#pad');
+    await expect(el.longPress({ duration: 50, timeout: 1000 })).rejects.toThrow(/intercepts pointer events|Timeout/);
+    const events = await page.evaluate(() => (window as any).events);
+    expect(events).toEqual([]);
+  });
+
+  test('longPress accepts a fractional duration', async ({ page }) => {
+    await page.setContent(GESTURE_PAGE);
+    const el = new WebElement(page.locator('#pad'), '#pad');
+    await el.longPress({ duration: 20.7 });
+    const events = await page.evaluate(() => (window as any).events);
+    expect(events.map((e: any) => e.type)).toEqual(expect.arrayContaining(['mousedown', 'mouseup']));
   });
 
   test('longPress rejects an invalid duration', async ({ page }) => {
@@ -349,6 +501,12 @@ test.describe('WebElement gestures', () => {
     expect(result).toBeUndefined();
     const events = await page.evaluate(() => (window as any).events);
     expect(events.find((e: any) => e.type === 'click')).toMatchObject({ x: 60, y: 60 });
+  });
+
+  test('tapAt rejects an offset on the far edge (upper bound is exclusive)', async ({ page }) => {
+    await page.setContent(GESTURE_PAGE);
+    const el = new WebElement(page.locator('#pad'), '#pad');
+    await expect(el.tapAt({ x: 200, y: 20 })).rejects.toThrow(/tapAt: offset .* outside the element bounds \(200x100\)/);
   });
 
   test('tapAt rejects an offset outside the element bounds', async ({ page }) => {
