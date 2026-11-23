@@ -16,13 +16,21 @@ export function escapeDoubleQuoted(value: string): string {
  * (Android UiAutomator2): double quotes only. UiAutomator2's UiSelector
  * parser is not a Java string parser: it decodes `\"` to `"` but never `\\`
  * to `\`, so a backslash is passed through unchanged (`C:\dir` stays
- * `C:\dir`). Consequently a value that ends in `\` or contains `\"` cannot
- * be expressed in `UiSelector().text(...)`; use an `xpath` selector for it.
+ * `C:\dir`). Consequently a value that ends in `\` cannot be expressed in
+ * a UiSelector argument (its closing quote would read as escaped), so it is
+ * rejected with an error that points to an `xpath` selector.
  * Shared with the enhanced (role / regex) Android selectors.
  *
+ * @throws When `value` ends in a backslash.
  * @internal
  */
 export function escapeUiSelectorString(value: string): string {
+  if (value.endsWith('\\')) {
+    throw new Error(
+      `UiSelector argument ${JSON.stringify(value)} ends in a backslash, which UiSelector cannot express ` +
+      '(the closing quote would read as escaped); use an xpath selector for this element instead',
+    );
+  }
   return value.replace(/"/g, '\\"');
 }
 
@@ -98,8 +106,9 @@ export const APPIUM_FORMATTERS: Record<string, SelectorFormatter> = {
  *
  * `text` is an exact `UiSelector().text("...")` match. Only double quotes in
  * the value are escaped: UiAutomator2's UiSelector parser decodes `\"` but
- * not `\\`, so backslashes are sent unchanged. A value that ends in `\` or
- * contains `\"` cannot be expressed this way; use an `xpath` selector.
+ * not `\\`, so backslashes are sent unchanged. A value that ends in `\`
+ * cannot be expressed this way (the closing quote would read as escaped):
+ * the formatter throws for it; use an `xpath` selector instead.
  */
 export const ANDROID_FORMATTERS: Record<string, SelectorFormatter> = {
   ...APPIUM_FORMATTERS,

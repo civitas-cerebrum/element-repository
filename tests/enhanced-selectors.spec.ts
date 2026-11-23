@@ -184,6 +184,20 @@ test.describe('EnhancedResolver — static methods', () => {
     expect(result).toBe('android=new UiSelector().textMatches("Error \\"\\w+\\"")');
   });
 
+  test('resolve — android UiSelector arguments ending in a backslash throw, pointing to xpath', () => {
+    const page = (selector: any) => ({
+      name: 'TestPage', platform: 'android', elements: [{ elementName: 'e', selector }],
+    });
+    for (const selector of [
+      { role: 'button', name: 'Path C:\\' },
+      { role: 'button', name: { regex: 'ends\\' } },
+      { text: { regex: 'ends\\' } },
+    ]) {
+      expect(() => EnhancedResolver.resolve(createMockPage(), page(selector), 'e', {}))
+        .toThrow(/ends in a backslash.*use an xpath selector/);
+    }
+  });
+
   test('resolveFrameScope — resolves single frame', () => {
     const page = createMockPage();
     const pageObj = {

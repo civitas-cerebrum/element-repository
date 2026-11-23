@@ -641,11 +641,18 @@ test.describe('PlatformElement interaction methods', () => {
   test('setInputFiles throws not-supported error', async () => {
     const el = new PlatformElement(createMockDriver(), '~button');
     await expect(el.setInputFiles('/file.pdf')).rejects.toThrow(PlatformNotSupportedError);
+    // No platform given and none in the driver: the documented 'android' fallback.
+    await expect(el.setInputFiles('/file.pdf')).rejects.toThrow(
+      /^"setInputFiles" is not supported on platform "android"\.$/,
+    );
   });
 
   test('dispatchEvent throws not-supported error', async () => {
     const el = new PlatformElement(createMockDriver(), '~button');
     await expect(el.dispatchEvent('click')).rejects.toThrow(PlatformNotSupportedError);
+    await expect(el.dispatchEvent('click')).rejects.toThrow(
+      /^"dispatchEvent" is not supported on platform "android"\.$/,
+    );
   });
 });
 

@@ -416,6 +416,14 @@ test.describe('text formatter escaping', () => {
     expect(ANDROID_FORMATTERS.text('C:\\dir')).toBe('android=new UiSelector().text("C:\\dir")');
   });
 
+  test('android UiSelector text: a value containing a backslash-quote is expressible', () => {
+    expect(ANDROID_FORMATTERS.text('a\\"b')).toBe('android=new UiSelector().text("a\\\\"b")');
+  });
+
+  test('android UiSelector text: a value ending in a backslash throws, pointing to xpath', () => {
+    expect(() => ANDROID_FORMATTERS.text('C:\\dir\\')).toThrow(/ends in a backslash.*use an xpath selector/);
+  });
+
   test('ios label predicate', () => {
     expect(IOS_FORMATTERS.text('Submit')).toBe('-ios predicate string:label == "Submit"');
     expect(IOS_FORMATTERS.text('say "hi" \\ bye')).toBe('-ios predicate string:label == "say \\"hi\\" \\\\ bye"');

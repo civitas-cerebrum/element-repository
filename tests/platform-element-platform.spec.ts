@@ -86,6 +86,7 @@ test.describe('web-only methods on PlatformElement throw PlatformNotSupportedErr
       expect(err).toBeInstanceOf(PlatformNotSupportedError);
       expect((err as PlatformNotSupportedError).method).toBe(method);
       expect((err as PlatformNotSupportedError).platform).toBe('ios');
+      expect((err as Error).message).toBe(`"${method}" is not supported on platform "ios".`);
     });
   }
 
@@ -94,5 +95,6 @@ test.describe('web-only methods on PlatformElement throw PlatformNotSupportedErr
     const err = await new PlatformElement(driver, '~row').dispatchEvent('click').then(() => null, (e: unknown) => e);
     expect(err).toBeInstanceOf(PlatformNotSupportedError);
     expect((err as PlatformNotSupportedError).platform).toBe('android');
+    expect((err as Error).message).toBe('"dispatchEvent" is not supported on platform "android".');
   });
 });
