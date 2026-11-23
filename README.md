@@ -184,7 +184,7 @@ The `platform` of each page block determines which selector format is used. If `
 
 | Platform | `"text": "Sign in"` resolves to |
 |----------|---------------------------------|
-| `android` | `android=new UiSelector().text("Sign in")` — exact match. Only double quotes are escaped: UiAutomator2's UiSelector parser decodes `\"` but not `\\`, so a value that **ends in `\` or contains `\"`** cannot be expressed this way; use an `xpath` selector for it. |
+| `android` | `android=new UiSelector().text("Sign in")` — exact match. Only double quotes are escaped: UiAutomator2's UiSelector parser decodes `\"` but not `\\`, so other backslashes are sent unchanged. A value that **ends in `\`** cannot be expressed this way: the formatter throws an error pointing you to an `xpath` selector. |
 | `ios` | `-ios predicate string:label == "Sign in"` — exact match on `label`; quotes and backslashes are escaped. |
 
 ### Selector Fallback Chains
