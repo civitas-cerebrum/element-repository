@@ -19,6 +19,9 @@ import { EnhancedResolver } from './EnhancedResolver';
  */
 const ATTACH_PROBE_TIMEOUT_MS = 2_000;
 
+/** Poll interval for the platform TEXT lookup while waiting for a match. */
+const TEXT_POLL_INTERVAL_MS = 250;
+
 /** Strategies `fromLocator` / `fromSelector` handle — used in the unhandled-strategy error. */
 const HANDLED_STRATEGIES = [
   SelectionStrategy.INDEX,
@@ -192,11 +195,11 @@ export class StrategyResolver {
           if (!options.value) {
             throw new Error('options.value is required when using SelectionStrategy.TEXT');
           }
-          const baseLocator = driver.locator(selector);
-          const filtered = baseLocator.filter({ hasText: options.value });
-          const element = isWeb
-            ? new WebElement(filtered.first(), selector, timeout)
-            : new PlatformElement(driver, selector, undefined, timeout);
+          if (!isWeb) {
+            return StrategyResolver.resolvePlatformByText(driver, selector, elementName, pageName, timeout, options.value);
+          }
+          const filtered = driver.locator(selector).filter({ hasText: options.value });
+          const element = new WebElement(filtered.first(), selector, timeout);
           await element.waitFor({ state: 'attached', timeout: Math.min(timeout, ATTACH_PROBE_TIMEOUT_MS) }).catch(() => {});
           return element;
         }
@@ -259,6 +262,59 @@ export class StrategyResolver {
     const element = base.first();
     await element.waitFor({ state: 'attached', timeout }).catch(() => {});
     return element;
+  }
+
+  /**
+   * Applies the TEXT strategy on a platform (WebDriverIO/Appium) page.
+   *
+   * There is no lazy text filter in WebDriverIO, so the match is picked
+   * eagerly: all matches of `selector` are fetched with `driver.$$`, each
+   * one's text is read with `getText()` (the same source as
+   * {@link PlatformElement.textContent}), and the chosen raw element is
+   * wrapped in a {@link PlatformElement}.
+   *
+   * Matching mirrors Playwright's `filter({ hasText })` on web — a
+   * case-insensitive, whitespace-normalised "contains" — except that an exact
+   * (trimmed) match is preferred over an earlier partial one.
+   *
+   * Because the result is picked eagerly it is load-bearing, like ATTRIBUTE
+   * and RANDOM: the lookup polls until a match appears or the caller's full
+   * `timeout` elapses, rather than the swallowed 2 s attach probe of the web
+   * path. With no match it throws the same not-found error as
+   * `ElementRepository.getByText`.
+   */
+  private static async resolvePlatformByText(
+    driver: any,
+    selector: string,
+    elementName: string,
+    pageName: string,
+    timeout: number,
+    value: string,
+  ): Promise<Element> {
+    const normalise = (s: string) => s.replace(/\s+/g, ' ').trim().toLowerCase();
+    const wanted = value.trim();
+    const wantedNorm = normalise(value);
+    const deadline = Date.now() + timeout;
+
+    for (;;) {
+      let raws: any[] = [];
+      try { raws = Array.from((await driver.$$(selector)) ?? []); } catch { raws = []; }
+
+      const texts: Array<string | null> = [];
+      for (const raw of raws) {
+        try { texts.push(((await raw.getText()) ?? '').trim()); } catch { texts.push(null); }
+      }
+
+      let index = texts.findIndex(t => t !== null && t === wanted);
+      if (index < 0) index = texts.findIndex(t => t !== null && normalise(t).includes(wantedNorm));
+      if (index >= 0) return new PlatformElement(driver, selector, raws[index], timeout);
+
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) break;
+      await new Promise(resolve => setTimeout(resolve, Math.min(TEXT_POLL_INTERVAL_MS, remaining)));
+    }
+
+    throw new Error(`Element '${elementName}' on '${pageName}' with text "${value}" not found.`);
   }
 
   /**

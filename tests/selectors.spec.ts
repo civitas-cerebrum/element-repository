@@ -44,8 +44,8 @@ test.describe('getSelector — Appium platform formatting', () => {
       expect(repo.getSelector('byXpath', 'TestPageAndroid')).toBe('//android.widget.Button');
     });
 
-    test('id → #value', () => {
-      expect(repo.getSelector('byId', 'TestPageAndroid')).toBe('#submit-btn');
+    test('id → id=value (resource-id)', () => {
+      expect(repo.getSelector('byId', 'TestPageAndroid')).toBe('id=submit-btn');
     });
 
     test('uiautomator → android=value', () => {
