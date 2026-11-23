@@ -1,7 +1,10 @@
 import { test, expect } from '@playwright/test';
 import { ElementRepository } from '../src/repo/ElementRepository';
 import { WebElement, PlatformElement } from '../src/types';
-import { PLATFORMS, familyOf, isPlatformName, Platform, ElementRepositoryOptions } from '../src';
+import { PLATFORMS, familyOf, isPlatformName, Platform, ElementRepositoryOptions, PageRepositoryInput } from '../src';
+import * as path from 'path';
+import * as ts from 'typescript';
+import pagesJson from './platform-pages.json';
 
 // ---------------------------------------------------------------------------
 // Shared data: the same page name declared once per platform
@@ -315,6 +318,132 @@ test.describe('ElementRepository — three-platform LoginPage repository', () =>
       expect(selectors).toContain(c.selector);
     });
   }
+});
+
+// ===========================================================================
+// Public types (compile-time) and a typed JSON fixture
+// ===========================================================================
+
+test.describe('ElementRepository — public types', () => {
+  test('the type-check fixture compiles (union options, root type exports, typed JSON)', () => {
+    test.setTimeout(120_000);
+    const configPath = path.resolve(__dirname, '..', 'tsconfig.json');
+    const config = ts.readConfigFile(configPath, ts.sys.readFile);
+    const parsed = ts.parseJsonConfigFileContent(config.config, ts.sys, path.dirname(configPath));
+    const program = ts.createProgram([path.resolve(__dirname, 'platform-types.check.ts')], {
+      ...parsed.options,
+      noEmit: true,
+      resolveJsonModule: true,
+      rootDir: undefined,
+      outDir: undefined,
+      declaration: false,
+    });
+    const diagnostics = ts.getPreEmitDiagnostics(program);
+    const text = ts.formatDiagnostics(diagnostics, {
+      getCanonicalFileName: (f) => f,
+      getCurrentDirectory: () => process.cwd(),
+      getNewLine: () => '\n',
+    });
+    expect(text).toBe('');
+  });
+
+  test('a typed JSON import loads through the constructor and resolves per platform', async () => {
+    const input: PageRepositoryInput = pagesJson;
+    const { driver, selectors } = createRecordingDriver();
+    const android = new ElementRepository(driver, input, { platform: 'android' });
+    expect(android.getSelector('submit', 'LoginPage')).toBe('~login-submit');
+    const el = await android.get('submit', 'LoginPage');
+    expect(el).toBeInstanceOf(PlatformElement);
+    expect(selectors).toContain('~login-submit');
+
+    const web = new ElementRepository(createRecordingDriver().driver, pagesJson, { platform: 'web' });
+    expect(web.getSelector('submit', 'LoginPage')).toBe('css=button[type=submit]');
+    expect(web.getElementMeta('help', 'LoginPage')).toEqual({ provisional: true, list: false });
+
+    const ios = new ElementRepository(createRecordingDriver().driver, pagesJson, { platform: 'ios' });
+    expect(ios.getElementMeta('rows', 'LoginPage')).toEqual({ provisional: false, list: true });
+  });
+});
+
+// ===========================================================================
+// Repository validation: platform values and duplicate name/platform pairs
+// ===========================================================================
+
+test.describe('ElementRepository.validate — platform pages', () => {
+  const page = (name: string, platform?: string, extra: Record<string, unknown> = {}) => ({
+    name,
+    ...(platform === undefined ? {} : { platform }),
+    ...extra,
+    elements: [{ elementName: 'submit', selector: { css: 'button' } }],
+  });
+
+  test('rejects a page platform outside the vocabulary, naming the page, value and valid values', () => {
+    const data: PageRepositoryInput = { pages: [page('LoginPage', 'web'), page('LoginPage', 'mobile')] };
+    const expected =
+      'ElementRepository: invalid repository — page \'LoginPage\' has "platform": "mobile" (expected one of: web, android, ios, macos, windows).';
+    expect(() => ElementRepository.validate(data)).toThrow(expected);
+    expect(() => new ElementRepository(createRecordingDriver().driver, data)).toThrow(expected);
+  });
+
+  test('platform values are case-sensitive and must be strings', () => {
+    const data = { pages: [page('A', 'IOS'), page('B', 7 as unknown as string)] };
+    expect(() => ElementRepository.validate(data)).toThrow(
+      'ElementRepository: invalid repository — page \'A\' has "platform": "IOS" (expected one of: web, android, ios, macos, windows); '
+      + 'page \'B\' has "platform": 7 (expected one of: web, android, ios, macos, windows).',
+    );
+  });
+
+  test('rejects the same page name twice for one platform (missing platform counts as web)', () => {
+    const data: PageRepositoryInput = {
+      pages: [page('LoginPage'), page('LoginPage', 'android'), page('LoginPage', 'web'), page('LoginPage', 'android'), page('LoginPage', 'android')],
+    };
+    const expected = 'ElementRepository: invalid repository — '
+      + 'page \'LoginPage\' is declared more than once for platform "web"; '
+      + 'page \'LoginPage\' is declared more than once for platform "android".';
+    expect(() => ElementRepository.validate(data)).toThrow(expected);
+    expect(() => new ElementRepository(createRecordingDriver().driver, data, { platform: 'ios' })).toThrow(expected);
+  });
+
+  test('one page name once per platform is valid', () => {
+    const data: PageRepositoryInput = {
+      pages: [page('LoginPage'), page('LoginPage', 'android'), page('LoginPage', 'ios'), page('HomePage', 'web')],
+    };
+    expect(() => ElementRepository.validate(data)).not.toThrow();
+  });
+
+  test('rejects a frameIndex the resolver cannot apply', () => {
+    const data = { pages: [page('A', 'web', { frameIndex: '2' }), page('B', 'web', { frameIndex: -1 }), page('C', 'web', { frameIndex: 1.5 })] };
+    const tail = ' (expected "first", "last" or a non-negative integer)';
+    expect(() => ElementRepository.validate(data)).toThrow(
+      'ElementRepository: invalid repository — '
+      + `page 'A' has "frameIndex": "2"${tail}; page 'B' has "frameIndex": -1${tail}; page 'C' has "frameIndex": 1.5${tail}.`,
+    );
+    const ok = { pages: [page('A', 'web', { frameIndex: 'first' }), page('B', 'web', { frameIndex: 'last' }), page('C', 'web', { frameIndex: 0 })] };
+    expect(() => ElementRepository.validate(ok)).not.toThrow();
+  });
+});
+
+// ===========================================================================
+// getProvisional honours the active platform
+// ===========================================================================
+
+test.describe('ElementRepository.getProvisional — active platform', () => {
+  test('lists only entries of the active platform\'s pages', () => {
+    const driver = createRecordingDriver().driver;
+    expect(new ElementRepository(driver, pagesJson, { platform: 'android' }).getProvisional())
+      .toEqual([{ pageName: 'LoginPage', elementName: 'help' }]);
+    expect(new ElementRepository(driver, pagesJson, { platform: 'web' }).getProvisional())
+      .toEqual([{ pageName: 'LoginPage', elementName: 'help' }, { pageName: 'HomePage', elementName: 'logo' }]);
+    expect(new ElementRepository(driver, pagesJson, { platform: 'ios' }).getProvisional()).toEqual([]);
+  });
+
+  test('without an active platform, lists every platform\'s entries in file order', () => {
+    expect(new ElementRepository(createRecordingDriver().driver, pagesJson).getProvisional()).toEqual([
+      { pageName: 'LoginPage', elementName: 'help' },
+      { pageName: 'LoginPage', elementName: 'help' },
+      { pageName: 'HomePage', elementName: 'logo' },
+    ]);
+  });
 });
 
 function escapeRegExp(s: string): string {

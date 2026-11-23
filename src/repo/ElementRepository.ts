@@ -26,6 +26,10 @@ export interface ElementRepositoryOptions {
    * `'web'`) equals it, so one file can hold `LoginPage` once per platform.
    * When omitted, lookup takes the first page with the given name (the
    * behaviour of earlier versions).
+   *
+   * `'macos'` and `'windows'` are accepted but not implemented yet: pages for
+   * them resolve with the base Appium selector formatter table, with no
+   * desktop-specific behaviour.
    */
   platform?: Platform;
   /** Default element wait timeout in milliseconds. Default `15000`. */
@@ -62,43 +66,36 @@ export class ElementRepository {
   private _driver: any;
 
   /**
-   * Initializes the repository with a driver and a path to a JSON file.
+   * Initializes the repository with a driver, the page repository, and
+   * optionally a default timeout or an options object.
+   *
+   * The repository data is validated on construction (see {@link validate}).
+   *
    * @param driver The Playwright `Page` or WebDriverIO `Browser`/`Driver` instance.
-   * @param filePath Path to the JSON file (relative to the project root).
-   * @param defaultTimeout Default wait timeout in milliseconds (defaults to 15000).
+   * @param fileOrData Path to the JSON file (relative to the project root), or
+   *   the parsed data as a {@link PageRepository} — or a
+   *   {@link PageRepositoryInput}, the same shape as a typed JSON import
+   *   produces it (string `platform` / `frameIndex`, checked at runtime).
+   * @param options Either a number — the default element wait timeout in
+   *   milliseconds (earlier versions' positional form) — or
+   *   `{ platform?, timeout? }` (see {@link ElementRepositoryOptions}).
+   *   Omitted: no active platform, timeout 15000.
+   * @throws Error when the repository is invalid, or when `options.platform`
+   *   is not a known {@link Platform}.
    */
-  constructor(driver: any, filePath: string, defaultTimeout?: number);
-
-  /**
-   * Initializes the repository with a driver and pre-parsed JSON data.
-   * @param driver The Playwright `Page` or WebDriverIO `Browser`/`Driver` instance.
-   * @param data The parsed JSON object matching the PageObjectSchema.
-   * @param defaultTimeout Default wait timeout in milliseconds (defaults to 15000).
-   */
-  constructor(driver: any, data: PageRepository | PageRepositoryInput, defaultTimeout?: number);
-
-  /**
-   * Initializes the repository with a driver, a JSON file path or pre-parsed
-   * data, and an options object.
-   * @param driver The Playwright `Page` or WebDriverIO `Browser`/`Driver` instance.
-   * @param fileOrData Path to the JSON file (relative to the project root) or the parsed data.
-   * @param options `{ platform?, timeout? }` — see {@link ElementRepositoryOptions}.
-   * @throws Error when `options.platform` is not a known {@link Platform}.
-   */
-  constructor(driver: any, fileOrData: string | PageRepository | PageRepositoryInput, options?: ElementRepositoryOptions);
-
   constructor(
     driver: any,
-    dataOrPath: string | PageRepository | PageRepositoryInput,
+    fileOrData: string | PageRepository | PageRepositoryInput,
     options?: number | ElementRepositoryOptions,
   ) {
     this._driver = driver;
-    if (typeof dataOrPath === 'string') {
-      const absolutePath = path.resolve(process.cwd(), dataOrPath);
+    if (typeof fileOrData === 'string') {
+      const absolutePath = path.resolve(process.cwd(), fileOrData);
       const rawData = fs.readFileSync(absolutePath, 'utf-8');
       this.pageData = JSON.parse(rawData);
     } else {
-      this.pageData = dataOrPath as PageRepository;
+      // validate() below rejects any platform / frameIndex value outside PageRepository.
+      this.pageData = fileOrData as PageRepository;
     }
     ElementRepository.validate(this.pageData);
 
@@ -126,16 +123,50 @@ export class ElementRepository {
   private static readonly BOOLEAN_ENTRY_KEYS = ['provisional', 'list'] as const;
 
   /**
-   * Validates entry-level keys of a repository without a driver — usable from
-   * a lint step as well as from the constructor. `provisional` and `list`,
-   * when present, must be JSON booleans: a string such as `"true"` is
-   * rejected rather than silently read as truthy or ignored.
+   * Validates a repository without a driver — usable from a lint step as well
+   * as from the constructor. Checks:
+   *
+   * - a page's `platform`, when present, is a {@link Platform} (exact,
+   *   case-sensitive; legacy values such as `"mobile"` are rejected);
+   * - a page `name` appears at most once per platform (a missing `platform`
+   *   counts as `'web'`);
+   * - a page's `frameIndex`, when present, is `"first"`, `"last"` or a
+   *   non-negative integer;
+   * - entry-level `provisional` and `list`, when present, are JSON booleans:
+   *   a string such as `"true"` is rejected rather than silently read as
+   *   truthy or ignored.
    * @param data The parsed repository.
-   * @throws Error naming every offending `Page.element` key.
+   * @throws Error `ElementRepository: invalid repository — <problems>.`,
+   *   listing every problem found, separated by `; `.
    */
-  public static validate(data: PageRepository): void {
+  public static validate(data: PageRepository | PageRepositoryInput): void {
     const problems: string[] = [];
+    const seen = new Set<string>();
+    const reportedDuplicates = new Set<string>();
     for (const page of data?.pages ?? []) {
+      const platformValue: unknown = page.platform;
+      if (platformValue !== undefined && !isPlatformName(platformValue)) {
+        problems.push(
+          `page '${page.name}' has "platform": ${JSON.stringify(platformValue)} (expected one of: ${PLATFORMS.join(', ')})`,
+        );
+      }
+      const effectivePlatform = String(platformValue ?? 'web');
+      const key = JSON.stringify([page.name, effectivePlatform]);
+      if (seen.has(key)) {
+        if (!reportedDuplicates.has(key)) {
+          reportedDuplicates.add(key);
+          problems.push(`page '${page.name}' is declared more than once for platform "${effectivePlatform}"`);
+        }
+      } else {
+        seen.add(key);
+      }
+      const frameIndex: unknown = page.frameIndex;
+      if (frameIndex !== undefined && frameIndex !== 'first' && frameIndex !== 'last'
+        && !(typeof frameIndex === 'number' && Number.isInteger(frameIndex) && frameIndex >= 0)) {
+        problems.push(
+          `page '${page.name}' has "frameIndex": ${JSON.stringify(frameIndex)} (expected "first", "last" or a non-negative integer)`,
+        );
+      }
       for (const element of page.elements ?? []) {
         for (const key of ElementRepository.BOOLEAN_ENTRY_KEYS) {
           const value = (element as unknown as Record<string, unknown>)[key];
@@ -528,11 +559,15 @@ export class ElementRepository {
   /**
    * Lists every entry marked `"provisional": true`, in repository order — the
    * work list of entries still to be confirmed against the running application.
+   * With an active platform set, only pages whose `platform` (missing means
+   * `'web'`) equals it are listed; without one, every page is.
    * @returns An array of `{ pageName, elementName }`.
    */
   public getProvisional(): Array<{ pageName: string; elementName: string }> {
     const out: Array<{ pageName: string; elementName: string }> = [];
+    const active = this._platform;
     for (const page of this.pageData.pages) {
+      if (active !== undefined && (page.platform ?? 'web') !== active) continue;
       for (const element of page.elements ?? []) {
         if (element.provisional === true) out.push({ pageName: page.name, elementName: element.elementName });
       }

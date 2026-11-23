@@ -93,9 +93,13 @@ export interface PageRepository {
 /**
  * The repository shape the {@link ElementRepository} constructor accepts.
  * Identical to {@link PageRepository} except that a page's `platform` may be
- * any string, so data parsed from JSON (where TypeScript widens string
- * literals to `string`) can be passed in without a cast.
+ * any string and its `frameIndex` any string or number, so data imported
+ * from a JSON file (where TypeScript widens string literals to `string`) can
+ * be passed in without a cast. Those values are checked at runtime instead,
+ * by `ElementRepository.validate` (which the constructor runs): `platform`
+ * must be a {@link Platform}, and `frameIndex` `'first'`, `'last'` or a
+ * non-negative integer.
  */
 export interface PageRepositoryInput {
-  pages: Array<Omit<PageObject, 'platform'> & { platform?: string }>;
+  pages: Array<Omit<PageObject, 'platform' | 'frameIndex'> & { platform?: string; frameIndex?: string | number }>;
 }
