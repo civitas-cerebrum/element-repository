@@ -32,7 +32,8 @@ export class ElementChain implements PromiseLike<Element> {
 
   /**
    * @param element - The element to act on.
-   * @param timeout - Optional timeout in ms applied to all wait/action calls in this chain.
+   * @param timeout - Optional timeout in ms applied to all wait/action calls in this chain,
+   *                  except `scrollIntoView`, which uses only its own `options.timeout`.
    */
   constructor(private element: Element, private timeout?: number) {}
 

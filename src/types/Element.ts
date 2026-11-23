@@ -129,9 +129,11 @@ export interface Element {
 
   /**
    * Returns a fluent {@link ElementChain} builder for sequencing actions.
-   * The optional timeout applies to all wait and action calls in the chain.
+   * The optional timeout applies to all wait and action calls in the chain,
+   * except `scrollIntoView`, which uses only its own `options.timeout`.
    *
-   * @param timeout - Timeout in ms for all operations in this chain.
+   * @param timeout - Timeout in ms for all operations in this chain except
+   *                  `scrollIntoView`.
    *
    * @example
    * ```ts
