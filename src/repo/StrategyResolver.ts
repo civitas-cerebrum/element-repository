@@ -3,6 +3,7 @@ import { Element, WebElement, PlatformElement } from '../types';
 import { ElementResolutionOptions, SelectionStrategy } from '../enum/Options';
 import { pickRandomIndex } from '../utils/math';
 import { EnhancedResolver } from './EnhancedResolver';
+import type { Platform } from '../platform';
 
 /**
  * Creates platform-appropriate Element wrappers and applies selection
@@ -201,6 +202,8 @@ export class StrategyResolver {
     options?: ElementResolutionOptions,
   ): Promise<Element> {
     const isWeb = EnhancedResolver.isWebPlatform(pageObj);
+    // The page's platform, so platform elements name it in their errors.
+    const platform = pageObj.platform;
 
     if (options?.strategy) {
       switch (options.strategy) {
@@ -210,7 +213,7 @@ export class StrategyResolver {
           }
           const base = isWeb
             ? new WebElement(driver.locator(selector), selector, timeout)
-            : new PlatformElement(driver, selector, undefined, timeout);
+            : new PlatformElement(driver, selector, undefined, timeout, { platform });
           const all = await base.all();
           if (options.index < 0 || options.index >= all.length) {
             throw new Error(`Index ${options.index} out of bounds for '${elementName}' on '${pageName}' (found ${all.length} elements).`);
@@ -220,7 +223,7 @@ export class StrategyResolver {
         case SelectionStrategy.RANDOM: {
           const base = isWeb
             ? new WebElement(driver.locator(selector), selector, timeout)
-            : new PlatformElement(driver, selector, undefined, timeout);
+            : new PlatformElement(driver, selector, undefined, timeout, { platform });
           
           // Wait for at least one element to be visible before sampling. Full
           // `timeout` is intentional — see the matching block in `fromLocator`
@@ -243,7 +246,7 @@ export class StrategyResolver {
             throw new Error('options.value is required when using SelectionStrategy.TEXT');
           }
           if (!isWeb) {
-            return StrategyResolver.resolvePlatformByText(driver, selector, elementName, pageName, timeout, options.value);
+            return StrategyResolver.resolvePlatformByText(driver, selector, elementName, pageName, timeout, options.value, platform);
           }
           const filtered = driver.locator(selector).filter({ hasText: options.value });
           const element = new WebElement(filtered.first(), selector, timeout);
@@ -253,14 +256,14 @@ export class StrategyResolver {
         case SelectionStrategy.ALL: {
           const element = isWeb
             ? new WebElement(driver.locator(selector), selector, timeout)
-            : new PlatformElement(driver, selector, undefined, timeout);
+            : new PlatformElement(driver, selector, undefined, timeout, { platform });
           await element.waitFor({ state: 'attached', timeout: Math.min(timeout, ATTACH_PROBE_TIMEOUT_MS) }).catch(() => {});
           return element;
         }
         case SelectionStrategy.ATTRIBUTE: {
           const base = isWeb
             ? new WebElement(driver.locator(selector), selector, timeout)
-            : new PlatformElement(driver, selector, undefined, timeout);
+            : new PlatformElement(driver, selector, undefined, timeout, { platform });
           return StrategyResolver.resolveByAttribute(base, elementName, pageName, timeout, options);
         }
         default:
@@ -270,7 +273,7 @@ export class StrategyResolver {
 
     const base = isWeb
       ? new WebElement(driver.locator(selector), selector, timeout)
-      : new PlatformElement(driver, selector, undefined, timeout);
+      : new PlatformElement(driver, selector, undefined, timeout, { platform });
     const element = base.first();
     await element.waitFor({ state: 'attached', timeout: Math.min(timeout, ATTACH_PROBE_TIMEOUT_MS) }).catch(() => {});
     return element;
@@ -284,6 +287,8 @@ export class StrategyResolver {
    * @param selector The platform-native selector string (e.g. `android=new UiSelector()...`).
    * @param timeout The wait timeout in milliseconds.
    * @param options Optional element resolution options (only ALL strategy is supported).
+   * @param platform The page's platform, named by the element's errors
+   * (read from the driver when omitted).
    * @returns A promise that resolves to the located Element.
    */
   static async fromMobileSelector(
@@ -291,8 +296,9 @@ export class StrategyResolver {
     selector: string,
     timeout: number,
     options?: ElementResolutionOptions,
+    platform?: Platform,
   ): Promise<Element> {
-    const base = new PlatformElement(driver, selector, undefined, timeout);
+    const base = new PlatformElement(driver, selector, undefined, timeout, { platform });
 
     if (options?.strategy === SelectionStrategy.ALL) {
       await base.waitFor({ state: 'attached', timeout }).catch(() => {});
@@ -351,6 +357,7 @@ export class StrategyResolver {
     pageName: string,
     timeout: number,
     value: string,
+    platform?: Platform,
   ): Promise<Element> {
     const normalise = (s: string) => s.replace(/\s+/g, ' ').trim().toLowerCase();
     const wanted = value.trim();
@@ -375,7 +382,7 @@ export class StrategyResolver {
 
       let index = texts.findIndex(t => t !== null && t === wanted);
       if (index < 0) index = texts.findIndex(t => t !== null && normalise(t).includes(wantedNorm));
-      if (index >= 0) return new PlatformElement(driver, selector, raws[index], timeout);
+      if (index >= 0) return new PlatformElement(driver, selector, raws[index], timeout, { platform });
 
       const remaining = deadline - Date.now();
       if (remaining <= 0) break;

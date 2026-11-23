@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { WebElement, PlatformElement, ElementType, isWeb, isPlatform } from '../src/types';
+import { PlatformNotSupportedError } from '../src/errors';
 
 // ---------------------------------------------------------------------------
 // Mock Playwright locator
@@ -639,16 +640,12 @@ test.describe('PlatformElement interaction methods', () => {
 
   test('setInputFiles throws not-supported error', async () => {
     const el = new PlatformElement(createMockDriver(), '~button');
-    await expect(el.setInputFiles('/file.pdf')).rejects.toThrow(
-      'setInputFiles is not supported on platform elements.'
-    );
+    await expect(el.setInputFiles('/file.pdf')).rejects.toThrow(PlatformNotSupportedError);
   });
 
   test('dispatchEvent throws not-supported error', async () => {
     const el = new PlatformElement(createMockDriver(), '~button');
-    await expect(el.dispatchEvent('click')).rejects.toThrow(
-      'dispatchEvent is not supported on platform elements.'
-    );
+    await expect(el.dispatchEvent('click')).rejects.toThrow(PlatformNotSupportedError);
   });
 });
 

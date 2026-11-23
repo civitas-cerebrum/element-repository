@@ -30,8 +30,8 @@ function errorText(err: unknown): string {
  * WebDriverIO-backed {@link Element} implementation for mobile and desktop platforms.
  *
  * Uses the WebDriverIO `$` / `$$` commands to locate native elements via Appium selectors.
- * Methods that have no native equivalent (e.g. {@link setInputFiles}, {@link dispatchEvent})
- * throw at runtime.
+ * Methods that have no native equivalent ({@link setInputFiles}, {@link dispatchEvent})
+ * throw {@link PlatformNotSupportedError} naming the element's platform.
  */
 export class PlatformElement implements Element {
   readonly _type = ElementType.PLATFORM;
@@ -551,11 +551,11 @@ export class PlatformElement implements Element {
   }
 
   async setInputFiles(_filePath: string | string[], _options?: ElementActionOptions): Promise<Element> {
-    throw new Error('setInputFiles is not supported on platform elements.');
+    throw new PlatformNotSupportedError('setInputFiles', this.platformName());
   }
 
   async dispatchEvent(_event: string): Promise<Element> {
-    throw new Error('dispatchEvent is not supported on platform elements.');
+    throw new PlatformNotSupportedError('dispatchEvent', this.platformName());
   }
 
   // ── State ────────────────────────────────────────────────────

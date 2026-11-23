@@ -350,7 +350,7 @@ export class ElementRepository {
       if (EnhancedResolver.isWebPlatform(pageObj)) {
         return StrategyResolver.fromLocator(enhanced, elementName, pageName, attachTimeout, options);
       } else {
-        return StrategyResolver.fromMobileSelector(this._driver, enhanced as string, attachTimeout, options);
+        return StrategyResolver.fromMobileSelector(this._driver, enhanced as string, attachTimeout, options, pageObj.platform);
       }
     }
 
