@@ -321,6 +321,78 @@ test('all() on a TEXT-resolved platform element re-queries the selector and retu
 });
 
 // ===========================================================================
+// Fallback chain with TEXT on a platform page
+// ===========================================================================
+
+test.describe('TEXT on a platform page walks the fallback chain', () => {
+  function selectorDriver(bySelector: Record<string, Array<string | null>>): { driver: any; queried: string[] } {
+    const queried: string[] = [];
+    const lists: Record<string, any[]> = {};
+    for (const [sel, texts] of Object.entries(bySelector)) {
+      lists[sel] = texts.map((t, i) => mockNativeElement(t, `${sel}#${i}`));
+    }
+    const driver: any = {
+      $: async (sel: string) => (lists[sel] ?? [])[0] ?? mockNativeElement('', 'missing'),
+      $$: async (sel: string) => { queried.push(sel); return lists[sel] ?? []; },
+    };
+    Object.defineProperty(driver, 'locator', { get() { throw new Error('locator touched'); } });
+    return { driver, queried };
+  }
+
+  const repoFor = (driver: any) => new ElementRepository(driver, {
+    pages: [{
+      name: 'Settings', platform: 'android',
+      elements: [{
+        elementName: 'row',
+        selector: { id: 'title', fallback: { 'accessibility id': 'row', fallback: { xpath: '//row' } } },
+      }],
+    }],
+  } as any);
+
+  test('primary has no text match, fallback does → resolves to the fallback', async () => {
+    const { driver, queried } = selectorDriver({ 'id=title': ['General'], '~row': ['General', 'Display'] });
+    const el = await repoFor(driver).get('row', 'Settings', { strategy: SelectionStrategy.TEXT, value: 'Display', timeout: 300 });
+    expect(el).toBeInstanceOf(PlatformElement);
+    expect((el as PlatformElement).resolvedElement.elementId).toBe('~row#1');
+    expect((el as PlatformElement).selector).toBe('~row');
+    expect(queried).toContain('id=title');
+    expect(queried).not.toContain('//row');
+  });
+
+  test('match only at the end of the chain → resolves to the terminal fallback', async () => {
+    const { driver } = selectorDriver({ 'id=title': [], '~row': ['General'], '//row': ['Display'] });
+    const el = await repoFor(driver).get('row', 'Settings', { strategy: SelectionStrategy.TEXT, value: 'Display', timeout: 300 });
+    expect((el as PlatformElement).resolvedElement.elementId).toBe('//row#0');
+  });
+
+  test('primary matches → the fallback is never queried', async () => {
+    const { driver, queried } = selectorDriver({ 'id=title': ['Display'], '~row': ['Display'] });
+    const el = await repoFor(driver).get('row', 'Settings', { strategy: SelectionStrategy.TEXT, value: 'Display', timeout: 300 });
+    expect((el as PlatformElement).resolvedElement.elementId).toBe('id=title#0');
+    expect(queried).not.toContain('~row');
+  });
+
+  test('no node matches → the primary\'s not-found error', async () => {
+    const { driver, queried } = selectorDriver({ 'id=title': ['General'], '~row': ['General'], '//row': ['General'] });
+    await expect(
+      repoFor(driver).get('row', 'Settings', { strategy: SelectionStrategy.TEXT, value: 'Display', timeout: 300 }),
+    ).rejects.toThrow(/^Element 'row' on 'Settings' with text "Display" not found\.$/);
+    expect(queried).toEqual(expect.arrayContaining(['id=title', '~row', '//row']));
+  });
+
+  test('an entry without fallback still throws straight away', async () => {
+    const { driver, queried } = selectorDriver({ 'id=title': ['General'] });
+    const repo = new ElementRepository(driver, {
+      pages: [{ name: 'Settings', platform: 'android', elements: [{ elementName: 'row', selector: { id: 'title' } }] }],
+    } as any);
+    await expect(
+      repo.get('row', 'Settings', { strategy: SelectionStrategy.TEXT, value: 'Display', timeout: 300 }),
+    ).rejects.toThrow(`Element 'row' on 'Settings' with text "Display" not found.`);
+    expect(new Set(queried)).toEqual(new Set(['id=title']));
+  });
+});
+
+// ===========================================================================
 // `text` formatter escaping
 // ===========================================================================
 

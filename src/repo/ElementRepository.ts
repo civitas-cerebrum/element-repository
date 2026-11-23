@@ -243,8 +243,11 @@ export class ElementRepository {
 
   /**
    * Resolves `selector` for `elementName`; walks `selector.fallback`
-   * recursively when the primary does not attach within the probe timeout.
-   * Returns the resolved `Element` (matched or terminal fallback).
+   * recursively when the primary does not attach within the probe timeout,
+   * or when resolving the primary throws (an eager strategy such as TEXT on
+   * a platform page that found no match). Returns the resolved `Element`
+   * (matched or terminal fallback); when the primary threw and the rest of
+   * the chain fails too, the primary's error is rethrown.
    *
    * **Probe timeout = `this.defaultTimeout`** (the repository's configured
    * element timeout — 15s by default, user-overridable via the
@@ -271,14 +274,27 @@ export class ElementRepository {
     pageName: string,
     options: ElementResolutionOptions | undefined,
   ): Promise<Element> {
-    const element = await this.resolveFromSingleSelector(pageObj, elementName, selector, pageName, options);
-
     const fallback = (selector as { fallback?: Record<string, unknown> }).fallback;
     if (!fallback) {
       // No fallback — return the lazy locator. The full element timeout
       // applies at action time via `element.waitFor(...)`, preserving the
       // pre-fallback-chain behaviour exactly.
-      return element;
+      return this.resolveFromSingleSelector(pageObj, elementName, selector, pageName, options);
+    }
+
+    // Eager strategies (e.g. TEXT on a platform page) throw during resolution
+    // instead of returning a lazy element for the probe below. Treat such a
+    // throw like a failed probe and walk the fallback; if the rest of the
+    // chain fails too, surface the primary's error.
+    let element: Element;
+    try {
+      element = await this.resolveFromSingleSelector(pageObj, elementName, selector, pageName, options);
+    } catch (primaryError) {
+      try {
+        return await this.resolveWithFallback(pageObj, elementName, fallback, pageName, options);
+      } catch {
+        throw primaryError;
+      }
     }
 
     // Wait for the primary to attach. Probe budget is `options.timeout` when
