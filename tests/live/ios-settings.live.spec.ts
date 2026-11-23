@@ -32,6 +32,14 @@ const PAGE = 'SettingsHome';
 const SETTINGS_BUNDLE_ID = 'com.apple.Preferences';
 const GENERAL_NAME = 'com.apple.settings.general';
 const PRIVACY_NAME = 'com.apple.settings.privacyAndSecurity';
+const GENERAL_LABEL = 'General';
+/**
+ * The Settings row buttons, minus any account row: the predicate excludes
+ * names containing "account" or "appleid", so no account text is ever read.
+ */
+const ROW_BUTTONS_PREDICATE =
+  'type == "XCUIElementTypeButton" AND name BEGINSWITH "com.apple.settings." ' +
+  'AND NOT (name CONTAINS[c] "account") AND NOT (name CONTAINS[c] "appleid")';
 const GENERAL_KINDS = ['generalByAccessibilityId', 'generalByPredicate', 'generalByClassChain', 'generalById'];
 
 const LIVE = process.env.LIVE_IOS === '1';
@@ -90,6 +98,7 @@ test.describe('ios-settings pages file (offline)', () => {
     expect(ios.getSelector('generalByClassChain', PAGE))
       .toBe(`-ios class chain:**/XCUIElementTypeButton[\`name == "${GENERAL_NAME}"\`]`);
     expect(ios.getSelector('privacyRow', PAGE)).toBe(`~${PRIVACY_NAME}`);
+    expect(ios.getSelector('rowButtons', PAGE)).toBe(`-ios predicate string:${ROW_BUTTONS_PREDICATE}`);
 
     // Without an active platform the first SettingsHome block (android) wins,
     // so the ios answers above come from the platform-aware lookup.
@@ -210,6 +219,55 @@ test.describe.serial('live iOS Settings (read-only)', () => {
     const general = await get('generalByAccessibilityId');
     await general.scrollIntoView({ direction: 'down', timeout: 60_000 });
     expect(await general.isVisible()).toBe(true);
+  });
+
+  test('the General row text is its label, not its value (iOS text rule)', async () => {
+    const general = await get('generalByAccessibilityId');
+    await general.scrollIntoView({ direction: 'down', timeout: 60_000 });
+    // XCUITest's getText() returns the value first (a badge such as "1" when
+    // an update is pending); the platform text rule reads the label first.
+    expect(await general.textContent()).toBe(GENERAL_LABEL);
+    const raw = await general.rawText();
+    expect(raw).not.toBeNull();
+    expect(raw!).toContain(GENERAL_LABEL);
+  });
+
+  test('the TEXT strategy and getByText resolve the General row', async () => {
+    // rowButtons matches the row buttons only (account rows excluded by the
+    // predicate). Both lookups read texts in order and stop at the first
+    // exact match, so rows below General are not read.
+    const general = await get('generalByAccessibilityId');
+    await general.scrollIntoView({ direction: 'down', timeout: 60_000 });
+    const expected = await general.boundingBox();
+    expect(expected).not.toBeNull();
+
+    const byStrategy = await repo.get('rowButtons', PAGE, {
+      strategy: SelectionStrategy.TEXT,
+      value: GENERAL_LABEL,
+      timeout: 30_000,
+    });
+    expect(isPlatform(byStrategy)).toBe(true);
+    expect(await byStrategy.getAttribute('name')).toBe(GENERAL_NAME);
+    expect(await byStrategy.boundingBox()).toEqual(expected);
+
+    const byText = await repo.getByText('rowButtons', PAGE, GENERAL_LABEL, true);
+    expect(byText).not.toBeNull();
+    expect(await byText!.getAttribute('name')).toBe(GENERAL_NAME);
+    expect(await byText!.boundingBox()).toEqual(expected);
+  });
+
+  test('gestures return the element they act on', async () => {
+    // Read-only: swipes and scrollIntoView only, never a tap or press.
+    const general = await get('generalByAccessibilityId');
+    expect(await general.scrollIntoView({ direction: 'down', timeout: 60_000 })).toBe(general);
+
+    const list = await get('settingsList');
+    const { height } = await driver.getWindowSize();
+    const distance = Math.round(height * 0.2);
+    const up = await list.swipe('up', { distance });
+    expect(up).toBe(list);
+    const back = await up.swipe('down', { distance });
+    expect(back).toBe(list);
   });
 
   for (const name of GENERAL_KINDS) {

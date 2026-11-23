@@ -10,7 +10,8 @@
         { "elementName": "generalById", "selector": { "id": "com.example.android:id/general" } },
         { "elementName": "cells", "selector": { "class name": "android.widget.LinearLayout" }, "list": true },
         { "elementName": "privacyRow", "selector": { "accessibility id": "android-only-privacy" } },
-        { "elementName": "settingsList", "selector": { "class name": "androidx.recyclerview.widget.RecyclerView" } }
+        { "elementName": "settingsList", "selector": { "class name": "androidx.recyclerview.widget.RecyclerView" } },
+        { "elementName": "rowButtons", "selector": { "class name": "android.widget.LinearLayout" }, "list": true }
       ]
     },
     {
@@ -22,7 +23,8 @@
         { "elementName": "generalById", "selector": { "css": "#web-only-general" } },
         { "elementName": "cells", "selector": { "css": "li.web-only-row" }, "list": true },
         { "elementName": "privacyRow", "selector": { "css": "#web-only-privacy" } },
-        { "elementName": "settingsList", "selector": { "css": "ul.web-only-list" } }
+        { "elementName": "settingsList", "selector": { "css": "ul.web-only-list" } },
+        { "elementName": "rowButtons", "selector": { "css": "li.web-only-row > button" }, "list": true }
       ]
     },
     {
@@ -35,7 +37,8 @@
         { "elementName": "generalById", "selector": { "id": "com.apple.settings.general" } },
         { "elementName": "cells", "selector": { "class name": "XCUIElementTypeCell" }, "list": true },
         { "elementName": "privacyRow", "selector": { "accessibility id": "com.apple.settings.privacyAndSecurity" } },
-        { "elementName": "settingsList", "selector": { "predicate": "type IN {\"XCUIElementTypeTable\", \"XCUIElementTypeCollectionView\"}" } }
+        { "elementName": "settingsList", "selector": { "predicate": "type IN {\"XCUIElementTypeTable\", \"XCUIElementTypeCollectionView\"}" } },
+        { "elementName": "rowButtons", "selector": { "predicate": "type == \"XCUIElementTypeButton\" AND name BEGINSWITH \"com.apple.settings.\" AND NOT (name CONTAINS[c] \"account\") AND NOT (name CONTAINS[c] \"appleid\")" }, "list": true }
       ]
     }
   ]
