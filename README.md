@@ -2,7 +2,7 @@
 
 [![NPM Version](https://img.shields.io/npm/v/@civitas-cerebrum/element-repository?color=rgb(88%2C%20171%2C%2070))](https://www.npmjs.com/package/@civitas-cerebrum/element-repository)
 
-A lightweight, robust package that decouples your UI selectors from your test code. By externalizing locators into a central JSON repository, you make your test automation framework cleaner, easier to maintain, and accessible to non-developers. Supports both **Playwright (web)** and **Appium/WebdriverIO (mobile)** through a unified API.
+A lightweight, robust package that decouples your UI selectors from your test code. By externalizing locators into a central JSON repository, you make your test automation framework cleaner, easier to maintain, and accessible to non-developers. Supports both **Playwright (web)** and **Appium/WebdriverIO (native iOS and Android)** through a unified API — one JSON file can hold the same page once per platform.
 
 ## 📦 Installation
 
@@ -10,8 +10,9 @@ A lightweight, robust package that decouples your UI selectors from your test co
 npm i @civitas-cerebrum/element-repository
 ```
 
-**Peer Dependencies:**
-For web testing, install `@playwright/test` or `playwright`. For mobile/platform testing, install `webdriverio`.
+**Peer Dependencies (both optional):**
+- Web testing: `@playwright/test` (`^1.58.2`).
+- Native iOS / Android testing: `webdriverio` (`^10`). WebdriverIO 10 requires Node.js `>=22.23.4 <23`, `>=24.22.1 <25` or `>=26.12.1`.
 
 ## 🚀 What is it good for?
 
@@ -78,7 +79,9 @@ Create a JSON file in your project to hold your selectors:
 
 ### Multi-Platform Configuration
 
-Use the `platform` field to define platform-specific selectors for the same page. Pages without a `platform` field default to `web`.
+One file may hold the same page `name` **once per platform**. The `platform` field names the platform of each page block; a page without it is a `web` page. Use the same `elementName` for one logical element on every platform, so test code stays identical and only the selectors differ.
+
+**`page-repository.json`**
 
 ```json
 {
@@ -87,30 +90,59 @@ Use the `platform` field to define platform-specific selectors for the same page
       "name": "LoginPage",
       "platform": "web",
       "elements": [
-        { "elementName": "submitButton", "selector": { "css": "button.web-submit" } }
+        { "elementName": "username", "selector": { "css": "input[name='username']" } },
+        { "elementName": "submit", "selector": { "css": "button[type=submit]" } },
+        { "elementName": "welcome", "selector": { "text": "Welcome back" } }
       ]
     },
     {
       "name": "LoginPage",
       "platform": "android",
       "elements": [
-        { "elementName": "submitButton", "selector": { "accessibility id": "SubmitBtn" } }
+        { "elementName": "username", "selector": { "id": "com.example.app:id/username" } },
+        { "elementName": "submit", "selector": { "accessibility id": "login-submit" } },
+        { "elementName": "welcome", "selector": { "uiautomator": "new UiSelector().textStartsWith(\"Welcome\")" } },
+        { "elementName": "rows", "list": true, "selector": { "xpath": "//android.widget.TextView[@resource-id='com.example.app:id/row']" } }
       ]
     },
     {
       "name": "LoginPage",
       "platform": "ios",
       "elements": [
-        { "elementName": "submitButton", "selector": { "predicate": "label == \"Submit\"" } }
+        { "elementName": "username", "selector": { "id": "username" } },
+        { "elementName": "submit", "selector": { "accessibility id": "login-submit" } },
+        { "elementName": "welcome", "selector": { "predicate": "label BEGINSWITH \"Welcome\"" } },
+        { "elementName": "rows", "list": true, "selector": { "class chain": "**/XCUIElementTypeCell/XCUIElementTypeStaticText" } },
+        { "elementName": "doneLabel", "selector": { "text": "Done" } }
       ]
     }
   ]
 }
 ```
 
+**Rules:**
+- `platform` must be one of `web`, `android`, `ios`, `macos`, `windows` (exact, lowercase). Any other value — including legacy values such as `"mobile"` — is rejected when the repository is constructed.
+- A missing `platform` means `web`. A page `name` may appear at most once per platform; a duplicate `name` + `platform` pair is rejected.
+- `macos` and `windows` are declared but **not implemented yet**: their pages resolve through the base Appium selector table, with no desktop-specific behaviour.
+
+**Choosing the block — the active platform.** Construct the repository with `{ platform }` and every method that takes a `pageName` uses the page whose `name` matches **and** whose `platform` (missing = `web`) equals the active platform:
+
+```typescript
+const repo = new ElementRepository(driver, 'tests/data/page-repository.json', { platform: 'ios' });
+await (await repo.get('submit', 'LoginPage')).click(); // the "ios" LoginPage block
+```
+
+If the page exists only for other platforms, the lookup throws (there is no silent fallback to another platform's block):
+
+```
+Page "LoginPage" has no entry for platform "ios". Available: web, android.
+```
+
+`Available:` lists the platforms that do declare the page, in file order, or `none`. Without an active platform the repository keeps the behaviour of earlier versions: the **first** page with that name wins, and an unknown page throws `ElementRepository: Page '<name>' not found.`. The active platform is held per instance (no global or static state), so repositories for different platforms can be used side by side in one process.
+
 ### Supported Selector Keys
 
-The `platform` field on each page object determines which selector format is used. If `platform` is omitted, it defaults to `web`.
+The `platform` of each page block determines which selector format is used. If `platform` is omitted, it defaults to `web`.
 
 #### Web (Playwright)
 
@@ -125,23 +157,39 @@ The `platform` field on each page object determines which selector format is use
 | `placeholder` | `[placeholder='<value>']` | `"placeholder": "Search..."` |
 | `label` | `[aria-label='<value>']` | `"label": "Close"` |
 
-#### Non-Web / Mobile (Appium)
+#### Non-Web / Native (Appium)
 
 | Key | camelCase Alias | Resolves To | Example |
 |-----|-----------------|-------------|---------|
 | `accessibility id` | `accessibilityId` | `~<value>` | `"accessibility id": "LoginBtn"` |
+| `id` | — | per platform, see below — never a CSS `#id` | `"id": "submit-btn"` |
 | `xpath` | — | `<value>` (raw) | `"xpath": "//android.widget.Button"` |
-| `id` | — | `#<value>` | `"id": "submit-btn"` |
+| `text` | — | per platform, see below (android, ios only) | `"text": "Sign in"` |
 | `uiautomator` | `androidUIAutomator` | `android=<value>` | `"uiautomator": "new UiSelector().text(\"Go\")"` |
 | `predicate` | `iOSNsPredicateString` | `-ios predicate string:<value>` | `"predicate": "label == \"Login\""` |
 | `class chain` | `iOSClassChain` | `-ios class chain:<value>` | `"class chain": "**/XCUIElementTypeButton"` |
 | `class name` | `className` | `<value>` (raw) | `"class name": "android.widget.EditText"` |
 
-> All strategy keys that contain spaces also accept a camelCase alias (e.g., `"accessibilityId"` instead of `"accessibility id"`).
+> All strategy keys that contain spaces also accept a camelCase alias (e.g., `"accessibilityId"` instead of `"accessibility id"`). The enhanced `role` + `name` selector also works on platform pages.
+
+**`id` per platform:**
+
+| Platform | `"id": "submit"` resolves to |
+|----------|------------------------------|
+| `android` | `id=submit` — Appium's native `id` strategy, matched against `resource-id`. A full id (`com.example.app:id/submit`) is used as-is; a short id is prefixed with the current app package (`<package>:id/submit`), so an element of another package needs its full resource id. |
+| `ios` | `-ios predicate string:name == "submit"` — an exact match on `name` (XCUITest exposes the accessibility identifier as `name`). Quotes and backslashes are escaped. |
+| `macos`, `windows` | `~submit` (accessibility id) — the base Appium table. |
+
+**`text` per platform:**
+
+| Platform | `"text": "Sign in"` resolves to |
+|----------|---------------------------------|
+| `android` | `android=new UiSelector().text("Sign in")` — exact match. Only double quotes are escaped: UiAutomator2's UiSelector parser decodes `\"` but not `\\`, so a value that **ends in `\` or contains `\"`** cannot be expressed this way; use an `xpath` selector for it. |
+| `ios` | `-ios predicate string:label == "Sign in"` — exact match on `label`; quotes and backslashes are escaped. |
 
 ### Selector Fallback Chains
 
-Add a nested `fallback` selector to handle DOM variations (per country, per brand, per renderer) without duplicating repo entries. When the primary matches zero elements within a short probe timeout (100ms), resolution walks into `fallback` — recursively.
+Add a nested `fallback` selector to handle DOM variations (per country, per brand, per renderer) without duplicating repo entries. When the primary does not attach within the probe timeout — the call's `options.timeout` when given, otherwise the repository's `defaultTimeout` (15 s by default) — resolution walks into `fallback`, recursively.
 
 ```json
 {
@@ -159,7 +207,9 @@ Add a nested `fallback` selector to handle DOM variations (per country, per bran
 **Rules:**
 - Primary attaches within the repo's `defaultTimeout` (15s default) → fallback is never consulted. `waitFor` resolves the moment the element appears, so the common case pays no timeout cost.
 - Primary does not attach within `defaultTimeout` → walk into `selector.fallback`.
-- Entries without a `fallback` key skip the probe entirely — the lazy locator uses the element-interactions' action-time timeout (30–60s) just like before.
+- Primary **throws while it is being resolved** → walk into `selector.fallback` as well. This covers the strategies that pick their match eagerly: `TEXT` on a platform page that finds no match, and `ATTRIBUTE`, `RANDOM` and `INDEX` (web and platform) that find no match or an out-of-range index. If the rest of the chain fails too, the primary's error is rethrown.
+- The probe waits on the first match only, so a primary that matches several elements counts as attached (`getAll()` / `ALL` still return every match of the primary).
+- Entries without a `fallback` key skip the fallback probe. The element is returned after a best-effort attach wait, capped at 2 s for standard selectors and web enhanced selectors (its failure is swallowed); the full timeout applies when you act on the element (`click()`, `fill()`, …).
 - Chains are recursive: `fallback.fallback.fallback` is legal.
 - Fallbacks can mix strategies freely — CSS primary with role+name fallback, id primary with xpath fallback, etc.
 
@@ -211,9 +261,59 @@ const repo = new ElementRepository(page, locatorData);
 // Option C: With a custom timeout (default: 15000ms)
 const repo = new ElementRepository(page, locatorData, 30000);
 
+// Option D: With an options object — active platform and/or timeout
+const repo = new ElementRepository(page, locatorData, { platform: 'web', timeout: 30000 });
+
 // Access the bound driver
 const driver = repo.driver; // returns the Page/Browser passed to the constructor
 ```
+
+### Native iOS and Android (WebdriverIO + Appium)
+
+Pass a WebdriverIO `Browser` from `remote()` as the driver and name the active platform. Keep the capabilities in a JSON file rather than in code:
+
+**`capabilities/ios.json`** (placeholder values)
+
+```json
+{
+  "platformName": "iOS",
+  "appium:automationName": "XCUITest",
+  "appium:udid": "<device-udid>",
+  "appium:bundleId": "com.example.app"
+}
+```
+
+```typescript
+import { readFileSync } from 'fs';
+import { remote } from 'webdriverio';
+import { ElementRepository, SelectionStrategy } from '@civitas-cerebrum/element-repository';
+
+const capabilities = JSON.parse(readFileSync('capabilities/ios.json', 'utf-8'));
+const driver = await remote({
+  hostname: '<appium-server>',
+  port: 4723,
+  path: '/',            // your Appium base path, e.g. '/wd/hub'
+  capabilities,
+});
+
+const repo = new ElementRepository(driver, 'tests/data/page-repository.json', { platform: 'ios' });
+
+await (await repo.get('username', 'LoginPage')).fill('demo-user');
+await (await repo.get('submit', 'LoginPage')).click();
+
+// TEXT strategy on a platform page: compares each match's own text
+const row = await repo.get('rows', 'LoginPage', { strategy: SelectionStrategy.TEXT, value: 'Settings' });
+await row.click();
+
+// Gestures
+const map = await repo.get('map', 'MapPage');
+await map.zoom({ scale: 2 });
+await map.longPress({ duration: 1500 });
+
+await driver.deleteSession();
+```
+
+For Android, use a capabilities file with `"platformName": "Android"`, `"appium:automationName": "UiAutomator2"` and `"appium:appPackage"`, and `{ platform: 'android' }`. The same test code then resolves the `android` page blocks.
 
 ### Retrieving Elements
 
@@ -271,16 +371,16 @@ await element.action()
   .waitForState('attached')
   .click({ withoutScrolling: true })
 
-// Fill and verify
-await element.action()
+// Fill, then read the value back
+const value = await element.action()
   .fill('hello@test.com')
-  .verifyText('hello@test.com')
+  .getInputValue()
 
-// Verification chain
-await element.action(5000)
-  .verifyPresence()
-  .verifyText('Submit')
-  .verifyAttribute('type', 'submit')
+// Scroll down until the element is displayed, then tap it
+// (on web the browser scrolls and `direction` is ignored)
+await element.action(10000)
+  .scrollIntoView({ direction: 'down' })
+  .click()
 
 // Extraction (terminal — returns value)
 const text = await element.action().getText()
@@ -290,11 +390,13 @@ const count = await element.action().getCount()
 
 #### Available Chain Methods
 
-**Interactions:** `click(options?)`, `clickIfPresent(options?)`, `hover()`, `fill(text)`, `clear()`, `check()`, `uncheck()`, `doubleClick()`, `scrollIntoView()`, `pressSequentially(text, delay?)`, `dispatchEvent(event)`
-
-**Verifications:** `verifyPresence()`, `verifyAbsence()`, `verifyText(expected?)`, `verifyTextContains(text)`, `verifyAttribute(name, value)`, `verifyEnabled()`, `verifyDisabled()`, `verifyChecked()`, `verifyCount(options)`
+**Interactions:** `click(options?)`, `clickIfPresent(options?)`, `hover()`, `fill(text)`, `clear()`, `check()`, `uncheck()`, `doubleClick()`, `scrollIntoView(options?)`, `swipe(direction, options?)`, `pressSequentially(text, delay?)`, `longPress(options?)`, `tapAt(offset, options?)`, `pinch(options?)`, `zoom(options?)`, `dispatchEvent(event)`
 
 **Extractions (terminal):** `getText()`, `getAttribute(name)`, `getInputValue()`, `getCount()`, `getRaw()`, `isPresent()`
+
+An explicit `options.timeout` on `scrollIntoView`, `swipe`, `longPress`, `tapAt`, `pinch` or `zoom` overrides the chain timeout. The gesture methods wait for the element to be visible first. On platform (Appium) elements, `scrollIntoView` does **not** wait for the element first — an off-screen row of a lazy list is not in the element tree until it has been scrolled to — and `swipe` delegates straight to the element (which waits for attached itself); on web, `scrollIntoView` waits for attached and `swipe` for visible.
+
+Assertions (`verifyText`, `verifyPresence`, …) are not part of this package; they live in the consumer packages (see [Package Contract](#-package-contract)).
 
 **Waiting:** `waitForState(state)`
 
@@ -302,13 +404,26 @@ const count = await element.action().getCount()
 
 ### ElementRepository
 
-#### `constructor(driver, dataOrPath, defaultTimeout?)`
+#### `constructor(driver, dataOrPath, options?)`
 
 | Param | Type | Description |
 |-------|------|-------------|
-| `driver` | `any` | Playwright `Page` or WebDriverIO `Browser`/`Driver` instance |
-| `dataOrPath` | `string \| PageRepository` | Path to JSON file or parsed JSON object |
-| `defaultTimeout` | `number` | Default wait timeout in ms (default: `15000`) |
+| `driver` | `any` | Playwright `Page` or WebdriverIO `Browser` (from `remote()`) |
+| `dataOrPath` | `string \| PageRepository \| PageRepositoryInput` | Path to the JSON file (relative to the working directory) or the parsed data. `PageRepositoryInput` is the shape a typed JSON import produces (`platform` / `frameIndex` as plain strings); those values are checked at runtime. |
+| `options` | `number \| ElementRepositoryOptions` | A number is the default wait timeout in ms (the earlier positional form). An object is `{ platform?, timeout? }`. Omitted: no active platform, timeout `15000`. |
+
+```typescript
+interface ElementRepositoryOptions {
+  platform?: Platform;  // the ACTIVE platform of this instance (see Multi-Platform Configuration)
+  timeout?: number;     // default element wait timeout in ms, default 15000
+}
+```
+
+The data is validated on construction (see `validate`). An unknown `options.platform` throws `ElementRepository: unknown platform '<value>'. Expected one of: web, android, ios, macos, windows.`
+
+#### `platform` (getter)
+
+The active platform given in the constructor options (`Platform`), or `undefined` when none was given. Read-only.
 
 #### `get(elementName, pageName, options?)`
 
@@ -373,15 +488,33 @@ Returns `{ provisional, list }` for an entry, with defaults applied (`false`). S
 
 #### `getProvisional()`
 
-Returns `[{ pageName, elementName }]` for every entry marked `"provisional": true`, in repository order.
+Returns `[{ pageName, elementName }]` for every entry marked `"provisional": true`, in repository order. With an active platform set, only page blocks of that platform are listed.
 
 #### `ElementRepository.validate(data)` (static)
 
-Validates entry-level keys without a driver (the constructor calls it too). Throws when `provisional` or `list` is present with a non-boolean value.
+Validates a repository without a driver (the constructor calls it too). It rejects:
+
+- a page `platform` that is not one of `web`, `android`, `ios`, `macos`, `windows` (legacy values such as `"mobile"` included);
+- a page `name` declared more than once for the same platform (a missing `platform` counts as `web`);
+- a `frameIndex` other than `"first"`, `"last"` or an integer (a negative index counts from the end: `-1` is the last frame);
+- an entry-level `provisional` or `list` that is not a JSON boolean (e.g. the string `"true"`).
+
+It throws one error listing every problem: `ElementRepository: invalid repository — <problem>; <problem>.`
 
 #### `getPagePlatform(pageName)`
 
-Returns the platform string for a page (`'web'`, `'android'`, `'ios'`).
+Returns the page's `Platform` (`'web'` when the page has no `platform`). With an active platform set, this is the active platform whenever the page exists for it, and the lookup error above otherwise.
+
+#### Lookup and the active platform
+
+Every method that takes a `pageName` resolves it the same way: with an active platform, the page whose `name` matches and whose `platform` (missing = `web`) equals it, else `Page "<name>" has no entry for platform "<active>". Available: <list>.`; without one, the first page with that name, else `ElementRepository: Page '<name>' not found.`
+
+#### Selection strategies on platform pages
+
+- **Default (no strategy)** resolves the **first match**. `count()` and `all()` on that element return at most 1 — use `getAll()` or `SelectionStrategy.ALL` to count or iterate every match.
+- **`TEXT`** picks its match eagerly: it fetches every match of the selector and compares each one's **own** text as the driver reports it through `getText()` — not the text of its descendants, as Playwright's `filter({ hasText })` does on web. The selector must therefore target the text-bearing element itself (the label or cell title), not a container around it. An exact (trimmed) match wins; otherwise the first case-insensitive, whitespace-normalised "contains" match. It polls until a match appears or the full timeout elapses, then throws `Element '<el>' on '<page>' with text "<value>" not found.` Fatal driver errors (invalid selector, dead session, lost connection) are rethrown at once. `all()` / `count()` on the result re-query the selector and return every match.
+- A blank `TEXT` value throws `options.value is required when using SelectionStrategy.TEXT` (web and platform).
+- Enhanced `role` + `name` selectors on platform pages support only the default and `ALL`; any other strategy throws.
 
 #### Strict Mode
 
@@ -405,12 +538,36 @@ All `get*` methods return an `Element` — a platform-agnostic interface wrappin
 | `uncheck(options?)` | Unchecks a checkbox. Returns `Promise<Element>`. |
 | `hover(options?)` | Hovers over the element. Returns `Promise<Element>`. |
 | `doubleClick(options?)` | Double-clicks. Returns `Promise<Element>`. |
-| `scrollIntoView(options?)` | Scrolls into view. Returns `Promise<Element>`. |
+| `scrollIntoView(options?)` | Scrolls into view. `options`: `{ direction?: 'up' \| 'down' \| 'left' \| 'right'; timeout? }`. Returns `Promise<Element>`. |
+| `swipe(direction, options?)` | Swipes from the element centre. `options`: `{ distance?; timeout? }`. Returns `Promise<Element>`. |
 | `pressSequentially(text, delay?, options?)` | Types character by character. Returns `Promise<Element>`. |
+| `longPress(options?)` | Presses and holds on the element centre. `options`: `{ duration?: number; timeout? }`, `duration` in ms, default `1000`. Returns `Promise<void>`. |
+| `tapAt(offset, options?)` | Taps at `{ x, y }` px from the element's top-left corner; `0 <= x < width`, `0 <= y < height`. Returns `Promise<void>`. |
+| `pinch(options?)` | Two-finger pinch (fingers together). `options`: `{ scale?: number; timeout? }`, `scale` in (0, 1), default `0.5`. **Platform only.** Returns `Promise<void>`. |
+| `zoom(options?)` | Two-finger zoom (fingers apart). `options`: `{ scale?: number; timeout? }`, `scale` > 1, default `2`. **Platform only.** Returns `Promise<void>`. |
 | `setInputFiles(filePath, options?)` | Sets file input value. **Web only.** |
 | `dispatchEvent(event)` | Dispatches a DOM event. **Web only.** |
 
-All interaction methods accept an optional `{ timeout?: number }` and return the element for simple chaining.
+All interaction methods accept an optional `{ timeout?: number }`; the ones returning `Promise<Element>` return the element for simple chaining.
+
+#### Gestures and scrolling per platform
+
+| Method | Platform (Appium) element | Web (Playwright) element |
+|--------|---------------------------|--------------------------|
+| `scrollIntoView` | Sweeps the screen in **one** direction until the element is displayed, up to 20 swipes, then throws. `direction` says where the target is: `'down'` (default) reveals content below, `'up'` above, `'left'` / `'right'` to that side. No bidirectional mode — call it twice if the position is unknown. | The browser scrolls whatever is needed; `direction` is ignored. |
+| `swipe` | W3C touch pointer from the element centre (window centre when the driver reports no rect); default distance ~50% of the window in that axis. | Mouse drag from the element centre. |
+| `longPress` | One W3C touch pointer: down, pause `duration`, up. | Scrolls into view, checks the element itself (not a cover over it) receives the pointer, then holds the primary mouse button for `duration`. |
+| `tapAt` | W3C touch tap at the point. | Playwright `click({ position })`. |
+| `pinch` / `zoom` | Two W3C touch pointers on the horizontal axis through the element centre (fingers 40% of the element width from the centre, never closer than 10 px; outer positions clamped to the window). | Throw `PlatformNotSupportedError` (`"pinch" is not supported on platform "web".`). |
+
+On platform elements, gestures and swipes use **native-context viewport coordinates** — the space of the element rect and the window size; in a webview context CSS pixels may differ. The gesture point (the element centre, or the `tapAt` point) must be inside the window: call `scrollIntoView` first for an off-screen element. The pointer is always released; if the gesture failed, that error is thrown. `longPress` rejects a negative or non-finite `duration`, `tapAt` an offset outside the element bounds, `pinch` a `scale` outside (0, 1) and `zoom` a `scale` not greater than 1.
+
+#### Platform elements (`PlatformElement`)
+
+- `first()` and `nth(index)` index for real: `nth(i)` acts on the i-th match of the selector (negative counts from the end, `-1` is the last) and throws `nth(<i>): no element at that index for "<selector>" (found <n>)` when there is none. `count()` / `all()` on an element made by `first()` / `nth()` return at most that one match.
+- `filter({ hasText })` throws `PlatformNotSupportedError` (`"filter" is not supported on platform "<platform>".`) — WebdriverIO has no lazy text filter; use the `TEXT` selection strategy instead. An empty filter returns the element unchanged.
+- `setInputFiles` and `dispatchEvent` throw `PlatformNotSupportedError` naming the element's platform.
+- `textContent()` returns the element's own text from the driver's `getText()`.
 
 #### State, Extraction, Querying, and Waiting
 
@@ -432,6 +589,45 @@ All interaction methods accept an optional `{ timeout?: number }` and return the
 | `waitFor(options?)` | Waits for state: `"visible"`, `"hidden"`, `"attached"`, `"detached"`. |
 | `action(timeout?)` | Returns a fluent `ElementChain` builder. |
 
+### Platform Vocabulary
+
+```typescript
+import {
+  Platform, DriverFamily, PLATFORMS, isPlatformName, familyOf,
+} from '@civitas-cerebrum/element-repository';
+
+type Platform = 'web' | 'android' | 'ios' | 'macos' | 'windows';
+type DriverFamily = 'playwright' | 'appium';
+
+PLATFORMS;                 // readonly ['web', 'android', 'ios', 'macos', 'windows'] (frozen)
+isPlatformName('ios');     // true  — exact, case-sensitive
+isPlatformName('mobile');  // false
+familyOf('web');           // 'playwright'
+familyOf('android');       // 'appium' (ios, macos, windows too)
+```
+
+`familyOf` throws `Unknown platform '<value>'. Expected one of: web, android, ios, macos, windows.` for a value outside `PLATFORMS`. `macos` and `windows` are declared (they belong to the `appium` family) but desktop support is **not implemented yet**: their pages use the base Appium selector table, with no desktop-specific behaviour.
+
+### `PlatformNotSupportedError`
+
+Thrown when an operation exists in the API but cannot run on the given platform — `pinch` / `zoom` on web, `filter` / `setInputFiles` / `dispatchEvent` on a platform element.
+
+```typescript
+import { PlatformNotSupportedError } from '@civitas-cerebrum/element-repository';
+
+try {
+  await webElement.pinch();
+} catch (e) {
+  if (e instanceof PlatformNotSupportedError) {
+    e.method;   // 'pinch'
+    e.platform; // 'web'
+    e.message;  // '"pinch" is not supported on platform "web".'
+  }
+}
+```
+
+This package holds the only definition of the class; consumer packages re-export it, so `instanceof` works across packages.
+
 ### 🔧 Type Safety
 
 ```typescript
@@ -449,6 +645,20 @@ if (isPlatform(el)) {
   console.log((el as PlatformElement).selector);
 }
 ```
+
+## ⚠️ Breaking Changes (v0.4.0)
+
+| Change | Migration |
+|---|---|
+| A page's `platform` must be a `Platform`: `web`, `android`, `ios`, `macos` or `windows` (exact, lowercase). Legacy values such as `"mobile"` are rejected at construction. | Rename the value, e.g. `"mobile"` → `"android"` or `"ios"`. Run `ElementRepository.validate(data)` in a lint step to find them. |
+| A page `name` declared twice for the same platform is rejected (a missing `platform` counts as `web`). | Merge the duplicate blocks, or give each its own platform. |
+| An invalid `frameIndex` is rejected. | Use `"first"`, `"last"` or an integer. |
+| The root `PageObject.platform` (and `PageRepository`'s) is typed `Platform`, not `string`. | Type your values as `Platform`, or pass JSON imports as `PageRepositoryInput` (checked at runtime). |
+| A blank `TEXT` strategy value throws `options.value is required when using SelectionStrategy.TEXT`, on web too. | Pass a non-blank value, or omit the strategy. |
+| A default-resolved platform element is the first match, so `count()` / `all()` on it return at most 1. | Use `getAll()` or `SelectionStrategy.ALL` to count or iterate. |
+| The optional `webdriverio` peer is `^10` (was `^9.27.0 \|\| ^10.0.0`). WebdriverIO 10 needs Node.js `>=22.23.4 <23`, `>=24.22.1 <25` or `>=26.12.1`. | Upgrade WebdriverIO to 10 and Node.js to a supported version. |
+
+Not breaking, but new: the third constructor argument also takes `{ platform?, timeout? }`; with an active platform, lookups use the page block for that platform only (see [Multi-Platform Configuration](#multi-platform-configuration)).
 
 ## ⚠️ Breaking Changes (v0.1.0)
 
