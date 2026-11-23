@@ -420,7 +420,9 @@ export class PlatformElement implements Element {
   /**
    * Swipes from the element centre. Coordinates are native-context
    * viewport coordinates (the same space as `getElementRect` and
-   * `getWindowSize`).
+   * `getWindowSize`). The end point is clamped to the window
+   * (`[0, width-1]` x `[0, height-1]`), so the swipe may travel less than
+   * `distance` near an edge.
    */
   async swipe(direction: SwipeDirection, options?: SwipeOptions): Promise<Element> {
     const el = await this.ensureAttached(options?.timeout);
@@ -438,8 +440,11 @@ export class PlatformElement implements Element {
       : Math.round(windowSize.height * 0.5);
     const distance = options?.distance ?? defaultDistance;
     const sign = (direction === 'left' || direction === 'up') ? -1 : 1;
-    const toX = horizontal ? cx + distance * sign : cx;
-    const toY = horizontal ? cy : cy + distance * sign;
+    // The end point is clamped to the window (the start point is not
+    // moved), so a long swipe stops at the edge instead of sending
+    // negative or off-window coordinates.
+    const toX = horizontal ? PlatformElement.clampToAxis(cx + distance * sign, windowSize.width) : cx;
+    const toY = horizontal ? cy : PlatformElement.clampToAxis(cy + distance * sign, windowSize.height);
     await this.touchSwipe(cx, cy, toX, toY);
     await this.driver.pause(200);
     return this;
@@ -460,6 +465,11 @@ export class PlatformElement implements Element {
       { type: 'pointerMove', duration: PlatformElement.SWIPE_MOVE_MS, origin: 'viewport', x: Math.round(toX), y: Math.round(toY) },
       { type: 'pointerUp', button: 0 },
     ]]);
+  }
+
+  /** Rounds `value` and clamps it to `[0, size - 1]` (one window axis). */
+  private static clampToAxis(value: number, size: number): number {
+    return Math.min(Math.max(Math.round(value), 0), size - 1);
   }
 
   /** Finger hold after pointerDown before a swipe moves, in ms. */
@@ -644,7 +654,7 @@ export class PlatformElement implements Element {
     const fingerPath = (sign: -1 | 1) => {
       const inner = Math.round(cx + sign * innerGap);
       if (inner < 0 || inner >= windowSize.width) throw tooClose();
-      const outer = Math.min(Math.max(Math.round(cx + sign * outerGap), 0), windowSize.width - 1);
+      const outer = PlatformElement.clampToAxis(cx + sign * outerGap, windowSize.width);
       if ((outer - inner) * sign <= 0) throw tooClose();
       const [from, to] = method === 'zoom' ? [inner, outer] : [outer, inner];
       return [

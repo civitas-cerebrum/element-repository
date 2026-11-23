@@ -153,8 +153,14 @@ export interface Element {
    * target's position is unknown, call it twice with different
    * directions.
    *
-   * On web elements the browser scrolls whatever is needed and
-   * `direction` is ignored.
+   * On platform elements the sweep makes up to 20 swipes (each about
+   * 100 ms hold + 600 ms move + 200 ms settle of gesture time, more on a
+   * real device) and `options.timeout` does NOT bound it: the call can
+   * take longer than `timeout` before it returns or throws.
+   *
+   * On web elements the browser scrolls whatever is needed,
+   * `direction` is ignored and `options.timeout` is the Playwright
+   * timeout.
    */
   scrollIntoView(options?: ScrollIntoViewOptions): Promise<Element>;
 
@@ -175,6 +181,10 @@ export interface Element {
    * swipes.
    *
    * @param direction - 'up' | 'down' | 'left' | 'right'.
+   * On platform elements the end point is clamped to the window
+   * (`[0, width-1]` x `[0, height-1]`), so near an edge the swipe travels
+   * less than `distance`; the start point is never moved.
+   *
    * @param options - Optional distance (default ~50% of viewport dim) and
    *                  `timeout` for waiting until the element is attached.
    */

@@ -400,7 +400,7 @@ const count = await element.action().getCount()
 
 **Extractions (terminal):** `getText()`, `getAttribute(name)`, `getInputValue()`, `getCount()`, `getRaw()`, `isPresent()`
 
-An explicit `options.timeout` on `scrollIntoView`, `swipe`, `longPress`, `tapAt`, `pinch` or `zoom` overrides the chain timeout. The gesture methods wait for the element to be visible first. On platform (Appium) elements, `scrollIntoView` does **not** wait for the element first — an off-screen row of a lazy list is not in the element tree until it has been scrolled to — and `swipe` delegates straight to the element (which waits for attached itself); on web, `scrollIntoView` waits for attached and `swipe` for visible.
+An explicit `options.timeout` on `scrollIntoView`, `swipe`, `longPress`, `tapAt`, `pinch` or `zoom` overrides the chain timeout. The gesture methods wait for the element to be visible first. On platform (Appium) elements, `scrollIntoView` does **not** wait for the element first — an off-screen row of a lazy list is not in the element tree until it has been scrolled to — and `swipe` delegates straight to the element (which waits for attached itself); on web, `scrollIntoView` waits for attached and `swipe` for visible. On platform elements `scrollIntoView` makes up to 20 swipes and `timeout` does **not** bound the sweep, so it can run longer than `timeout`; on web, `timeout` is the Playwright timeout.
 
 Assertions (`verifyText`, `verifyPresence`, …) are not part of this package; they live in the consumer packages (see [Package Contract](#-package-contract)).
 
@@ -560,13 +560,13 @@ All interaction methods accept an optional `{ timeout?: number }`; the ones retu
 
 | Method | Platform (Appium) element | Web (Playwright) element |
 |--------|---------------------------|--------------------------|
-| `scrollIntoView` | Sweeps the screen in **one** direction until the element is displayed, up to 20 swipes, then throws. `direction` says where the target is: `'down'` (default) reveals content below, `'up'` above, `'left'` / `'right'` to that side. No bidirectional mode — call it twice if the position is unknown. | The browser scrolls whatever is needed; `direction` is ignored. |
-| `swipe` | W3C touch pointer from the element centre (window centre when the driver reports no rect); default distance ~50% of the window in that axis. | Mouse drag from the element centre. |
+| `scrollIntoView` | Sweeps the screen in **one** direction until the element is displayed, up to 20 swipes, then throws. `timeout` does not bound the sweep (each swipe is about 0.9 s of gesture time, more on a real device). `direction` says where the target is: `'down'` (default) reveals content below, `'up'` above, `'left'` / `'right'` to that side. No bidirectional mode — call it twice if the position is unknown. | The browser scrolls whatever is needed; `direction` is ignored; `timeout` is the Playwright timeout. |
+| `swipe` | W3C touch pointer from the element centre (window centre when the driver reports no rect); default distance ~50% of the window in that axis; the end point is clamped to the window (`[0, width-1]` x `[0, height-1]`). | Mouse drag from the element centre. |
 | `longPress` | One W3C touch pointer: down, pause `duration`, up. | Scrolls into view, checks the element itself (not a cover over it) receives the pointer, then holds the primary mouse button for `duration`. |
 | `tapAt` | W3C touch tap at the point. | Playwright `click({ position })`. |
 | `pinch` / `zoom` | Two W3C touch pointers on the horizontal axis through the element centre (fingers 40% of the element width from the centre, never closer than 10 px; outer positions clamped to the window). | Throw `PlatformNotSupportedError` (`"pinch" is not supported on platform "web".`). |
 
-On platform elements, gestures and swipes use **native-context viewport coordinates** — the space of the element rect and the window size; in a webview context CSS pixels may differ. The gesture point (the element centre, or the `tapAt` point) must be inside the window: call `scrollIntoView` first for an off-screen element. The pointer is always released; if the gesture failed, that error is thrown. `longPress` rejects a negative or non-finite `duration`, `tapAt` an offset outside the element bounds, `pinch` a `scale` outside (0, 1) and `zoom` a `scale` not greater than 1.
+On platform elements, gestures and swipes use **native-context viewport coordinates** — the space of the element rect and the window size; in a webview context CSS pixels may differ. The gesture point (the element centre, or the `tapAt` point) must be inside the window: call `scrollIntoView` first for an off-screen element. The swipe end point is clamped to the window, so near an edge a swipe travels less than `distance`. The pointer is always released; if the gesture failed, that error is thrown. `longPress` rejects a negative or non-finite `duration`, `tapAt` an offset outside the element bounds, `pinch` a `scale` outside (0, 1) and `zoom` a `scale` not greater than 1.
 
 #### Platform elements (`PlatformElement`)
 

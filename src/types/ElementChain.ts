@@ -151,7 +151,8 @@ export class ElementChain implements PromiseLike<Element> {
    * ignored). Platform (Appium): does NOT wait for attached first, because
    * an off-screen row of a lazy list is not in the element tree until it
    * has been scrolled to; it delegates straight to the element's
-   * directional sweep.
+   * directional sweep, which makes up to 20 swipes and is NOT bounded by
+   * `timeout` (on web, `timeout` is the Playwright timeout).
    */
   scrollIntoView(options?: ScrollIntoViewOptions): this {
     this.queue.push(async () => {

@@ -626,9 +626,49 @@ test.describe('PlatformElement interaction methods', () => {
       ...touch.driver,
     };
     const el = new PlatformElement(driver, '~card');
-    await el.swipe('up', { distance: 300 });
-    // Center y = 250; up swipe with distance=300 → 250 - 300 = -50 (not clamped).
-    expect(touch.performed).toEqual([swipePayload(200, 250, 200, -50)]);
+    await el.swipe('up', { distance: 150 });
+    // Center y = 250; up swipe with distance=150 → 250 - 150 = 100.
+    expect(touch.performed).toEqual([swipePayload(200, 250, 200, 100)]);
+  });
+
+  test('swipe clamps the end point to the window and keeps the start point', async () => {
+    const mockEl = createMockWdioElement({ elementId: 'el-42', isDisplayed: async () => true, waitForExist: async () => {} });
+    const touch = touchRecorder();
+    const driver = {
+      $: async () => mockEl,
+      $$: async () => [mockEl],
+      pause: async () => {},
+      getWindowSize: async () => ({ width: 1000, height: 2000 }),
+      getElementRect: async () => ({ x: 100, y: 200, width: 200, height: 100 }),
+      ...touch.driver,
+    };
+    const el = new PlatformElement(driver, '~card');
+    // Centre (200, 250).
+    await el.swipe('up', { distance: 300 });    // 250 - 300 = -50 → 0
+    await el.swipe('down', { distance: 5000 }); // → height - 1
+    await el.swipe('left', { distance: 300 });  // 200 - 300 = -100 → 0
+    await el.swipe('right', { distance: 5000 }); // → width - 1
+    expect(touch.performed).toEqual([
+      swipePayload(200, 250, 200, 0),
+      swipePayload(200, 250, 200, 1999),
+      swipePayload(200, 250, 0, 250),
+      swipePayload(200, 250, 999, 250),
+    ]);
+  });
+
+  test('swipe without a rect clamps the end point from the window centre', async () => {
+    const mockEl = createMockWdioElement({ elementId: 'el-42', isDisplayed: async () => true, waitForExist: async () => {} });
+    const touch = touchRecorder();
+    const driver = {
+      $: async () => mockEl,
+      $$: async () => [mockEl],
+      pause: async () => {},
+      getWindowSize: async () => ({ width: 1000, height: 2000 }),
+      getElementRect: async () => null,
+      ...touch.driver,
+    };
+    await new PlatformElement(driver, '~card').swipe('right', { distance: 800 });
+    expect(touch.performed).toEqual([swipePayload(500, 1000, 999, 1000)]);
   });
 
   test('swipe rounds fractional coordinates to integers', async () => {
