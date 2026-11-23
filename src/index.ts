@@ -1,6 +1,10 @@
 // Export all schema types
 export * from './schema';
 
+// Export the platform vocabulary and shared errors
+export * from './platform';
+export * from './errors';
+
 // Export enums and options
 export * from './enum/Options';
 
