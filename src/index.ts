@@ -15,6 +15,7 @@ export * from './enum/Options';
 
 // Export standalone utilities
 export * from './utils/math';
+export { isFatalDriverError } from './utils/driverErrors';
 
 // Export element types
 export * from './types';

@@ -24,6 +24,7 @@ test.describe('package root exports', () => {
     expect(typeof root.PlatformNotSupportedError).toBe('function');
     expect(typeof root.familyOf).toBe('function');
     expect(typeof root.isPlatformName).toBe('function');
+    expect(typeof root.isFatalDriverError).toBe('function');
     expect(root.PLATFORMS).toEqual(['web', 'android', 'ios', 'macos', 'windows']);
     expect('escapeDoubleQuoted' in root).toBe(false);
     expect('escapeUiSelectorString' in root).toBe(false);
