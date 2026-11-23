@@ -290,7 +290,8 @@ test.describe('locateChild', () => {
     const driver: any = { $: async () => parent, $$: async () => [parent], pause: async () => {} };
     const child = new PlatformElement(driver, '~card').locateChild('~title');
     expect(await child.textContent()).toBe('text-p/k0');
-    expect(log).toEqual(['p.$(~title,{"strict":false})']);
+    // A child is polled: its first match is picked from `$$` under the parent.
+    expect(log).toEqual(['p.$$(~title)']);
   });
 
   test('a child of a missing indexed parent waits, then fails with a not-found error; count is 0', async () => {
@@ -299,5 +300,76 @@ test.describe('locateChild', () => {
     expect(await child.count()).toBe(0);
     expect(await child.exists()).toBe(false);
     await expect(child.click()).rejects.toThrow(/nth\(3\)/);
+  });
+});
+
+// ===========================================================================
+// 8. Errors at the public boundary of a polled element
+// ===========================================================================
+
+test.describe('polled element errors', () => {
+  const fatal = () => Object.assign(new Error('invalid session id'), { name: 'invalid session id' });
+
+  test('a polled gesture that never finds its match names the method and the element', async () => {
+    const driver: any = { $$: async () => [row('only')], pause: async () => {} };
+    await expect(new PlatformElement(driver, '~row').nth(3).longPress({ timeout: 200 }))
+      .rejects.toThrow(/^longPress: nth\(3\) of "~row" not found within 200 ms: nth\(3\): no element at that index for "~row" \(found 1\)$/);
+    await expect(new PlatformElement(driver, '~row').nth(3).tapAt({ x: 1, y: 1 }, { timeout: 200 }))
+      .rejects.toThrow(/^tapAt: nth\(3\) of "~row" not found within 200 ms/);
+  });
+
+  test('count() and isVisible() rethrow a fatal driver error on an indexed element', async () => {
+    const driver: any = { $$: async () => { throw fatal(); }, pause: async () => {} };
+    const el = new PlatformElement(driver, '~row').nth(1);
+    await expect(el.count()).rejects.toThrow(/invalid session id/);
+    await expect(el.isVisible()).rejects.toThrow(/invalid session id/);
+  });
+
+  test('count() and isVisible() rethrow a fatal driver error on a child', async () => {
+    const parent = row('p', { $$: async () => { throw fatal(); } });
+    const driver: any = { $: async () => parent, $$: async () => [parent], pause: async () => {} };
+    const child = new PlatformElement(driver, '~card').locateChild('~title');
+    await expect(child.count()).rejects.toThrow(/invalid session id/);
+    await expect(child.isVisible()).rejects.toThrow(/invalid session id/);
+  });
+
+  test('a not-found action, read, wait or scroll throws a plain Error, never the internal class', async () => {
+    const driver: any = {
+      $$: async () => [row('only')],
+      pause: async () => {},
+      getWindowSize: async () => ({ width: 400, height: 800 }),
+    };
+    const el = new PlatformElement(driver, '~row', undefined, 200).nth(3);
+    const errors = [
+      await el.click().then(() => null, e => e),
+      await el.textContent().then(() => null, e => e),
+      await el.waitFor({ state: 'attached', timeout: 200 }).then(() => null, e => e),
+      await el.nth(1).click().then(() => null, e => e),
+      await el.nth(1).scrollIntoView().then(() => null, e => e),
+    ];
+    for (const err of errors) {
+      expect(err).toBeInstanceOf(Error);
+      expect(err.constructor).toBe(Error);
+      expect(err.name).toBe('Error');
+    }
+    expect(errors[0].message).toMatch(/nth\(3\): no element at that index/);
+    expect(errors[3].message).toMatch(/matches nothing/);
+  });
+
+  test('a child of a missing parent: plain Error naming the parent; count 0, isVisible false', async () => {
+    // A WebdriverIO lazy element for a missing match has no elementId, and
+    // `$` / `$$` on it would wait; the child must never call them.
+    const missing: any = {
+      $: async () => { throw new Error('must not query a missing parent'); },
+      $$: async () => { throw new Error('must not query a missing parent'); },
+    };
+    const driver: any = { $: async () => missing, pause: async () => {} };
+    const child = new PlatformElement(driver, '~card', undefined, 200).locateChild('~title');
+    expect(await child.count()).toBe(0);
+    expect(await child.isVisible()).toBe(false);
+    expect(await child.exists()).toBe(false);
+    const err = await child.click().then(() => null, e => e);
+    expect(err.constructor).toBe(Error);
+    expect(err.message).toBe('parent "~card" not found');
   });
 });

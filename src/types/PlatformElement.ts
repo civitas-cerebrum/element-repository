@@ -30,13 +30,24 @@ function errorText(err: unknown): string {
 /**
  * A lookup found no match. Polled through until the deadline, unless
  * `final` says no amount of waiting can produce one (an element made by
- * `nth(k)` on an element that is already a single match).
+ * `nth(k)` on an element that is already a single match). Internal: it
+ * never reaches callers (see {@link toPublicError}).
  */
 class NoMatchError extends Error {
   constructor(message: string, readonly final = false) {
     super(message);
     this.name = 'NoMatchError';
   }
+}
+
+/**
+ * `err` as callers see it: an internal {@link NoMatchError} becomes a plain
+ * `Error` with the same message (or `message` when given), the original as
+ * its `cause`; any other error is returned unchanged.
+ */
+function toPublicError(err: unknown, message?: string): unknown {
+  if (!(err instanceof NoMatchError)) return err;
+  return new Error(message ?? err.message, { cause: err });
 }
 
 /**
@@ -109,17 +120,27 @@ export class PlatformElement implements Element {
    * True when this element has no lazy WebdriverIO element of its own and is
    * looked up by polling `$$`: it picks a match by position (index 0, from
    * {@link first} / `nth(0)`, uses `$`, which already returns the first
-   * match and keeps WebdriverIO's own waiting), matches nothing, or lives
-   * under a parent that is looked up that way.
+   * match and keeps WebdriverIO's own waiting), matches nothing, or is a
+   * child made by {@link locateChild} (WebdriverIO's lazy child of a
+   * missing parent would wait `waitforTimeout` on every call, so a child is
+   * polled against the element's own timeout instead).
    */
   private get polled(): boolean {
     if (this.resolvedElement) return false;
-    return this.matchesNothing || (this.index !== undefined && this.index !== 0) || !!this.parent?.polled;
+    return this.matchesNothing || (this.index !== undefined && this.index !== 0) || !!this.parent;
   }
 
-  /** Where this element's selector is searched: the parent's match, else the driver. */
+  /**
+   * Where this element's selector is searched: the parent's match, else the
+   * driver. A missing parent match throws a {@link NoMatchError} at once:
+   * `$` / `$$` on WebdriverIO's lazy element for a missing parent would wait
+   * `waitforTimeout` and then throw WebdriverIO's own error.
+   */
   private async searchContext(): Promise<any> {
-    return this.parent ? this.parent.findOne() : this.driver;
+    if (!this.parent) return this.driver;
+    const parent = await this.parent.findOne();
+    if (!parent?.elementId) throw new NoMatchError(`parent ${this.parent.describe()} not found`);
+    return parent;
   }
 
   /**
@@ -178,14 +199,16 @@ export class PlatformElement implements Element {
       try { return await this.queryAll(); }
       catch (err) { if (err instanceof NoMatchError) return []; throw err; }
     }
-    try { return [await this.resolveNow()]; } catch { return []; }
+    try { return [await this.resolveNow()]; }
+    catch (err) { if (isFatalDriverError(err)) throw err; return []; }
   }
 
   /**
    * Polls `check` until it returns true or `timeout` ms pass. On timeout,
    * throws the last error `check` raised, or `onTimeout()`. A fatal driver
    * error (see `isFatalDriverError`, shared with the repository's strategy
-   * resolver) or a final {@link NoMatchError} is rethrown at once.
+   * resolver) or a final {@link NoMatchError} is rethrown at once. A
+   * {@link NoMatchError} leaves as a plain `Error` (see {@link toPublicError}).
    */
   private async pollUntil(check: () => Promise<boolean>, timeout: number, onTimeout: () => Error): Promise<void> {
     const deadline = Date.now() + timeout;
@@ -195,14 +218,14 @@ export class PlatformElement implements Element {
         if (await check()) return;
         lastError = undefined;
       } catch (err) {
-        if (isFatalDriverError(err) || (err instanceof NoMatchError && err.final)) throw err;
+        if (isFatalDriverError(err) || (err instanceof NoMatchError && err.final)) throw toPublicError(err);
         lastError = err;
       }
       const remaining = deadline - Date.now();
       if (remaining <= 0) break;
       await new Promise(resolve => setTimeout(resolve, Math.min(PlatformElement.INDEX_POLL_MS, remaining)));
     }
-    throw lastError instanceof Error ? lastError : onTimeout();
+    throw toPublicError(lastError instanceof Error ? lastError : onTimeout());
   }
 
   /**
@@ -232,17 +255,28 @@ export class PlatformElement implements Element {
    * Waits for the underlying Appium element to exist before any action fires.
    * Gives each action a predictable presence-detection preamble so failures
    * surface as "element never attached" rather than an opaque driver error.
+   * With `method` (a gesture), a polled element that never appears fails
+   * with `<method>: <element> not found within N ms: <reason>`.
    */
-  private async ensureAttached(timeout?: number): Promise<any> {
+  private async ensureAttached(timeout?: number, method?: string): Promise<any> {
     if (this.polled) {
-      // No lazy WebdriverIO element exists for "the i-th match": poll `$$`
-      // until it is there, and fail with the out-of-range error otherwise.
+      // No lazy WebdriverIO element exists for "the i-th match" or a child:
+      // poll `$$` until it is there, and fail with the not-found error otherwise.
+      const ms = timeout ?? this.defaultTimeout ?? 30000;
       let el: any;
-      await this.pollUntil(
-        async () => { el = await this.resolveNow(); return true; },
-        timeout ?? this.defaultTimeout ?? 30000,
-        () => new Error(`${this.describe()}: no matching element`),
-      );
+      try {
+        await this.pollUntil(
+          async () => { el = await this.resolveNow(); return true; },
+          ms,
+          () => new NoMatchError(`${this.describe()}: no matching element`),
+        );
+      } catch (err) {
+        const notFound = err instanceof NoMatchError || (err as { cause?: unknown })?.cause instanceof NoMatchError;
+        if (method && notFound) {
+          throw new Error(`${method}: ${this.describe()} not found within ${ms} ms: ${errorText(err)}`, { cause: err });
+        }
+        throw toPublicError(err);
+      }
       return el;
     }
     const el = await this.findOne();
@@ -306,7 +340,7 @@ export class PlatformElement implements Element {
     // looks the element up again and asks isDisplayed(): rows loaded by a
     // swipe only show up in a fresh query, and an indexed match that does
     // not exist yet is simply "not shown yet" rather than an error.
-    if (this.matchesNothing) await this.resolveNow(); // throws: can never match
+    if (this.matchesNothing) await this.resolveNow().catch(err => { throw toPublicError(err); }); // can never match
     const shownNow = async (): Promise<boolean> => {
       try { return !!(await (await this.findOne()).isDisplayed()); }
       catch (err) { if (isFatalDriverError(err)) throw err; return false; }
@@ -438,7 +472,7 @@ export class PlatformElement implements Element {
    * silently land somewhere else). The driver's error, if any, is appended.
    */
   private async gestureRect(method: string, timeout?: number): Promise<{ x: number; y: number; width: number; height: number }> {
-    let el = await this.ensureAttached(timeout);
+    let el = await this.ensureAttached(timeout, method);
     // WebdriverIO resolves a missing element to an object without an
     // `elementId` and does not fill it in when the element appears later;
     // look it up once more, and report "not found" rather than sending the
@@ -656,8 +690,9 @@ export class PlatformElement implements Element {
 
   async isVisible(): Promise<boolean> {
     if (this.polled) {
-      // Like Playwright, a missing nth match is simply not visible.
-      try { return await (await this.resolveNow()).isDisplayed(); } catch { return false; }
+      // Like Playwright, a missing match is simply not visible.
+      try { return await (await this.resolveNow()).isDisplayed(); }
+      catch (err) { if (isFatalDriverError(err)) throw err; return false; }
     }
     return (await this.findOne()).isDisplayed();
   }
@@ -777,8 +812,10 @@ export class PlatformElement implements Element {
    * An element for `selector` searched inside this element's match
    * (WebdriverIO `parent.$(selector)` / `parent.$$(selector)`), honouring
    * this element's index. Lazy: the parent is looked up when the child is
-   * used. A child of a missing indexed parent waits for it like an action
-   * does, then fails with the parent's out-of-range error; its `count()` is 0.
+   * used. The child is polled like an indexed element: actions and reads
+   * wait up to their timeout for the parent and the child, then fail with a
+   * not-found error naming the missing one; a child of a missing parent has
+   * `count()` 0 and `isVisible()` / `exists()` false.
    */
   locateChild(selector: string): Element {
     return this.derive({ selector, parent: this });

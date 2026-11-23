@@ -281,6 +281,104 @@ test.describe('multi-match selectors on WebdriverIO 10 (strict `$` by default)',
   });
 });
 
+test.describe('a child of a missing unindexed parent (WebdriverIO 10)', () => {
+  // WebdriverIO's implicit wait on `$` / `$$` of a missing lazy element is
+  // `waitforTimeout`; set it well above the element timeouts so any call on
+  // the missing parent shows up as a slow test.
+  const WAITFOR_TIMEOUT = 3000;
+  let server: FakeServer;
+  let driver: any;
+
+  test.beforeEach(async () => {
+    server = await startFakeServer();
+    const { remote } = await importEsm('webdriverio');
+    driver = await remote({
+      protocol: 'http',
+      hostname: '127.0.0.1',
+      port: server.port,
+      path: '/',
+      logLevel: 'silent',
+      connectionRetryCount: 0,
+      waitforTimeout: WAITFOR_TIMEOUT,
+      capabilities: { platformName: 'iOS', 'appium:automationName': 'XCUITest' } as any,
+    });
+    server.requests.length = 0;
+  });
+
+  test.afterEach(async () => {
+    await driver?.deleteSession().catch(() => {});
+    await server?.close();
+  });
+
+  const child = (timeout = 500) => new PlatformElement(driver, `~${MISSING}`, undefined, timeout).locateChild('~label');
+  const scopedFinds = () => server.requests.filter(r => /\/element\/[^/]+\/elements?$/.test(r.path));
+
+  test('count() is 0 at once', async () => {
+    const start = Date.now();
+    expect(await child().count()).toBe(0);
+    expect(Date.now() - start).toBeLessThan(1000);
+    expect(scopedFinds()).toEqual([]);
+  });
+
+  test('isVisible() is false at once', async () => {
+    const start = Date.now();
+    expect(await child().isVisible()).toBe(false);
+    expect(Date.now() - start).toBeLessThan(1000);
+  });
+
+  test('exists() is false at once', async () => {
+    const start = Date.now();
+    expect(await child().exists()).toBe(false);
+    expect(Date.now() - start).toBeLessThan(1000);
+  });
+
+  test('click() fails within its timeout with a plain not-found Error', async () => {
+    const start = Date.now();
+    const err = await child().click({ timeout: 500 }).then(() => null, e => e);
+    const elapsed = Date.now() - start;
+    expect(err).toBeInstanceOf(Error);
+    expect(err.constructor).toBe(Error);
+    expect(err.name).toBe('Error');
+    expect(err.message).toMatch(/parent "~missing" not found/);
+    expect(elapsed).toBeGreaterThanOrEqual(450);
+    expect(elapsed).toBeLessThan(500 + 1000);
+    expect(scopedFinds()).toEqual([]);
+  });
+
+  test('textContent() fails within the element timeout', async () => {
+    const start = Date.now();
+    await expect(child(500).textContent()).rejects.toThrow(/parent "~missing" not found/);
+    expect(Date.now() - start).toBeLessThan(500 + 1000);
+  });
+
+  test('nth(1).textContent() fails within the element timeout', async () => {
+    const start = Date.now();
+    await expect(child(500).nth(1).textContent()).rejects.toThrow(/parent "~missing" not found/);
+    expect(Date.now() - start).toBeLessThan(500 + 1000);
+  });
+
+  test('a gesture names the method and the element', async () => {
+    const start = Date.now();
+    await expect(child().longPress({ timeout: 500 }))
+      .rejects.toThrow(/^longPress: "~label" inside "~missing" not found within 500 ms: parent "~missing" not found$/);
+    expect(Date.now() - start).toBeLessThan(500 + 1000);
+  });
+
+  test('nth(1).scrollIntoView() takes about as long as with no parent (swipes only)', async () => {
+    test.setTimeout(90_000);
+    let start = Date.now();
+    await expect(new PlatformElement(driver, `~${MISSING}`, undefined, 500).nth(1).scrollIntoView())
+      .rejects.toThrow(/after 20 swipes/);
+    const noParent = Date.now() - start;
+    start = Date.now();
+    await expect(child().nth(1).scrollIntoView()).rejects.toThrow(/after 20 swipes/);
+    const withParent = Date.now() - start;
+    test.info().annotations.push({ type: 'timing', description: `no parent ${noParent} ms, missing parent ${withParent} ms` });
+    expect(withParent).toBeLessThan(noParent * 1.5 + 1000);
+    expect(scopedFinds()).toEqual([]);
+  });
+});
+
 test.describe('webdriverio stays an optional peer', () => {
   test('no source file imports webdriverio or names the WebdriverIO namespace', () => {
     const files: string[] = [];
