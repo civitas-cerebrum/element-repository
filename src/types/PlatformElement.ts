@@ -420,9 +420,12 @@ export class PlatformElement implements Element {
   /**
    * Swipes from the element centre. Coordinates are native-context
    * viewport coordinates (the same space as `getElementRect` and
-   * `getWindowSize`). The end point is clamped to the window
-   * (`[0, width-1]` x `[0, height-1]`), so the swipe may travel less than
-   * `distance` near an edge.
+   * `getWindowSize`). The start point must be inside the window, or this
+   * throws (`call scrollIntoView first`). The end point is clamped to the
+   * window (`[0, width-1]` x `[0, height-1]`), so the swipe may travel less
+   * than `distance` near an edge; when the start point is on the edge the
+   * swipe moves toward, so the finger could not move at all, this throws
+   * (`nothing to swipe`) instead of sending a press.
    */
   async swipe(direction: SwipeDirection, options?: SwipeOptions): Promise<Element> {
     const el = await this.ensureAttached(options?.timeout);
@@ -440,11 +443,31 @@ export class PlatformElement implements Element {
       : Math.round(windowSize.height * 0.5);
     const distance = options?.distance ?? defaultDistance;
     const sign = (direction === 'left' || direction === 'up') ? -1 : 1;
+    // An off-window start (XCUITest reports rects for off-screen elements)
+    // would make the clamped end point reverse the swipe; reject it.
+    if (!(cx >= 0 && cx < windowSize.width && cy >= 0 && cy < windowSize.height)) {
+      throw new Error(
+        `swipe: element centre (${cx}, ${cy}) is outside the window (${windowSize.width}x${windowSize.height}); ` +
+        'call scrollIntoView first',
+      );
+    }
     // The end point is clamped to the window (the start point is not
     // moved), so a long swipe stops at the edge instead of sending
     // negative or off-window coordinates.
     const toX = horizontal ? PlatformElement.clampToAxis(cx + distance * sign, windowSize.width) : cx;
     const toY = horizontal ? cy : PlatformElement.clampToAxis(cy + distance * sign, windowSize.height);
+    // A start on the edge the swipe moves toward leaves the finger in place:
+    // that is a long press, not a swipe. Only the clamp is checked here; a
+    // `distance` that itself rounds to no movement is sent as given.
+    const from = horizontal ? cx : cy;
+    const moved = ((horizontal ? toX : toY) - from) * sign > 0;
+    const wanted = (Math.round(from + distance * sign) - from) * sign > 0;
+    if (!moved && wanted) {
+      throw new Error(
+        `swipe: the start point (${cx}, ${cy}) is at the window edge (${windowSize.width}x${windowSize.height}) ` +
+        `for a '${direction}' swipe; nothing to swipe`,
+      );
+    }
     await this.touchSwipe(cx, cy, toX, toY);
     await this.driver.pause(200);
     return this;

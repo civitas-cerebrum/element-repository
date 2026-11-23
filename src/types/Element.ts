@@ -180,11 +180,20 @@ export interface Element {
    * available; throws on backends that don't support programmatic
    * swipes.
    *
-   * @param direction - 'up' | 'down' | 'left' | 'right'.
-   * On platform elements the end point is clamped to the window
+   * On platform elements the start point (the element centre, or the
+   * window centre when the driver reports no rect) must be inside the
+   * window; it is never moved. The end point is clamped to the window
    * (`[0, width-1]` x `[0, height-1]`), so near an edge the swipe travels
-   * less than `distance`; the start point is never moved.
+   * less than `distance`.
    *
+   * @throws (platform) `swipe: element centre (x, y) is outside the window
+   *         (WxH); call scrollIntoView first` when the start point is off
+   *         the window, and `swipe: the start point (x, y) is at the window
+   *         edge (WxH) for a '<direction>' swipe; nothing to swipe` when the
+   *         start point lies on the edge the swipe moves toward, so the
+   *         finger could not move. Nothing is sent in either case.
+   *
+   * @param direction - 'up' | 'down' | 'left' | 'right'.
    * @param options - Optional distance (default ~50% of viewport dim) and
    *                  `timeout` for waiting until the element is attached.
    */

@@ -656,6 +656,70 @@ test.describe('PlatformElement interaction methods', () => {
     ]);
   });
 
+  const swipeDriver = (rect: { x: number; y: number; width: number; height: number } | null, win = { width: 1000, height: 2000 }) => {
+    const mockEl = createMockWdioElement({ elementId: 'el-42', isDisplayed: async () => true, waitForExist: async () => {} });
+    const touch = touchRecorder();
+    const driver = {
+      $: async () => mockEl,
+      $$: async () => [mockEl],
+      pause: async () => {},
+      getWindowSize: async () => win,
+      getElementRect: async () => rect,
+      ...touch.driver,
+    };
+    return { driver, touch };
+  };
+
+  test('swipe rejects an element centre outside the window, without sending actions', async () => {
+    // Centre (200, -100): an 'up' swipe would clamp to 0 and move the finger DOWN.
+    const above = swipeDriver({ x: 100, y: -150, width: 200, height: 100 });
+    await expect(new PlatformElement(above.driver, '~card').swipe('up', { distance: 300 }))
+      .rejects.toThrow('swipe: element centre (200, -100) is outside the window (1000x2000); call scrollIntoView first');
+    // Centre (1100, 250): right of the window.
+    const right = swipeDriver({ x: 1000, y: 200, width: 200, height: 100 });
+    await expect(new PlatformElement(right.driver, '~card').swipe('left'))
+      .rejects.toThrow(/swipe: element centre \(1100, 250\) is outside the window \(1000x2000\)/);
+    // Centre exactly at y = height (2000) is outside too.
+    const below = swipeDriver({ x: 100, y: 1950, width: 200, height: 100 });
+    await expect(new PlatformElement(below.driver, '~card').swipe('up'))
+      .rejects.toThrow(/swipe: element centre \(200, 2000\) is outside the window/);
+    for (const d of [above, right, below]) expect(d.touch.calls).toEqual([]);
+  });
+
+  test('swipe throws when the start point is on the window edge in the swipe direction', async () => {
+    // Centre (200, 1999) — the last pixel row; 'down' cannot move.
+    const bottom = swipeDriver({ x: 100, y: 1949, width: 200, height: 100 });
+    await expect(new PlatformElement(bottom.driver, '~card').swipe('down'))
+      .rejects.toThrow("swipe: the start point (200, 1999) is at the window edge (1000x2000) for a 'down' swipe; nothing to swipe");
+    // Centre (0, 250) — the first column; 'left' cannot move.
+    const leftEdge = swipeDriver({ x: -100, y: 200, width: 200, height: 100 });
+    await expect(new PlatformElement(leftEdge.driver, '~card').swipe('left', { distance: 50 }))
+      .rejects.toThrow("swipe: the start point (0, 250) is at the window edge (1000x2000) for a 'left' swipe; nothing to swipe");
+    // Centre (200, 0) — 'up'; centre (999, 250) — 'right'.
+    const top = swipeDriver({ x: 100, y: -50, width: 200, height: 100 });
+    await expect(new PlatformElement(top.driver, '~card').swipe('up')).rejects.toThrow(/at the window edge.*'up' swipe/);
+    const rightEdge = swipeDriver({ x: 899, y: 200, width: 200, height: 100 });
+    await expect(new PlatformElement(rightEdge.driver, '~card').swipe('right')).rejects.toThrow(/at the window edge.*'right' swipe/);
+    for (const d of [bottom, leftEdge, top, rightEdge]) expect(d.touch.calls).toEqual([]);
+  });
+
+  test('swipe from an edge pixel away from that edge still dispatches', async () => {
+    const bottom = swipeDriver({ x: 100, y: 1949, width: 200, height: 100 });
+    await new PlatformElement(bottom.driver, '~card').swipe('up', { distance: 100 });
+    expect(bottom.touch.performed).toEqual([swipePayload(200, 1999, 200, 1899)]);
+  });
+
+  test('swipe on a 0x0 window throws without sending actions, with or without a rect', async () => {
+    const withRect = swipeDriver({ x: 0, y: 0, width: 0, height: 0 }, { width: 0, height: 0 });
+    await expect(new PlatformElement(withRect.driver, '~card').swipe('down'))
+      .rejects.toThrow(/swipe: element centre \(0, 0\) is outside the window \(0x0\)/);
+    const noRect = swipeDriver(null, { width: 0, height: 0 });
+    await expect(new PlatformElement(noRect.driver, '~card').swipe('right'))
+      .rejects.toThrow(/swipe: .*\(0x0\)/);
+    expect(withRect.touch.calls).toEqual([]);
+    expect(noRect.touch.calls).toEqual([]);
+  });
+
   test('swipe without a rect clamps the end point from the window centre', async () => {
     const mockEl = createMockWdioElement({ elementId: 'el-42', isDisplayed: async () => true, waitForExist: async () => {} });
     const touch = touchRecorder();
