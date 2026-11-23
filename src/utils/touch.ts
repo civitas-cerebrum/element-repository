@@ -13,8 +13,24 @@ export interface TouchPoint {
   y: number;
 }
 
-/** One W3C action of a pointer source (`pointerMove`, `pointerDown`, `pause`, ...). */
-export type TouchAction = Record<string, unknown>;
+/**
+ * One W3C action of a touch pointer source, as the platform gestures send
+ * them: a move to a point over `duration` ms (`origin: 'viewport'` for
+ * absolute coordinates), finger down or up, or a pause of `duration` ms.
+ */
+export type TouchAction =
+  | { type: 'pointerMove'; x: number; y: number; duration?: number; origin?: 'viewport' | 'pointer' }
+  | { type: 'pointerDown'; button: number }
+  | { type: 'pointerUp'; button: number }
+  | { type: 'pause'; duration: number };
+
+/** Timings of {@link buildTouchSwipe} / {@link performTouchSwipe}, in ms. */
+export interface TouchSwipeOptions {
+  /** Hold after `pointerDown` before the finger moves. Default {@link SWIPE_HOLD_MS}. */
+  holdMs?: number;
+  /** Duration of the move from the start to the end point. Default {@link SWIPE_MOVE_MS}. */
+  moveMs?: number;
+}
 
 /** A W3C pointer input source, as sent to the `performActions` command. */
 export interface TouchPointerSource {
@@ -48,17 +64,18 @@ export function touchPointers(fingers: TouchAction[][]): TouchPointerSource[] {
 
 /**
  * The action sequence of a one-finger swipe from `from` to `to`: an instant
- * move to the start point, finger down, a {@link SWIPE_HOLD_MS} hold, a
- * {@link SWIPE_MOVE_MS} move to the end point, finger up. Coordinates are
- * rounded to integers. Pass the result to `driver.performActions`, or use
+ * move to the start point, finger down, a hold (`options.holdMs`, default
+ * {@link SWIPE_HOLD_MS}), a move to the end point (`options.moveMs`,
+ * default {@link SWIPE_MOVE_MS}), finger up. Coordinates are rounded to
+ * integers. Pass the result to `driver.performActions`, or use
  * {@link performTouchSwipe}, which also releases the actions.
  */
-export function buildTouchSwipe(from: TouchPoint, to: TouchPoint): TouchPointerSource[] {
+export function buildTouchSwipe(from: TouchPoint, to: TouchPoint, options?: TouchSwipeOptions): TouchPointerSource[] {
   return touchPointers([[
     { type: 'pointerMove', duration: 0, origin: 'viewport', x: Math.round(from.x), y: Math.round(from.y) },
     { type: 'pointerDown', button: 0 },
-    { type: 'pause', duration: SWIPE_HOLD_MS },
-    { type: 'pointerMove', duration: SWIPE_MOVE_MS, origin: 'viewport', x: Math.round(to.x), y: Math.round(to.y) },
+    { type: 'pause', duration: options?.holdMs ?? SWIPE_HOLD_MS },
+    { type: 'pointerMove', duration: options?.moveMs ?? SWIPE_MOVE_MS, origin: 'viewport', x: Math.round(to.x), y: Math.round(to.y) },
     { type: 'pointerUp', button: 0 },
   ]]);
 }
@@ -85,12 +102,12 @@ export async function performTouchActions(driver: any, sources: TouchPointerSour
 }
 
 /**
- * Sends the swipe of {@link buildTouchSwipe} through
- * {@link performTouchActions}. It does not pause afterwards; wait
+ * Sends the swipe of {@link buildTouchSwipe} (with the same `options`)
+ * through {@link performTouchActions}. It does not pause afterwards; wait
  * {@link SWIPE_SETTLE_MS} before reading the screen if the content scrolls.
  *
  * @param driver - A WebdriverIO browser with `performActions` / `releaseActions`.
  */
-export async function performTouchSwipe(driver: any, from: TouchPoint, to: TouchPoint): Promise<void> {
-  await performTouchActions(driver, buildTouchSwipe(from, to));
+export async function performTouchSwipe(driver: any, from: TouchPoint, to: TouchPoint, options?: TouchSwipeOptions): Promise<void> {
+  await performTouchActions(driver, buildTouchSwipe(from, to, options));
 }

@@ -115,6 +115,30 @@ test.describe('PlatformElement.scrollIntoView bounds', () => {
     expect(log).not.toContain('swipe');
   });
 
+  test('maxSwipes bounds the sweep by count, and the error names that limit', async () => {
+    const log: string[] = [];
+    const el = new PlatformElement(swipeDriver(log, rawElement(log)), '~row');
+    await expect(el.scrollIntoView({ direction: 'left', maxSwipes: 3 })).rejects.toThrow(
+      'scrollIntoView: element not visible after 3 swipes, the swipe limit (direction=left)',
+    );
+    expect(log.filter(l => l === 'swipe')).toHaveLength(3);
+  });
+
+  test('maxSwipes and a timeout together: the timeout error reports the given limit', async () => {
+    const log: string[] = [];
+    const el = new PlatformElement(swipeDriver(log, rawElement(log)), '~row');
+    await expect(el.scrollIntoView({ timeout: 0, maxSwipes: 5 })).rejects.toThrow(/within the 0 ms timeout \(0 of at most 5 swipes/);
+  });
+
+  for (const bad of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+    test(`maxSwipes ${bad} is rejected before any swipe`, async () => {
+      const log: string[] = [];
+      const el = new PlatformElement(swipeDriver(log, rawElement(log)), '~row');
+      await expect(el.scrollIntoView({ maxSwipes: bad })).rejects.toThrow(/scrollIntoView: maxSwipes must be a positive integer/);
+      expect(log).not.toContain('swipe');
+    });
+  }
+
   test('a visible element returns at once whatever the timeout', async () => {
     const log: string[] = [];
     const el = new PlatformElement(swipeDriver(log, rawElement(log, { isDisplayed: async () => true })), '~row');
@@ -197,4 +221,36 @@ test('isWeb and isPlatform are type guards', () => {
   }
   expect(isPlatform(web)).toBe(false);
   expect(isWeb(native)).toBe(false);
+});
+
+// ---------------------------------------------------------------------------
+// WebElement.scrollIntoView timeout
+// ---------------------------------------------------------------------------
+
+test.describe('WebElement.scrollIntoView timeout', () => {
+  function scrollLocator(calls: string[]): any {
+    return {
+      waitFor: async (o: any) => { calls.push(`waitFor:${o.state}:${o.timeout}`); },
+      scrollIntoViewIfNeeded: async (o: any) => { calls.push(`scroll:${o.timeout}`); },
+    };
+  }
+
+  test('without a timeout it uses the repository default', async () => {
+    const calls: string[] = [];
+    await new WebElement(scrollLocator(calls), undefined, 7000).scrollIntoView();
+    expect(calls).toEqual(['waitFor:attached:7000', 'scroll:7000']);
+  });
+
+  test('an explicit timeout wins over the default', async () => {
+    const calls: string[] = [];
+    await new WebElement(scrollLocator(calls), undefined, 7000).scrollIntoView({ timeout: 300 });
+    expect(calls).toEqual(['waitFor:attached:300', 'scroll:300']);
+  });
+
+  test('an invalid maxSwipes is rejected on web too', async () => {
+    const calls: string[] = [];
+    await expect(new WebElement(scrollLocator(calls)).scrollIntoView({ maxSwipes: 0 }))
+      .rejects.toThrow(/scrollIntoView: maxSwipes must be a positive integer/);
+    expect(calls).toEqual([]);
+  });
 });

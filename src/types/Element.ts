@@ -45,6 +45,12 @@ export type SwipeDirection = 'up' | 'down' | 'left' | 'right';
  */
 export interface ScrollIntoViewOptions extends ElementActionOptions {
   direction?: 'down' | 'up' | 'left' | 'right';
+  /**
+   * Platform (Appium): the most swipes the sweep makes before giving up.
+   * A positive integer; default 20. Web: ignored (the browser scrolls in
+   * one step), but still validated.
+   */
+  maxSwipes?: number;
 }
 
 /** Options for {@link Element.swipe}. */
@@ -169,7 +175,7 @@ export interface Element {
    * Scrolls the element into the visible area of the viewport.
    *
    * On platform (Appium) elements this sweeps the screen in ONE
-   * direction until the element is displayed, giving up after a fixed
+   * direction until the element is displayed, giving up after a set
    * number of swipes. `direction` names where the target is relative to
    * the current view: `'down'` (default) reveals content below,
    * `'up'` content above, `'left'` / `'right'` content to that side of a
@@ -177,16 +183,23 @@ export interface Element {
    * target's position is unknown, call it twice with different
    * directions.
    *
-   * On platform elements the sweep makes up to 20 swipes (each about
-   * 100 ms hold + 600 ms move + 200 ms settle of gesture time, more on a
-   * real device). When `options.timeout` is given, the sweep also stops
-   * once that many ms have passed: no new swipe starts after the deadline,
-   * so the call can overrun it by at most one swipe. Without a timeout only
-   * the 20-swipe limit applies. The error names the bound that was hit.
+   * On platform elements the sweep makes up to `options.maxSwipes` swipes
+   * (default 20; each about 100 ms hold + 600 ms move + 200 ms settle of
+   * gesture time, around 3 s on a real device). The sweep is time-bounded
+   * only by a timeout given to this call: with `options.timeout` it also
+   * stops once that many ms have passed (no new swipe starts after the
+   * deadline, so the call can overrun it by at most one swipe). Without
+   * one, only the swipe limit applies: neither the element's default
+   * timeout nor an {@link Element.action} chain timeout bounds the sweep.
+   * The error names the bound that was hit.
    *
-   * On web elements the browser scrolls whatever is needed,
-   * `direction` is ignored and `options.timeout` is the Playwright
+   * On web elements the browser scrolls whatever is needed, `direction`
+   * and `maxSwipes` are ignored (`maxSwipes` is still validated), and the
+   * Playwright timeout is `options.timeout`, else the element's default
    * timeout.
+   *
+   * @throws Error when `options.maxSwipes` is given and is not a positive
+   *   integer.
    */
   scrollIntoView(options?: ScrollIntoViewOptions): Promise<Element>;
 

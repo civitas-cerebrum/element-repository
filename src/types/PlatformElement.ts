@@ -2,12 +2,12 @@ import {
   Element, ElementType, ElementActionOptions, ClickOptions, ScrollIntoViewOptions, SwipeDirection, SwipeOptions,
   LongPressOptions, TapOffset, TapAtOptions, PinchOptions, ZoomOptions,
 } from './Element';
-import { checkLongPressDuration, checkTapOffset } from '../utils/gestureChecks';
+import { checkLongPressDuration, checkMaxSwipes, checkTapOffset } from '../utils/gestureChecks';
 import { ElementChain } from './ElementChain';
 import { PlatformNotSupportedError } from './errors';
 import { isFatalDriverError } from '../utils/driverErrors';
 import type { Platform } from '../enum/Platform';
-import { SWIPE_SETTLE_MS, performTouchActions, performTouchSwipe, touchPointers } from '../utils/touch';
+import { SWIPE_SETTLE_MS, TouchAction, performTouchActions, performTouchSwipe, touchPointers } from '../utils/touch';
 import { detectDriverPlatform, readPlatformText } from '../utils/platformText';
 
 /** Extra construction options for {@link PlatformElement}. */
@@ -344,6 +344,13 @@ export class PlatformElement implements Element {
     return this;
   }
 
+  /**
+   * {@inheritDoc Element.scrollIntoView}
+   *
+   * Platform: makes up to `options.maxSwipes` swipes (default 20). Only
+   * `options.timeout` bounds the sweep in time; this element's default
+   * timeout does not.
+   */
   async scrollIntoView(options?: ScrollIntoViewOptions): Promise<Element> {
     // Deliberately skip `ensureAttached` here — the whole point of
     // scrollIntoView is to handle the "not in the viewport (and maybe
@@ -357,6 +364,7 @@ export class PlatformElement implements Element {
     // swipe only show up in a fresh query, and an indexed match that does
     // not exist yet is simply "not shown yet" rather than an error.
     const started = Date.now();
+    const maxSwipesPerDirection = checkMaxSwipes(options?.maxSwipes);
     if (this.matchesNothing) await this.resolveNow().catch(err => { throw toPublicError(err); }); // can never match
     const shownNow = async (): Promise<boolean> => {
       try { return !!(await (await this.findOne()).isDisplayed()); }
@@ -403,8 +411,9 @@ export class PlatformElement implements Element {
     const yFar = Math.round(windowSize.height * 0.75);
     const xNear = Math.round(windowSize.width * 0.25);
     const xFar = Math.round(windowSize.width * 0.75);
-    const maxSwipesPerDirection = 20;
-    // Only an explicit timeout bounds the sweep; without one, the swipe cap does.
+    // Only a timeout given to this call bounds the sweep in time; without
+    // one, the swipe limit alone does (a swipe takes ~3 s on a real device,
+    // so a default element or chain timeout would cut a sweep short).
     const deadline = options?.timeout === undefined ? undefined : started + options.timeout;
 
     const swipeXY = async (fromX: number, fromY: number, toX: number, toY: number): Promise<void> => {
@@ -561,7 +570,7 @@ export class PlatformElement implements Element {
    * Sends one W3C touch pointer per finger with `performActions` and always
    * releases them (see {@link performTouchActions}).
    */
-  private async performTouch(fingers: Array<Array<Record<string, unknown>>>): Promise<void> {
+  private async performTouch(fingers: TouchAction[][]): Promise<void> {
     await performTouchActions(this.driver, touchPointers(fingers));
   }
 
@@ -666,7 +675,7 @@ export class PlatformElement implements Element {
       `${method}: the element centre (${Math.round(cx)}, ${y}) is too close to the window edge ` +
       `(${windowSize.width}x${windowSize.height}) for a two-finger gesture; scroll it further into view or use a scale closer to 1`,
     );
-    const fingerPath = (sign: -1 | 1) => {
+    const fingerPath = (sign: -1 | 1): TouchAction[] => {
       const inner = Math.round(cx + sign * innerGap);
       if (inner < 0 || inner >= windowSize.width) throw tooClose();
       const outer = PlatformElement.clampToAxis(cx + sign * outerGap, windowSize.width);

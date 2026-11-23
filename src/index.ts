@@ -16,6 +16,11 @@ export * from './enum/Options';
 // Export standalone utilities
 export * from './utils/math';
 export { isFatalDriverError } from './utils/driverErrors';
+// The W3C touch swipe used by platform gestures, so a screen-level swipe can send the same sequence.
+export {
+  SWIPE_HOLD_MS, SWIPE_MOVE_MS, SWIPE_SETTLE_MS, touchPointers, buildTouchSwipe, performTouchActions, performTouchSwipe,
+} from './utils/touch';
+export type { TouchPoint, TouchAction, TouchPointerSource, TouchSwipeOptions } from './utils/touch';
 
 // Export element types
 export * from './types';

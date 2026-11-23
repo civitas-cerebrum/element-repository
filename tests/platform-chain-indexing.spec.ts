@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { PlatformElement, ElementType } from '../src/types';
+import { PlatformElement, WebElement, ElementType } from '../src/types';
 import { ElementChain } from '../src/types/ElementChain';
 import { PlatformNotSupportedError } from '../src/types/errors';
 
@@ -48,22 +48,50 @@ function listDriver(names: string[], log: string[], extra: Record<string, any> =
 // ===========================================================================
 
 test.describe('ElementChain.scrollIntoView', () => {
-  test('on a platform element: no attached wait, delegates with direction and the chain timeout', async () => {
+  test('on a platform element: no attached wait, and the chain timeout is not forwarded', async () => {
     const log: any[] = [];
     await new ElementChain(spyElement(log, ElementType.PLATFORM), 4000).scrollIntoView({ direction: 'up' });
-    expect(log).toEqual([['scrollIntoView', { direction: 'up', timeout: 4000 }]]);
+    expect(log).toEqual([['scrollIntoView', { direction: 'up' }]]);
+    expect(log[0][1]).not.toHaveProperty('timeout');
   });
 
-  test('on a web element: no chain-level wait either; the element waits for itself', async () => {
+  test('on a web element: no chain-level wait either, and no chain timeout; the element applies its own default', async () => {
     const log: any[] = [];
     await new ElementChain(spyElement(log, ElementType.WEB), 4000).scrollIntoView({ direction: 'left' });
-    expect(log).toEqual([['scrollIntoView', { direction: 'left', timeout: 4000 }]]);
+    expect(log).toEqual([['scrollIntoView', { direction: 'left' }]]);
+    expect(log[0][1]).not.toHaveProperty('timeout');
   });
 
-  test('an explicit option timeout wins over the chain timeout', async () => {
+  test('an explicit option timeout and maxSwipes are forwarded as given', async () => {
     const log: any[] = [];
-    await new ElementChain(spyElement(log, ElementType.PLATFORM), 4000).scrollIntoView({ timeout: 50 });
-    expect(log).toEqual([['scrollIntoView', { timeout: 50 }]]);
+    await new ElementChain(spyElement(log, ElementType.PLATFORM), 4000).scrollIntoView({ timeout: 50, maxSwipes: 3 });
+    expect(log).toEqual([['scrollIntoView', { timeout: 50, maxSwipes: 3 }]]);
+  });
+
+  test('a platform sweep through a chain is bounded by the swipe limit, not by the chain timeout', async () => {
+    const log: string[] = [];
+    const raw = rawElement('row', log, { isDisplayed: async () => false });
+    const driver = {
+      $: async () => raw,
+      $$: async () => [raw],
+      pause: async () => {},
+      getWindowSize: async () => ({ width: 1000, height: 2000 }),
+      performActions: async () => { log.push('swipe'); await new Promise(r => setTimeout(r, 5)); },
+      releaseActions: async () => {},
+    };
+    await expect(new PlatformElement(driver, '~row').action(20).scrollIntoView())
+      .rejects.toThrow('scrollIntoView: element not visible after 20 swipes, the swipe limit (direction=down)');
+    expect(log.filter(l => l === 'swipe')).toHaveLength(20);
+  });
+
+  test('a web element through a chain scrolls with its repository default timeout', async () => {
+    const calls: string[] = [];
+    const locator: any = {
+      waitFor: async (o: any) => { calls.push(`waitFor:${o.state}:${o.timeout}`); },
+      scrollIntoViewIfNeeded: async (o: any) => { calls.push(`scroll:${o.timeout}`); },
+    };
+    await new WebElement(locator, undefined, 7000).action().scrollIntoView();
+    expect(calls).toEqual(['waitFor:attached:7000', 'scroll:7000']);
   });
 
   test('a real PlatformElement off-screen in a lazy list is swiped to without waiting for attached', async () => {

@@ -5,7 +5,7 @@ import {
 } from './Element';
 import { ElementChain } from './ElementChain';
 import { PlatformNotSupportedError } from './errors';
-import { checkLongPressDuration, checkTapOffset } from '../utils/gestureChecks';
+import { checkLongPressDuration, checkMaxSwipes, checkTapOffset } from '../utils/gestureChecks';
 
 /**
  * Playwright-backed {@link Element} implementation.
@@ -121,9 +121,13 @@ export class WebElement implements Element {
     // transparently — the browser scrolls the nearest scrollable
     // ancestor by whatever distance is needed. The `direction` option
     // is accepted for API symmetry with {@link PlatformElement.scrollIntoView}
-    // but doesn't affect the Playwright path.
-    await this.ensureAttached(options?.timeout);
-    await this.locator.scrollIntoViewIfNeeded({ timeout: options?.timeout });
+    // but doesn't affect the Playwright path; nor does `maxSwipes`, which
+    // is only validated. Without a timeout the element's default applies,
+    // as it did when an action chain passed its timeout down.
+    checkMaxSwipes(options?.maxSwipes);
+    const timeout = options?.timeout ?? this.defaultTimeout;
+    await this.ensureAttached(timeout);
+    await this.locator.scrollIntoViewIfNeeded({ timeout });
     return this;
   }
 

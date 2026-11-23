@@ -33,6 +33,28 @@ test.describe('touch swipe helpers', () => {
     }]);
   });
 
+  test('buildTouchSwipe takes the hold and move times as options', () => {
+    const [finger] = buildTouchSwipe({ x: 0, y: 0 }, { x: 0, y: 9 }, { holdMs: 0, moveMs: 250 });
+    expect(finger.actions[2]).toEqual({ type: 'pause', duration: 0 });
+    expect(finger.actions[3]).toEqual({ type: 'pointerMove', duration: 250, origin: 'viewport', x: 0, y: 9 });
+  });
+
+  test('an omitted timing keeps its default', () => {
+    const [finger] = buildTouchSwipe({ x: 0, y: 0 }, { x: 0, y: 9 }, { moveMs: 250 });
+    expect(finger.actions[2]).toEqual({ type: 'pause', duration: SWIPE_HOLD_MS });
+    expect(buildTouchSwipe({ x: 0, y: 0 }, { x: 0, y: 9 }, {})).toEqual(buildTouchSwipe({ x: 0, y: 0 }, { x: 0, y: 9 }));
+  });
+
+  test('performTouchSwipe passes its timings to the swipe it sends', async () => {
+    const { driver, calls } = recordingDriver();
+    await performTouchSwipe(driver, { x: 1, y: 2 }, { x: 3, y: 4 }, { holdMs: 50, moveMs: 900 });
+    expect(calls).toEqual([
+      ['performActions', buildTouchSwipe({ x: 1, y: 2 }, { x: 3, y: 4 }, { holdMs: 50, moveMs: 900 })],
+      ['releaseActions'],
+    ]);
+    expect(calls[0][1][0].actions[3].duration).toBe(900);
+  });
+
   test('touchPointers names fingers in order', () => {
     expect(touchPointers([[], []]).map(s => s.id)).toEqual(['finger1', 'finger2']);
   });

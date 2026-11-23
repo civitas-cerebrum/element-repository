@@ -15,6 +15,7 @@ import {
   Element, WebElement, PlatformElement, isWeb, isPlatform, ClickOptions, TapAtOptions, LongPressOptions,
   PinchOptions, ZoomOptions, SwipeDirection, SwipeOptions, ScrollIntoViewOptions,
   SWIPE_HOLD_MS, SWIPE_MOVE_MS, SWIPE_SETTLE_MS, buildTouchSwipe, performTouchSwipe, TouchPointerSource,
+  TouchAction, TouchSwipeOptions,
 } from '../src';
 import pages from './platform-pages.json';
 
@@ -68,8 +69,24 @@ async function elementContract(): Promise<void> {
   if (isWeb(el)) { const w: WebElement = el; void w.locator; }
   if (isPlatform(el)) { const p: PlatformElement = el; void p.driver; }
   const sequence: TouchPointerSource[] = buildTouchSwipe({ x: 0, y: 0 }, { x: 1, y: 1 });
+  const timing: TouchSwipeOptions = { holdMs: 0, moveMs: 300 };
+  const timed: TouchPointerSource[] = buildTouchSwipe({ x: 0, y: 0 }, { x: 1, y: 1 }, timing);
   await performTouchSwipe(driver, { x: 0, y: 0 }, { x: 1, y: 1 });
+  await performTouchSwipe(driver, { x: 0, y: 0 }, { x: 1, y: 1 }, { moveMs: 300 });
   const ms: number = SWIPE_HOLD_MS + SWIPE_MOVE_MS + SWIPE_SETTLE_MS;
-  void raw; void tap; void opts; void dir; void sequence; void ms;
+  const scroll: ScrollIntoViewOptions = { direction: 'up', maxSwipes: 5, timeout: 1 };
+  const actions: TouchAction[] = [
+    { type: 'pointerMove', duration: 0, origin: 'viewport', x: 1, y: 2 },
+    { type: 'pointerDown', button: 0 },
+    { type: 'pause', duration: 10 },
+    { type: 'pointerUp', button: 0 },
+  ];
+  // @ts-expect-error an unknown action type is not a TouchAction
+  const badType: TouchAction = { type: 'keyDown', value: 'a' };
+  // @ts-expect-error a pointerMove needs coordinates
+  const noCoords: TouchAction = { type: 'pointerMove', duration: 0 };
+  // @ts-expect-error a swipe timing is a number of ms
+  buildTouchSwipe({ x: 0, y: 0 }, { x: 1, y: 1 }, { holdMs: '100' });
+  void raw; void tap; void opts; void dir; void sequence; void timed; void ms; void scroll; void actions; void badType; void noCoords;
 }
 void elementContract;

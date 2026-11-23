@@ -139,12 +139,15 @@ export class ElementChain implements PromiseLike<Element> {
 
   /**
    * Scroll the element into view. Same options as
-   * {@link Element.scrollIntoView}, which does its own waiting; an explicit
-   * `options.timeout` overrides the chain timeout.
+   * {@link Element.scrollIntoView}, which does its own waiting. The options
+   * are passed on as given: the chain timeout is not applied, so a platform
+   * sweep is bounded by its swipe limit (`options.maxSwipes`) unless
+   * `options.timeout` is given here, and a web element falls back to its
+   * own default timeout.
    */
   scrollIntoView(options?: ScrollIntoViewOptions): this {
     this.queue.push(async () => {
-      await this.element.scrollIntoView({ ...options, timeout: options?.timeout ?? this.timeout });
+      await this.element.scrollIntoView(options);
     });
     return this;
   }
