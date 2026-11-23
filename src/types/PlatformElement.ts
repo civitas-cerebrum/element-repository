@@ -4,6 +4,22 @@ import {
 } from './Element';
 import { checkLongPressDuration, checkTapOffset } from './gestureChecks';
 import { ElementChain } from './ElementChain';
+import { PlatformNotSupportedError } from '../errors';
+import type { Platform } from '../platform';
+
+/** Extra construction options for {@link PlatformElement}. */
+export interface PlatformElementOptions {
+  /**
+   * Act on this match of the selector, as {@link PlatformElement.nth} does.
+   * Zero-based; negative values count from the end (`-1` is the last).
+   */
+  index?: number;
+  /**
+   * The platform the element belongs to. Used in error messages such as
+   * {@link PlatformNotSupportedError}; read from the driver when omitted.
+   */
+  platform?: Platform;
+}
 
 /** Message of an unknown thrown value, for appending a cause to an error. */
 function errorText(err: unknown): string {
@@ -20,38 +36,121 @@ function errorText(err: unknown): string {
 export class PlatformElement implements Element {
   readonly _type = ElementType.PLATFORM;
 
+  /** Zero-based match index set by {@link first} / {@link nth}; negative counts from the end. */
+  private readonly index?: number;
+  /** Platform given at construction, if any (see {@link platformName}). */
+  private readonly platform?: Platform;
+
   /**
    * @param driver          - The WebDriverIO browser/driver instance.
    * @param selector        - Appium-compatible selector string.
    * @param resolvedElement - Optional already-resolved raw WebDriverIO element
    * (e.g. from `$$`). When set, {@link findOne} returns
    * it directly instead of re-querying the driver.
+   * @param defaultTimeout  - Default timeout in ms inherited from the repository.
+   * @param options         - `index`: act on that match of `selector` (as
+   * {@link nth} does); `platform`: the platform this
+   * element belongs to, used in error messages.
    */
   constructor(
     public readonly driver: any,
     public readonly selector: string,
     public readonly resolvedElement?: any,
     private readonly defaultTimeout?: number,
-  ) {}
+    options?: PlatformElementOptions,
+  ) {
+    this.index = options?.index;
+    this.platform = options?.platform;
+  }
 
   /** {@inheritDoc Element.action} */
   action(timeout?: number): ElementChain {
     return new ElementChain(this, timeout ?? this.defaultTimeout);
   }
 
+  /** Poll interval while waiting for an indexed match to appear, in ms. */
+  private static readonly INDEX_POLL_MS = 200;
+
+  /**
+   * True when this element picks a match by position from `$$`. Index 0
+   * (from {@link first} / `nth(0)`) uses `$`, which already returns the
+   * first match and keeps WebdriverIO's own waiting.
+   */
+  private get byIndex(): boolean {
+    return !this.resolvedElement && this.index !== undefined && this.index !== 0;
+  }
+
   /**
    * Returns the underlying raw element.
    * If a {@link resolvedElement} was provided (e.g. from {@link all}), it is
-   * returned directly; otherwise the driver is queried via `$`.
+   * returned directly; an element made by {@link nth} picks its match from
+   * `$$` (throwing when there is none); otherwise the driver is queried via `$`.
    */
   private async findOne(): Promise<any> {
     if (this.resolvedElement) return this.resolvedElement;
+    if (this.byIndex) return this.resolveIndexed();
     return this.driver.$(this.selector);
   }
 
-  /** Locates all matching elements using `$$`. */
+  /** Picks the indexed match from `$$`, or throws a clear out-of-range error. */
+  private async resolveIndexed(): Promise<any> {
+    const raws = await this.queryAll();
+    const index = this.index ?? 0;
+    const i = index < 0 ? raws.length + index : index;
+    if (i >= 0 && i < raws.length) return raws[i];
+    throw new Error(`nth(${index}): no element at that index for "${this.selector}" (found ${raws.length})`);
+  }
+
+  /** All matches of the selector, as a plain array. */
+  private async queryAll(): Promise<any[]> {
+    return Array.from((await this.driver.$$(this.selector)) ?? []);
+  }
+
+  /**
+   * Locates all matching elements using `$$`. An element made by
+   * {@link first} / {@link nth} yields at most its own match.
+   */
   private async findAll(): Promise<any[]> {
-    return this.driver.$$(this.selector);
+    if (this.resolvedElement || this.index === undefined) return this.queryAll();
+    try { return [await this.resolveIndexed()]; } catch { return []; }
+  }
+
+  /**
+   * Polls `check` until it returns true or `timeout` ms pass. On timeout,
+   * throws the last error `check` raised, or `onTimeout()`.
+   */
+  private async pollUntil(check: () => Promise<boolean>, timeout: number, onTimeout: () => Error): Promise<void> {
+    const deadline = Date.now() + timeout;
+    let lastError: unknown;
+    for (;;) {
+      try {
+        if (await check()) return;
+        lastError = undefined;
+      } catch (err) { lastError = err; }
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) break;
+      await new Promise(resolve => setTimeout(resolve, Math.min(PlatformElement.INDEX_POLL_MS, remaining)));
+    }
+    throw lastError instanceof Error ? lastError : onTimeout();
+  }
+
+  /**
+   * The platform this element runs on, for error messages: the
+   * constructor's `platform`, else the driver's `platformName` capability
+   * or WebdriverIO's `isIOS` / `isAndroid` flags, else the selector's
+   * prefix (`-ios ...` / `android=`). When none of those tells, it falls
+   * back to `'android'`.
+   */
+  private platformName(): Platform {
+    if (this.platform) return this.platform;
+    const caps = (this.driver?.capabilities ?? {}) as Record<string, unknown>;
+    const raw = String(caps.platformName ?? caps['appium:platformName'] ?? '').toLowerCase().replace(/\s+/g, '');
+    if (raw === 'ios' || raw === 'android' || raw === 'windows') return raw;
+    if (raw === 'mac' || raw === 'macos') return 'macos';
+    if (this.driver?.isIOS === true) return 'ios';
+    if (this.driver?.isAndroid === true) return 'android';
+    if (this.selector.startsWith('-ios')) return 'ios';
+    return 'android';
   }
 
   // ── Interaction ──────────────────────────────────────────────
@@ -62,6 +161,17 @@ export class PlatformElement implements Element {
    * surface as "element never attached" rather than an opaque driver error.
    */
   private async ensureAttached(timeout?: number): Promise<any> {
+    if (this.byIndex) {
+      // No lazy WebdriverIO element exists for "the i-th match": poll `$$`
+      // until it is there, and fail with the out-of-range error otherwise.
+      let el: any;
+      await this.pollUntil(
+        async () => { el = await this.resolveIndexed(); return true; },
+        timeout ?? this.defaultTimeout ?? 30000,
+        () => new Error(`nth(${this.index}): no element at that index for "${this.selector}"`),
+      );
+      return el;
+    }
     const el = await this.findOne();
     try { await el.waitForExist({ timeout: timeout ?? this.defaultTimeout ?? 30000 }); }
     catch { /* swallow — downstream action call will surface a clearer error */ }
@@ -447,7 +557,13 @@ export class PlatformElement implements Element {
 
   // ── State ────────────────────────────────────────────────────
 
-  async isVisible(): Promise<boolean> { return (await this.findOne()).isDisplayed(); }
+  async isVisible(): Promise<boolean> {
+    if (this.byIndex) {
+      // Like Playwright, a missing nth match is simply not visible.
+      try { return await (await this.resolveIndexed()).isDisplayed(); } catch { return false; }
+    }
+    return (await this.findOne()).isDisplayed();
+  }
   async isEnabled(): Promise<boolean> { return (await this.findOne()).isEnabled(); }
   async isChecked(): Promise<boolean> { return (await this.findOne()).isSelected(); }
 
@@ -557,25 +673,63 @@ export class PlatformElement implements Element {
   // ── Querying ─────────────────────────────────────────────────
 
   locateChild(selector: string): Element {
-    return new PlatformElement(this.driver, selector, undefined, this.defaultTimeout);
+    return new PlatformElement(this.driver, selector, undefined, this.defaultTimeout, { platform: this.platform });
   }
 
+  /**
+   * Number of matches. For an element made by {@link first} / {@link nth}
+   * this is 1 when its match exists and 0 otherwise, as in Playwright.
+   */
   async count(): Promise<number> { return (await this.findAll()).length; }
 
   async all(): Promise<Element[]> {
     const elements = await this.findAll();
-    return elements.map(el => new PlatformElement(this.driver, this.selector, el, this.defaultTimeout));
+    return elements.map(el => new PlatformElement(this.driver, this.selector, el, this.defaultTimeout, { platform: this.platform }));
   }
 
-  first(): Element { return this; }
-  nth(_index: number): Element { return this; }
-  filter(_options: { hasText?: string | RegExp }): Element { return this; }
+  /** The first match: same as `nth(0)`. */
+  first(): Element { return this.nth(0); }
+
+  /**
+   * The match at `index` (zero-based; negative counts from the end, so
+   * `nth(-1)` is the last). Lazy, like Playwright: the match is looked up
+   * with `$$` when an action runs, and actions wait up to their timeout
+   * for it to appear before failing with an out-of-range error.
+   *
+   * On an element that is already a single match (made by `first` / `nth`
+   * or resolved from `all()`), `nth(0)`, `nth(-1)` and `first()` return
+   * the element itself and any other index throws.
+   *
+   * @throws When `index` is not an integer.
+   */
+  nth(index: number): Element {
+    if (!Number.isInteger(index)) throw new Error(`nth: index must be an integer, got ${index}`);
+    if (this.resolvedElement || this.index !== undefined) {
+      if (index === 0 || index === -1) return this;
+      throw new Error(`nth(${index}): out of range, "${this.selector}" is already a single match`);
+    }
+    return new PlatformElement(this.driver, this.selector, undefined, this.defaultTimeout, { index, platform: this.platform });
+  }
+
+  /**
+   * Text filtering is not available on platform elements (WebdriverIO has
+   * no lazy text filter; use the TEXT selection strategy of the repository
+   * instead). An empty filter returns this element; any criterion throws
+   * {@link PlatformNotSupportedError} naming the platform (see
+   * {@link platformName} for how it is determined).
+   */
+  filter(options: { hasText?: string | RegExp }): Element {
+    const criteria = Object.values(options ?? {}).filter(v => v !== undefined);
+    if (criteria.length === 0) return this;
+    throw new PlatformNotSupportedError('filter', this.platformName());
+  }
 
   // ── Waiting ──────────────────────────────────────────────────
 
   async waitFor(options?: { state?: string; timeout?: number }): Promise<void> {
-    const el = await this.findOne();
     const timeout = options?.timeout ?? 30000;
+    if (this.byIndex) return this.waitForIndexed(options?.state ?? 'visible', timeout);
+    const el = await this.findOne();
     switch (options?.state) {
       case 'hidden':
         await el.waitForDisplayed({ timeout, reverse: true });
@@ -590,6 +744,29 @@ export class PlatformElement implements Element {
       default:
         await el.waitForDisplayed({ timeout });
         break;
+    }
+  }
+
+  /** {@link waitFor} for an element made by {@link nth}: polls `$$`. */
+  private async waitForIndexed(state: string, timeout: number): Promise<void> {
+    const present = async () => { try { await this.resolveIndexed(); return true; } catch { return false; } };
+    const shown = async () => { try { return !!(await (await this.resolveIndexed()).isDisplayed()); } catch { return false; } };
+    const timedOut = (what: string) => () =>
+      new Error(`nth(${this.index}) of "${this.selector}" did not become ${what} within ${timeout} ms`);
+    switch (state) {
+      case 'attached':
+        return this.pollUntil(async () => { await this.resolveIndexed(); return true; }, timeout, timedOut('attached'));
+      case 'detached':
+        return this.pollUntil(async () => !(await present()), timeout, timedOut('detached'));
+      case 'hidden':
+        return this.pollUntil(async () => !(await shown()), timeout, timedOut('hidden'));
+      case 'visible':
+      default:
+        return this.pollUntil(
+          async () => { const el = await this.resolveIndexed(); return !!(await el.isDisplayed()); },
+          timeout,
+          timedOut('visible'),
+        );
     }
   }
 }

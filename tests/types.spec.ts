@@ -759,19 +759,24 @@ test.describe('PlatformElement querying methods', () => {
     result.forEach(item => expect(item).toBeInstanceOf(PlatformElement));
   });
 
-  test('first returns self', () => {
+  test('first returns an indexed PlatformElement with the same selector', () => {
     const el = new PlatformElement(createMockDriver(), '~button');
-    expect(el.first()).toBe(el);
+    const first = el.first();
+    expect(first).toBeInstanceOf(PlatformElement);
+    expect((first as PlatformElement).selector).toBe('~button');
   });
 
-  test('nth returns self', () => {
+  test('nth returns an indexed PlatformElement with the same selector', () => {
     const el = new PlatformElement(createMockDriver(), '~button');
-    expect(el.nth(2)).toBe(el);
+    const nth = el.nth(2);
+    expect(nth).toBeInstanceOf(PlatformElement);
+    expect(nth).not.toBe(el);
+    expect((nth as PlatformElement).selector).toBe('~button');
   });
 
-  test('filter returns self', () => {
+  test('filter with text throws (not supported on platform elements)', () => {
     const el = new PlatformElement(createMockDriver(), '~button');
-    expect(el.filter({ hasText: 'foo' })).toBe(el);
+    expect(() => el.filter({ hasText: 'foo' })).toThrow(/"filter" is not supported on platform/);
   });
 });
 

@@ -1,4 +1,7 @@
-import { Element, ElementActionOptions, LongPressOptions, TapOffset, PinchOptions, ZoomOptions } from './Element';
+import {
+  Element, ElementActionOptions, LongPressOptions, TapOffset, PinchOptions, ZoomOptions,
+  ScrollIntoViewOptions, SwipeDirection, SwipeOptions, isPlatform,
+} from './Element';
 
 /**
  * Thenable fluent builder for performing sequenced actions on an {@link Element}.
@@ -45,12 +48,20 @@ export class ElementChain implements PromiseLike<Element> {
 
   // ── Interactions ─────────────────────────────────────────────
 
-  /** Wait for visible, then click. Use `{ withoutScrolling: true }` to dispatch a native click event. */
+  /**
+   * Wait for visible, then click.
+   *
+   * `{ withoutScrolling: true }` waits only for attached and skips the
+   * scroll: on web it dispatches a DOM `click` event; on platform (Appium)
+   * elements, which have no DOM events, it performs the element's plain
+   * WebDriver click, which taps the element where it is and never scrolls.
+   */
   click(options?: { withoutScrolling?: boolean }): this {
     this.queue.push(async () => {
       if (options?.withoutScrolling) {
         await this.element.waitFor({ state: 'attached', timeout: this.timeout });
-        await this.element.dispatchEvent('click');
+        if (isPlatform(this.element)) await this.element.click({ timeout: this.timeout });
+        else await this.element.dispatchEvent('click');
       } else {
         await this.element.waitFor({ state: 'visible', timeout: this.timeout });
         await this.element.click({ timeout: this.timeout });
@@ -59,11 +70,15 @@ export class ElementChain implements PromiseLike<Element> {
     return this;
   }
 
-  /** Click only if the element is visible. Skips silently otherwise. */
+  /**
+   * Click only if the element is visible. Skips silently otherwise.
+   * `withoutScrolling` behaves as in {@link click} (platform elements get a
+   * plain element click, not a DOM event).
+   */
   clickIfPresent(options?: { withoutScrolling?: boolean }): this {
     this.queue.push(async () => {
       if (await this.element.isVisible()) {
-        if (options?.withoutScrolling) {
+        if (options?.withoutScrolling && !isPlatform(this.element)) {
           await this.element.dispatchEvent('click');
         } else {
           await this.element.click({ timeout: this.timeout });
@@ -127,11 +142,43 @@ export class ElementChain implements PromiseLike<Element> {
     return this;
   }
 
-  /** Wait for attached, then scroll into view. */
-  scrollIntoView(): this {
+  /**
+   * Scroll the element into view. Same options as
+   * {@link Element.scrollIntoView}; an explicit `options.timeout` overrides
+   * the chain timeout.
+   *
+   * Web: waits for attached, then lets the browser scroll (`direction` is
+   * ignored). Platform (Appium): does NOT wait for attached first, because
+   * an off-screen row of a lazy list is not in the element tree until it
+   * has been scrolled to; it delegates straight to the element's
+   * directional sweep.
+   */
+  scrollIntoView(options?: ScrollIntoViewOptions): this {
     this.queue.push(async () => {
-      await this.element.waitFor({ state: 'attached', timeout: this.timeout });
-      await this.element.scrollIntoView({ timeout: this.timeout });
+      const opts = { ...options, timeout: options?.timeout ?? this.timeout };
+      if (!isPlatform(this.element)) {
+        await this.element.waitFor({ state: 'attached', timeout: opts.timeout });
+      }
+      await this.element.scrollIntoView(opts);
+    });
+    return this;
+  }
+
+  /**
+   * Swipe from the element centre. Same arguments as {@link Element.swipe};
+   * an explicit `options.timeout` overrides the chain timeout.
+   *
+   * Web: waits for visible, then swipes. Platform (Appium): delegates
+   * straight to the element, which waits for attached itself and falls back
+   * to the window centre when the driver reports no rect.
+   */
+  swipe(direction: SwipeDirection, options?: SwipeOptions): this {
+    this.queue.push(async () => {
+      const opts = { ...options, timeout: options?.timeout ?? this.timeout };
+      if (!isPlatform(this.element)) {
+        await this.element.waitFor({ state: 'visible', timeout: opts.timeout });
+      }
+      await this.element.swipe(direction, opts);
     });
     return this;
   }
