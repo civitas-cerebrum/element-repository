@@ -101,7 +101,9 @@ test.describe('ios-settings pages file (offline)', () => {
 
 test.describe.serial('live iOS Settings (read-only)', () => {
   test.skip(!ENABLED, SKIP_REASON);
-  test.describe.configure({ timeout: 240_000 });
+  // Generous: the first gesture of a fresh session can take ~15 s, later
+  // ones ~3 s each, and scrollIntoView may run up to 20 swipes.
+  test.describe.configure({ timeout: 300_000 });
 
   let driver: any;
   let repo: ElementRepository;
@@ -137,7 +139,7 @@ test.describe.serial('live iOS Settings (read-only)', () => {
   });
 
   test.afterAll(async () => {
-    test.setTimeout(120_000);
+    test.setTimeout(180_000);
     if (driver) {
       const d = driver;
       try {
@@ -154,6 +156,28 @@ test.describe.serial('live iOS Settings (read-only)', () => {
   test('the repository uses the ios page', () => {
     expect(repo.platform).toBe('ios');
     expect(repo.getPagePlatform(PAGE)).toBe('ios');
+  });
+
+  test('one swipe up on the list really moves the General row', async () => {
+    // Guard for every scroll check below: if a touch swipe does not reach the
+    // list, fail here with a clear message instead of a 20-swipe timeout.
+    await toTop();
+    const list = await get('settingsList');
+    const before = await (await get('generalByAccessibilityId')).boundingBox();
+    if (!before) throw new Error('The General row has no bounds at the top of Settings; cannot check that a swipe moves the list.');
+    const { height } = await driver.getWindowSize();
+    const distance = Math.round(height * 0.2);
+    // Finger up: content moves up, so the General row's y must decrease.
+    await list.swipe('up', { distance });
+    const after = await (await get('generalByAccessibilityId')).boundingBox().catch(() => null);
+    if (!after || after.y === before.y) {
+      throw new Error(
+        `A single swipe('up', { distance: ${distance} }) on the Settings list did not move the General row ` +
+        `(y before ${before.y}, after ${after ? after.y : 'no bounds'}): touch swipes are not scrolling the list.`,
+      );
+    }
+    expect(after.y).toBeLessThan(before.y);
+    await toTop();
   });
 
   test('a multi-match selector counts and indexes cells (bounds only)', async () => {

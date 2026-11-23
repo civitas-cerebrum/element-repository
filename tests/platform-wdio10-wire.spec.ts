@@ -65,6 +65,8 @@ async function startFakeServer(): Promise<FakeServer> {
         value = RECT;
       } else if (method === 'GET' && MANY_IDS.some(id => url === `${s}/element/${id}/rect`)) {
         value = { ...RECT, y: RECT.y + 100 * MANY_IDS.findIndex(id => url.includes(`/${id}/`)) };
+      } else if (method === 'GET' && url === `${s}/element/${ELEMENT}/displayed`) {
+        value = false; // never on screen: scrollIntoView keeps swiping
       } else if (method === 'GET' && url === `${s}/window/rect`) {
         value = WINDOW;
       } else if (method === 'GET' && url === `${s}/element/${ELEMENT}/css/color`) {
@@ -182,15 +184,52 @@ test.describe('PlatformElement against a real WebdriverIO 10 session (fake WebDr
   test('swipe sends rect, window rect and a touch POST /actions from the element centre', async () => {
     await new PlatformElement(driver, '~x').swipe('up', { distance: 100 });
     const calls = wire();
-    expect(calls.slice(0, 3)).toEqual([`GET /element/${ELEMENT}/rect`, 'GET /window/rect', 'POST /actions']);
+    expect(calls).toEqual([`GET /element/${ELEMENT}/rect`, 'GET /window/rect', 'POST /actions', 'DELETE /actions']);
     const perform = server.requests.find(r => r.method === 'POST' && r.path.endsWith('/actions'))!;
-    expect(perform.body.actions).toHaveLength(1);
-    const [source] = perform.body.actions;
-    expect(source.type).toBe('pointer');
-    expect(source.parameters).toEqual({ pointerType: 'touch' });
-    const moves = source.actions.filter((a: any) => a.type === 'pointerMove');
-    expect(moves.map((m: any) => [m.x, m.y])).toEqual([[125, 220], [125, 120]]);
-    expect(source.actions.map((a: any) => a.type)).toEqual(['pointerMove', 'pointerDown', 'pointerMove', 'pointerUp']);
+    // The exact body: one touch finger, an instant move to the start, a
+    // 100 ms hold after the press, a 600 ms move to the end, release.
+    expect(perform.body).toEqual({
+      actions: [{
+        type: 'pointer',
+        id: 'finger1',
+        parameters: { pointerType: 'touch' },
+        actions: [
+          { type: 'pointerMove', duration: 0, origin: 'viewport', x: 125, y: 220 },
+          { type: 'pointerDown', button: 0 },
+          { type: 'pause', duration: 100 },
+          { type: 'pointerMove', duration: 600, origin: 'viewport', x: 125, y: 120 },
+          { type: 'pointerUp', button: 0 },
+        ],
+      }],
+    });
+  });
+
+  test('scrollIntoView swipes with the same explicit touch body, from 75% to 25% of the window', async () => {
+    await expect(new PlatformElement(driver, '~x').scrollIntoView({ direction: 'down' })).rejects.toThrow(/not visible after 20 swipes/);
+    const performs = server.requests.filter(r => r.method === 'POST' && r.path.endsWith('/actions'));
+    const releases = server.requests.filter(r => r.method === 'DELETE' && r.path.endsWith('/actions'));
+    expect(performs).toHaveLength(20);
+    expect(releases).toHaveLength(20);
+    // Window 400x800: centre x 200, from y 600 (75%) to y 200 (25%).
+    for (const p of performs) {
+      expect(p.body).toEqual({
+        actions: [{
+          type: 'pointer',
+          id: 'finger1',
+          parameters: { pointerType: 'touch' },
+          actions: [
+            { type: 'pointerMove', duration: 0, origin: 'viewport', x: 200, y: 600 },
+            { type: 'pointerDown', button: 0 },
+            { type: 'pause', duration: 100 },
+            { type: 'pointerMove', duration: 600, origin: 'viewport', x: 200, y: 200 },
+            { type: 'pointerUp', button: 0 },
+          ],
+        }],
+      });
+    }
+    // Every swipe is released before the next one is sent.
+    const actionCalls = server.requests.filter(r => r.path.endsWith('/actions')).map(r => r.method);
+    expect(actionCalls).toEqual(Array.from({ length: 20 }, () => ['POST', 'DELETE']).flat());
   });
 
   test('getCssProperty sends GET /element/:id/css/:property', async () => {

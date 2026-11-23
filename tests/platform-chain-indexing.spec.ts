@@ -81,12 +81,11 @@ test.describe('ElementChain.scrollIntoView', () => {
       $$: async () => [raw],
       pause: async () => {},
       getWindowSize: async () => ({ width: 1000, height: 2000 }),
-      action: () => ({
-        move: () => ({ down: () => ({ move: () => ({ up: () => ({ perform: async () => { log.push('swipe'); shown = true; } }) }) }) }),
-      }),
+      performActions: async () => { log.push('swipe'); shown = true; },
+      releaseActions: async () => { log.push('release'); },
     };
     await new PlatformElement(driver, '~row').action(60000).scrollIntoView({ direction: 'down' });
-    expect(log).toEqual(['swipe']);
+    expect(log).toEqual(['swipe', 'release']);
   });
 });
 

@@ -28,15 +28,9 @@ export async function browserCalls(): Promise<void> {
   const shot: string = await driver.takeElementScreenshot(id);
   void rect; void css; void shot;
 
-  // W3C actions: raw protocol and the action builder used by swipe/scroll.
+  // W3C actions (raw protocol) used by swipe, scrollIntoView and the gestures.
   await driver.performActions(actions);
   await driver.releaseActions();
-  await driver.action('pointer', { parameters: { pointerType: 'touch' } })
-    .move({ x: 1, y: 2 })
-    .down()
-    .move({ x: 3, y: 4, duration: 300 })
-    .up()
-    .perform();
 
   // Browser commands.
   const size: { width: number; height: number } = await driver.getWindowSize();

@@ -3,6 +3,44 @@ import { WebElement, PlatformElement, ElementType, isWeb, isPlatform } from '../
 import { PlatformNotSupportedError } from '../src/errors';
 
 // ---------------------------------------------------------------------------
+// W3C touch-action recorder for swipe / scrollIntoView
+// ---------------------------------------------------------------------------
+
+/** Records `performActions` / `releaseActions` calls on a mock driver. */
+function touchRecorder(overrides: { performActions?: (a: any[]) => Promise<void>; releaseActions?: () => Promise<void> } = {}) {
+  const rec = { calls: [] as string[], performed: [] as any[], released: 0, driver: {} as Record<string, unknown> };
+  rec.driver = {
+    performActions: async (actions: any[]) => {
+      rec.calls.push('performActions');
+      rec.performed.push(actions);
+      if (overrides.performActions) await overrides.performActions(actions);
+    },
+    releaseActions: async () => {
+      rec.calls.push('releaseActions');
+      rec.released++;
+      if (overrides.releaseActions) await overrides.releaseActions();
+    },
+  };
+  return rec;
+}
+
+/** The exact one-finger swipe payload the element sends. */
+function swipePayload(fromX: number, fromY: number, toX: number, toY: number): any[] {
+  return [{
+    type: 'pointer',
+    id: 'finger1',
+    parameters: { pointerType: 'touch' },
+    actions: [
+      { type: 'pointerMove', duration: 0, origin: 'viewport', x: fromX, y: fromY },
+      { type: 'pointerDown', button: 0 },
+      { type: 'pause', duration: 100 },
+      { type: 'pointerMove', duration: 600, origin: 'viewport', x: toX, y: toY },
+      { type: 'pointerUp', button: 0 },
+    ],
+  }];
+}
+
+// ---------------------------------------------------------------------------
 // Mock Playwright locator
 // ---------------------------------------------------------------------------
 
@@ -449,46 +487,42 @@ test.describe('PlatformElement interaction methods', () => {
 
   test('scrollIntoView short-circuits when element is already visible', async () => {
     const mockEl = createMockWdioElement({ elementId: 'el-42', isDisplayed: async () => true });
-    let actionInvoked = false;
+    const touch = touchRecorder();
     const driver = {
       $: async () => mockEl,
       $$: async () => [mockEl],
       pause: async () => {},
       getWindowSize: async () => ({ width: 1080, height: 2400 }),
-      action: () => { actionInvoked = true; return { move: () => ({ down: () => ({ move: () => ({ up: () => ({ perform: async () => {} }) }) }) }) }; },
+      ...touch.driver,
     };
     const el = new PlatformElement(driver, '~button');
     await el.scrollIntoView();
-    expect(actionInvoked).toBe(false);
+    expect(touch.calls).toEqual([]);
   });
 
   test('scrollIntoView swipes up repeatedly until the element becomes visible', async () => {
-    // Mock: first two isDisplayed() calls return false, third returns true
+    // Mock: the fast-path isDisplayed() returns false, the next true
     // → one swipe happens, then the check passes.
     let displayCalls = 0;
     const mockEl = createMockWdioElement({
       elementId: 'el-42',
       isDisplayed: async () => { displayCalls++; return displayCalls >= 2; },
     });
-    let swipes = 0;
+    const touch = touchRecorder();
+    const pauses: number[] = [];
     const driver = {
       $: async () => mockEl,
       $$: async () => [mockEl],
-      pause: async () => {},
+      pause: async (ms: number) => { pauses.push(ms); },
       getWindowSize: async () => ({ width: 1080, height: 2400 }),
-      action: () => ({
-        move: () => ({
-          down: () => ({
-            move: () => ({
-              up: () => ({ perform: async () => { swipes++; } }),
-            }),
-          }),
-        }),
-      }),
+      ...touch.driver,
     };
     const el = new PlatformElement(driver, '~button');
     await el.scrollIntoView();
-    expect(swipes).toBe(1);
+    expect(touch.calls).toEqual(['performActions', 'releaseActions']);
+    // 'down': one finger from (50%, 75%) to (50%, 25%) of 1080x2400.
+    expect(touch.performed).toEqual([swipePayload(540, 1800, 540, 600)]);
+    expect(pauses).toEqual([200]);
     expect(displayCalls).toBeGreaterThanOrEqual(2);
   });
 
@@ -496,27 +530,57 @@ test.describe('PlatformElement interaction methods', () => {
     // Passes direction: 'up' and verifies the swipe endpoint coordinates
     // reflect a downward-pull gesture (yNear→yFar) rather than the
     // default upward-pull (yFar→yNear).
-    let firstMoveStart: { x: number; y: number } | null = null;
     const mockEl = createMockWdioElement({
       elementId: 'el-42',
       isDisplayed: async () => { return false; /* force at least one swipe */ },
     });
+    const touch = touchRecorder();
     const driver = {
       $: async () => mockEl,
       $$: async () => [mockEl],
       pause: async () => {},
       getWindowSize: async () => ({ width: 1080, height: 2400 }),
-      action: () => ({
-        move: (p: { x: number; y: number }) => {
-          if (!firstMoveStart) firstMoveStart = p;
-          return { down: () => ({ move: () => ({ up: () => ({ perform: async () => {} }) }) }) };
-        },
-      }),
+      ...touch.driver,
     };
     const el = new PlatformElement(driver, '~button');
     await expect(el.scrollIntoView({ direction: 'up' })).rejects.toThrow(/not visible after/);
-    // 25% of 2400 = 600 — start of an 'up' sweep (swipes down from near top).
-    expect(firstMoveStart).toMatchObject({ y: 600 });
+    expect(touch.performed).toHaveLength(20);
+    expect(touch.released).toBe(20);
+    // 25% of 2400 = 600 → 75% = 1800: an 'up' sweep swipes down from near the top.
+    expect(touch.performed[0]).toEqual(swipePayload(540, 600, 540, 1800));
+  });
+
+  test('scrollIntoView left/right swipe horizontally across the window centre', async () => {
+    const mockEl = createMockWdioElement({ elementId: 'el-42', isDisplayed: async () => false });
+    for (const [direction, expected] of [
+      ['left', swipePayload(270, 1200, 810, 1200)],
+      ['right', swipePayload(810, 1200, 270, 1200)],
+    ] as const) {
+      const touch = touchRecorder();
+      const driver = {
+        $: async () => mockEl,
+        $$: async () => [mockEl],
+        pause: async () => {},
+        getWindowSize: async () => ({ width: 1080, height: 2400 }),
+        ...touch.driver,
+      };
+      await expect(new PlatformElement(driver, '~button').scrollIntoView({ direction })).rejects.toThrow(/not visible after/);
+      expect(touch.performed[0]).toEqual(expected);
+    }
+  });
+
+  test('scrollIntoView releases the actions when a swipe fails and surfaces the error', async () => {
+    const mockEl = createMockWdioElement({ elementId: 'el-42', isDisplayed: async () => false });
+    const touch = touchRecorder({ performActions: async () => { throw new Error('swipe exploded'); } });
+    const driver = {
+      $: async () => mockEl,
+      $$: async () => [mockEl],
+      pause: async () => {},
+      getWindowSize: async () => ({ width: 1080, height: 2400 }),
+      ...touch.driver,
+    };
+    await expect(new PlatformElement(driver, '~button').scrollIntoView()).rejects.toThrow('swipe exploded');
+    expect(touch.released).toBe(1);
   });
 
   test('swipe("right") dispatches a left-to-right pointer drag from the element center', async () => {
@@ -525,33 +589,25 @@ test.describe('PlatformElement interaction methods', () => {
       isDisplayed: async () => true,
       waitForExist: async () => {},
     });
-    let moveStart: { x: number; y: number } | null = null;
-    let moveEnd: { x: number; y: number } | null = null;
+    const touch = touchRecorder();
+    const pauses: number[] = [];
     const driver = {
       $: async () => mockEl,
       $$: async () => [mockEl],
-      pause: async () => {},
+      pause: async (ms: number) => { pauses.push(ms); },
       getWindowSize: async () => ({ width: 1000, height: 2000 }),
       getElementRect: async (id: string) => {
         if (id !== 'el-42') throw new Error(`unexpected element id ${id}`);
         return { x: 100, y: 200, width: 200, height: 100 };
       },
-      action: () => ({
-        move: (p: { x: number; y: number }) => {
-          moveStart = p;
-          return {
-            down: () => ({
-              move: (p2: { x: number; y: number }) => { moveEnd = p2; return { up: () => ({ perform: async () => {} }) }; },
-            }),
-          };
-        },
-      }),
+      ...touch.driver,
     };
     const el = new PlatformElement(driver, '~card');
     await el.swipe('right');
     // Center of the mocked rect: (200, 250). Right swipe moves +500 (50% of window width 1000).
-    expect(moveStart).toMatchObject({ x: 200, y: 250 });
-    expect(moveEnd).toMatchObject({ x: 700, y: 250 });
+    expect(touch.calls).toEqual(['performActions', 'releaseActions']);
+    expect(touch.performed).toEqual([swipePayload(200, 250, 700, 250)]);
+    expect(pauses).toEqual([200]);
   });
 
   test('swipe with explicit distance uses the supplied value', async () => {
@@ -560,36 +616,83 @@ test.describe('PlatformElement interaction methods', () => {
       isDisplayed: async () => true,
       waitForExist: async () => {},
     });
-    let moveEnd: { x: number; y: number } | null = null;
+    const touch = touchRecorder();
     const driver = {
       $: async () => mockEl,
       $$: async () => [mockEl],
       pause: async () => {},
       getWindowSize: async () => ({ width: 1000, height: 2000 }),
       getElementRect: async () => ({ x: 100, y: 200, width: 200, height: 100 }),
-      action: () => ({
-        move: () => ({ down: () => ({ move: (p: { x: number; y: number }) => { moveEnd = p; return { up: () => ({ perform: async () => {} }) }; } }) }),
-      }),
+      ...touch.driver,
     };
     const el = new PlatformElement(driver, '~card');
     await el.swipe('up', { distance: 300 });
-    // Center y = 250; up swipe with distance=300 → 250 - 300 = -50.
-    expect(moveEnd).toMatchObject({ x: 200, y: -50 });
+    // Center y = 250; up swipe with distance=300 → 250 - 300 = -50 (not clamped).
+    expect(touch.performed).toEqual([swipePayload(200, 250, 200, -50)]);
+  });
+
+  test('swipe rounds fractional coordinates to integers', async () => {
+    const mockEl = createMockWdioElement({ elementId: 'el-42', isDisplayed: async () => true, waitForExist: async () => {} });
+    const touch = touchRecorder();
+    const driver = {
+      $: async () => mockEl,
+      $$: async () => [mockEl],
+      pause: async () => {},
+      getWindowSize: async () => ({ width: 1000, height: 2000 }),
+      getElementRect: async () => ({ x: 100.4, y: 200.2, width: 200.5, height: 100.3 }),
+      ...touch.driver,
+    };
+    await new PlatformElement(driver, '~card').swipe('down', { distance: 10.6 });
+    // Centre (200.65, 250.35) → (201, 250); end y 250 + 10.6 = 260.6 → 261.
+    expect(touch.performed).toEqual([swipePayload(201, 250, 201, 261)]);
+  });
+
+  test('swipe without a rect starts at the window centre', async () => {
+    const mockEl = createMockWdioElement({ elementId: 'el-42', isDisplayed: async () => true, waitForExist: async () => {} });
+    const touch = touchRecorder();
+    const driver = {
+      $: async () => mockEl,
+      $$: async () => [mockEl],
+      pause: async () => {},
+      getWindowSize: async () => ({ width: 1000, height: 2000 }),
+      getElementRect: async () => null,
+      ...touch.driver,
+    };
+    await new PlatformElement(driver, '~card').swipe('left');
+    expect(touch.performed).toEqual([swipePayload(500, 1000, 0, 1000)]);
+  });
+
+  test('swipe releases the actions when performActions fails, and a release error does not mask it', async () => {
+    const mockEl = createMockWdioElement({ elementId: 'el-42', isDisplayed: async () => true, waitForExist: async () => {} });
+    const touch = touchRecorder({
+      performActions: async () => { throw new Error('perform failed'); },
+      releaseActions: async () => { throw new Error('release failed'); },
+    });
+    const driver = {
+      $: async () => mockEl,
+      $$: async () => [mockEl],
+      pause: async () => {},
+      getWindowSize: async () => ({ width: 1000, height: 2000 }),
+      getElementRect: async () => ({ x: 100, y: 200, width: 200, height: 100 }),
+      ...touch.driver,
+    };
+    await expect(new PlatformElement(driver, '~card').swipe('up')).rejects.toThrow('perform failed');
+    expect(touch.released).toBe(1);
   });
 
   test('scrollIntoView throws after max swipes when element never appears', async () => {
     const mockEl = createMockWdioElement({ elementId: 'el-42', isDisplayed: async () => false });
+    const touch = touchRecorder();
     const driver = {
       $: async () => mockEl,
       $$: async () => [mockEl],
       pause: async () => {},
       getWindowSize: async () => ({ width: 1080, height: 2400 }),
-      action: () => ({
-        move: () => ({ down: () => ({ move: () => ({ up: () => ({ perform: async () => {} }) }) }) }),
-      }),
+      ...touch.driver,
     };
     const el = new PlatformElement(driver, '~button');
     await expect(el.scrollIntoView()).rejects.toThrow(/not visible after/);
+    expect(touch.performed).toHaveLength(20);
   });
 
   test('pressSequentially calls addValue for each char with delay', async () => {

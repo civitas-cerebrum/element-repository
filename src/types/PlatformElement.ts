@@ -389,12 +389,7 @@ export class PlatformElement implements Element {
     const maxSwipesPerDirection = 20;
 
     const swipeXY = async (fromX: number, fromY: number, toX: number, toY: number): Promise<void> => {
-      await this.driver.action('pointer', { parameters: { pointerType: 'touch' } })
-        .move({ x: fromX, y: fromY })
-        .down()
-        .move({ x: toX, y: toY, duration: 300 })
-        .up()
-        .perform();
+      await this.touchSwipe(fromX, fromY, toX, toY);
       await this.driver.pause(200);
     };
 
@@ -445,15 +440,32 @@ export class PlatformElement implements Element {
     const sign = (direction === 'left' || direction === 'up') ? -1 : 1;
     const toX = horizontal ? cx + distance * sign : cx;
     const toY = horizontal ? cy : cy + distance * sign;
-    await this.driver.action('pointer', { parameters: { pointerType: 'touch' } })
-      .move({ x: cx, y: cy })
-      .down()
-      .move({ x: toX, y: toY, duration: 300 })
-      .up()
-      .perform();
+    await this.touchSwipe(cx, cy, toX, toY);
     await this.driver.pause(200);
     return this;
   }
+
+  /**
+   * One-finger swipe sent as explicit W3C actions through
+   * {@link performTouch} (so `releaseActions` always runs): an instant
+   * move to the start point, finger down, a short hold so the press
+   * registers as a drag start rather than a flick, a slow move to the end
+   * point, finger up. Coordinates are rounded to integers.
+   */
+  private async touchSwipe(fromX: number, fromY: number, toX: number, toY: number): Promise<void> {
+    await this.performTouch([[
+      { type: 'pointerMove', duration: 0, origin: 'viewport', x: Math.round(fromX), y: Math.round(fromY) },
+      { type: 'pointerDown', button: 0 },
+      { type: 'pause', duration: PlatformElement.SWIPE_HOLD_MS },
+      { type: 'pointerMove', duration: PlatformElement.SWIPE_MOVE_MS, origin: 'viewport', x: Math.round(toX), y: Math.round(toY) },
+      { type: 'pointerUp', button: 0 },
+    ]]);
+  }
+
+  /** Finger hold after pointerDown before a swipe moves, in ms. */
+  private static readonly SWIPE_HOLD_MS = 100;
+  /** Duration of a swipe's travel from start to end point, in ms. */
+  private static readonly SWIPE_MOVE_MS = 600;
 
   // ── Touch gestures (W3C actions) ─────────────────────────────
 

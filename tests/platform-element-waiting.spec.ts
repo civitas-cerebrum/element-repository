@@ -26,15 +26,12 @@ function row(name: string, overrides: Record<string, any> = {}): any {
   };
 }
 
-/** Builder for `driver.action('pointer', ...)` that counts performed swipes. */
-function actionBuilder(onPerform: () => void): any {
-  const b: any = {
-    move: () => b,
-    down: () => b,
-    up: () => b,
-    perform: async () => { onPerform(); },
+/** W3C `performActions` / `releaseActions` that count performed swipes. */
+function touchActions(onPerform: () => void): any {
+  return {
+    performActions: async () => { onPerform(); },
+    releaseActions: async () => {},
   };
-  return b;
 }
 
 /**
@@ -52,7 +49,7 @@ function lazyListDriver() {
     $$: async () => { state.$$calls++; return rowsNow(); },
     pause: async () => {},
     getWindowSize: async () => ({ width: 400, height: 800 }),
-    action: () => actionBuilder(() => { state.swipes++; }),
+    ...touchActions(() => { state.swipes++; }),
   };
   return { driver, state };
 }
@@ -105,7 +102,7 @@ test.describe('scrollIntoView on nth(i) of a lazy list', () => {
       $: async () => { queries++; const shown = swipes >= 2; return row('x', { isDisplayed: async () => shown }); },
       pause: async () => {},
       getWindowSize: async () => ({ width: 400, height: 800 }),
-      action: () => actionBuilder(() => { swipes++; }),
+      ...touchActions(() => { swipes++; }),
     };
     await new PlatformElement(driver, '~x').scrollIntoView();
     expect(swipes).toBe(2);
