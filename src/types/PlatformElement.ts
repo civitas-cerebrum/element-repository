@@ -769,7 +769,8 @@ export class PlatformElement implements Element {
   }
 
   async exists(): Promise<boolean> {
-    try { return await (await this.findOne()).isExisting(); } catch { return false; }
+    try { return await (await this.findOne()).isExisting(); }
+    catch (err) { if (isFatalDriverError(err)) throw err; return false; }
   }
 
   async dragTo(
@@ -897,8 +898,16 @@ export class PlatformElement implements Element {
 
   /** {@link waitFor} for a polled element (see {@link polled}): polls `$$`. */
   private async waitForPolled(state: string, timeout: number): Promise<void> {
-    const present = async () => { try { await this.resolveNow(); return true; } catch { return false; } };
-    const shown = async () => { try { return !!(await (await this.resolveNow()).isDisplayed()); } catch { return false; } };
+    // A missing match counts as absent / not shown; a fatal driver error
+    // (dead session, invalid selector) must not pass as "hidden" or "detached".
+    const present = async () => {
+      try { await this.resolveNow(); return true; }
+      catch (err) { if (isFatalDriverError(err)) throw err; return false; }
+    };
+    const shown = async () => {
+      try { return !!(await (await this.resolveNow()).isDisplayed()); }
+      catch (err) { if (isFatalDriverError(err)) throw err; return false; }
+    };
     const timedOut = (what: string) => () =>
       new Error(`${this.describe()} did not become ${what} within ${timeout} ms`);
     switch (state) {

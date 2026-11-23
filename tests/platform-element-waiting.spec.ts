@@ -333,6 +333,41 @@ test.describe('polled element errors', () => {
     await expect(child.isVisible()).rejects.toThrow(/invalid session id/);
   });
 
+  test('waitFor hidden and detached rethrow a fatal driver error on a child', async () => {
+    const parent = row('p', { $$: async () => { throw fatal(); } });
+    const driver: any = { $: async () => parent, $$: async () => [parent], pause: async () => {} };
+    const child = new PlatformElement(driver, '~card').locateChild('~title');
+    await expect(child.waitFor({ state: 'hidden', timeout: 200 })).rejects.toThrow(/invalid session id/);
+    await expect(child.waitFor({ state: 'detached', timeout: 200 })).rejects.toThrow(/invalid session id/);
+  });
+
+  test('waitFor hidden and detached rethrow a fatal driver error on an indexed element', async () => {
+    const driver: any = { $$: async () => { throw fatal(); }, pause: async () => {} };
+    const el = new PlatformElement(driver, '~row').nth(1);
+    await expect(el.waitFor({ state: 'hidden', timeout: 200 })).rejects.toThrow(/invalid session id/);
+    await expect(el.waitFor({ state: 'detached', timeout: 200 })).rejects.toThrow(/invalid session id/);
+  });
+
+  test('exists() rethrows a fatal driver error on a child, an indexed element and a plain element', async () => {
+    const parent = row('p', { $$: async () => { throw fatal(); } });
+    const childDriver: any = { $: async () => parent, $$: async () => [parent], pause: async () => {} };
+    await expect(new PlatformElement(childDriver, '~card').locateChild('~title').exists())
+      .rejects.toThrow(/invalid session id/);
+    const failing: any = {
+      $: async () => { throw fatal(); },
+      $$: async () => { throw fatal(); },
+      pause: async () => {},
+    };
+    await expect(new PlatformElement(failing, '~row').nth(1).exists()).rejects.toThrow(/invalid session id/);
+    await expect(new PlatformElement(failing, '~row').exists()).rejects.toThrow(/invalid session id/);
+  });
+
+  test('exists() is false for a missing match when the error is not fatal', async () => {
+    const driver: any = { $: async () => { throw new Error('no such element'); }, $$: async () => [], pause: async () => {} };
+    expect(await new PlatformElement(driver, '~row').exists()).toBe(false);
+    expect(await new PlatformElement(driver, '~row').nth(2).exists()).toBe(false);
+  });
+
   test('a not-found action, read, wait or scroll throws a plain Error, never the internal class', async () => {
     const driver: any = {
       $$: async () => [row('only')],
