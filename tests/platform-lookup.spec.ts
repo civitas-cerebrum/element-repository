@@ -411,14 +411,17 @@ test.describe('ElementRepository.validate — platform pages', () => {
     expect(() => ElementRepository.validate(data)).not.toThrow();
   });
 
-  test('rejects a frameIndex the resolver cannot apply', () => {
-    const data = { pages: [page('A', 'web', { frameIndex: '2' }), page('B', 'web', { frameIndex: -1 }), page('C', 'web', { frameIndex: 1.5 })] };
-    const tail = ' (expected "first", "last" or a non-negative integer)';
+  test('rejects a frameIndex that is neither "first", "last" nor an integer; accepts negative integers', () => {
+    const data = { pages: [page('A', 'web', { frameIndex: '2' }), page('B', 'web', { frameIndex: 'middle' }), page('C', 'web', { frameIndex: 1.5 })] };
+    const tail = ' (expected "first", "last" or an integer)';
     expect(() => ElementRepository.validate(data)).toThrow(
       'ElementRepository: invalid repository — '
-      + `page 'A' has "frameIndex": "2"${tail}; page 'B' has "frameIndex": -1${tail}; page 'C' has "frameIndex": 1.5${tail}.`,
+      + `page 'A' has "frameIndex": "2"${tail}; page 'B' has "frameIndex": "middle"${tail}; page 'C' has "frameIndex": 1.5${tail}.`,
     );
-    const ok = { pages: [page('A', 'web', { frameIndex: 'first' }), page('B', 'web', { frameIndex: 'last' }), page('C', 'web', { frameIndex: 0 })] };
+    const ok = { pages: [
+      page('A', 'web', { frameIndex: 'first' }), page('B', 'web', { frameIndex: 'last' }),
+      page('C', 'web', { frameIndex: 0 }), page('D', 'web', { frameIndex: 2 }), page('E', 'web', { frameIndex: -1 }),
+    ] };
     expect(() => ElementRepository.validate(ok)).not.toThrow();
   });
 });

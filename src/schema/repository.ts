@@ -97,8 +97,8 @@ export interface PageRepository {
  * from a JSON file (where TypeScript widens string literals to `string`) can
  * be passed in without a cast. Those values are checked at runtime instead,
  * by `ElementRepository.validate` (which the constructor runs): `platform`
- * must be a {@link Platform}, and `frameIndex` `'first'`, `'last'` or a
- * non-negative integer.
+ * must be a {@link Platform}, and `frameIndex` `'first'`, `'last'` or an
+ * integer (a negative index counts from the end, as in Playwright's `nth`).
  */
 export interface PageRepositoryInput {
   pages: Array<Omit<PageObject, 'platform' | 'frameIndex'> & { platform?: string; frameIndex?: string | number }>;

@@ -130,8 +130,9 @@ export class ElementRepository {
    *   case-sensitive; legacy values such as `"mobile"` are rejected);
    * - a page `name` appears at most once per platform (a missing `platform`
    *   counts as `'web'`);
-   * - a page's `frameIndex`, when present, is `"first"`, `"last"` or a
-   *   non-negative integer;
+   * - a page's `frameIndex`, when present, is `"first"`, `"last"` or an
+   *   integer (passed to Playwright's `frameLocator(...).nth()`, where a
+   *   negative index counts from the end: `-1` is the last frame);
    * - entry-level `provisional` and `list`, when present, are JSON booleans:
    *   a string such as `"true"` is rejected rather than silently read as
    *   truthy or ignored.
@@ -162,9 +163,9 @@ export class ElementRepository {
       }
       const frameIndex: unknown = page.frameIndex;
       if (frameIndex !== undefined && frameIndex !== 'first' && frameIndex !== 'last'
-        && !(typeof frameIndex === 'number' && Number.isInteger(frameIndex) && frameIndex >= 0)) {
+        && !(typeof frameIndex === 'number' && Number.isInteger(frameIndex))) {
         problems.push(
-          `page '${page.name}' has "frameIndex": ${JSON.stringify(frameIndex)} (expected "first", "last" or a non-negative integer)`,
+          `page '${page.name}' has "frameIndex": ${JSON.stringify(frameIndex)} (expected "first", "last" or an integer)`,
         );
       }
       for (const element of page.elements ?? []) {
