@@ -58,8 +58,8 @@ test.describe('getSelector — Appium platform formatting', () => {
       expect(repo.getSelector('byText', 'TestPageAndroid')).toBe('android=new UiSelector().text("Submit")');
     });
 
-    test('text → quotes and backslashes escaped in the UiSelector literal', () => {
-      expect(repo.getSelector('byQuotedText', 'TestPageAndroid')).toBe('android=new UiSelector().text("Say \\"hi\\" \\\\ now")');
+    test('text → only double quotes escaped in the UiSelector literal (backslash sent as-is)', () => {
+      expect(repo.getSelector('byQuotedText', 'TestPageAndroid')).toBe('android=new UiSelector().text("Say \\"hi\\" \\ now")');
     });
 
     test('class name → raw value', () => {

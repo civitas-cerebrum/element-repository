@@ -213,6 +213,17 @@ test.describe('TEXT on platform pages — driver errors', () => {
     ['invalid session id (name)', namedError('invalid session id', 'gone')],
     ['session not created (message)', new Error('session not created: device is locked')],
     ['dead session (message)', new Error('A session is either terminated or not started')],
+    ['invalid argument (name)', namedError('invalid argument', 'bad value')],
+    ['unknown command (name)', namedError('unknown command', 'not implemented')],
+    ['unsupported operation (name)', namedError('unsupported operation', 'nope')],
+    ['no such window (name)', namedError('no such window', 'window closed')],
+    ['InvalidSelectorStrategy (message)', new Error('InvalidSelectorStrategy: foo is not supported')],
+    ['InvalidSelectorMatch (message)', new Error('InvalidSelectorMatch: selector is malformed')],
+    ['selector needs to be typeof (message)', new Error('selector needs to be typeof `string` or `function`')],
+    ['instrumentation process is not running (message)', new Error('The instrumentation process is not running (probably crashed)')],
+    ['ECONNRESET (message)', new Error('socket hang up: ECONNRESET')],
+    ['ENOTFOUND (message)', new Error('getaddrinfo ENOTFOUND appium-server')],
+    ['EPIPE (message)', new Error('write EPIPE')],
   ];
 
   for (const [label, err] of fatal) {
@@ -396,10 +407,13 @@ test.describe('TEXT on a platform page walks the fallback chain', () => {
 // `text` formatter escaping
 // ===========================================================================
 
-test.describe('text formatter escapes quotes and backslashes', () => {
-  test('android UiSelector text', () => {
+test.describe('text formatter escaping', () => {
+  test('android UiSelector text escapes double quotes only', () => {
     expect(ANDROID_FORMATTERS.text('Submit')).toBe('android=new UiSelector().text("Submit")');
-    expect(ANDROID_FORMATTERS.text('say "hi" \\ bye')).toBe('android=new UiSelector().text("say \\"hi\\" \\\\ bye")');
+    // UiAutomator2's UiSelector parser decodes `\"` but never `\\`, so a
+    // backslash is sent as-is (a doubled one would be matched literally).
+    expect(ANDROID_FORMATTERS.text('say "hi" \\ bye')).toBe('android=new UiSelector().text("say \\"hi\\" \\ bye")');
+    expect(ANDROID_FORMATTERS.text('C:\\dir')).toBe('android=new UiSelector().text("C:\\dir")');
   });
 
   test('ios label predicate', () => {

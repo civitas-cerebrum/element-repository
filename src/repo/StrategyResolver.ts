@@ -33,6 +33,7 @@ const FATAL_DRIVER_ERROR_NAMES = new Set([
   'invalid selector', 'InvalidSelectorError',
   'invalid session id', 'InvalidSessionIdError',
   'session not created', 'SessionNotCreatedError',
+  'invalid argument', 'unknown command', 'unsupported operation', 'no such window',
 ]);
 
 /** Well-known messages of the same fatal conditions, for errors without a useful `name`. */
@@ -42,13 +43,21 @@ const FATAL_DRIVER_ERROR_MESSAGES = [
   /session not created/i,
   /session is either terminated or not started/i,
   /ECONNREFUSED/,
+  /ECONNRESET|ENOTFOUND|EPIPE/,
+  /InvalidSelector(Strategy|Match)/,
+  /selector needs to be typeof/,
+  /instrumentation process is not running/i,
 ];
 
 /**
  * The rule for driver errors during a polling lookup: an error is FATAL when
- * it says the query itself is wrong (invalid selector) or the session is
- * gone (invalid session id, session not created, terminated / not started
- * session, connection refused by the server). Fatal errors are rethrown at
+ * it says the query itself is wrong (invalid selector, invalid argument, a
+ * selector strategy or shape WebdriverIO rejects), the driver cannot do it
+ * (unknown command, unsupported operation), or the session, window or
+ * connection is gone (invalid session id, session not created, terminated /
+ * not started session, no such window, UiAutomator2 instrumentation not
+ * running, connection refused / reset / host not found / broken pipe).
+ * Fatal errors are rethrown at
  * once. Every other error — `no such element`, `stale element reference`
  * and anything unrecognised — is treated as a transient missing/stale
  * element and polled through until the deadline.

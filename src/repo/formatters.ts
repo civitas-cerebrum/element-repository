@@ -3,11 +3,24 @@ export type SelectorFormatter = (value: string) => string;
 
 /**
  * Escapes a value for use inside a double-quoted string literal of an
- * NSPredicate (iOS predicate string) or a UiSelector argument (Android, Java
- * string syntax): backslashes first, then quotes.
+ * NSPredicate (iOS predicate string): backslashes first, then quotes.
+ * NSPredicate decodes both `\\` and `\"`. Not for UiSelector arguments
+ * (Android `text` escapes double quotes only; see {@link ANDROID_FORMATTERS}).
  */
 export function escapeDoubleQuoted(value: string): string {
   return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+/**
+ * Escapes a value for use inside a double-quoted UiSelector argument
+ * (Android UiAutomator2): double quotes only. UiAutomator2's UiSelector
+ * parser is not a Java string parser: it decodes `\"` to `"` but never `\\`
+ * to `\`, so a backslash is passed through unchanged (`C:\dir` stays
+ * `C:\dir`). Consequently a value that ends in `\` or contains `\"` cannot
+ * be expressed in `UiSelector().text(...)`; use an `xpath` selector for it.
+ */
+function escapeUiSelectorString(value: string): string {
+  return value.replace(/"/g, '\\"');
 }
 
 /** Playwright selector formatters keyed by strategy name (lowercase). */
@@ -79,11 +92,16 @@ export const APPIUM_FORMATTERS: Record<string, SelectorFormatter> = {
  * (`com.example:id/submit`) is matched as-is, and a short id (`submit`) is
  * prefixed with the current app package (`<package>:id/submit`). An element
  * that belongs to another package needs its full resource id.
+ *
+ * `text` is an exact `UiSelector().text("...")` match. Only double quotes in
+ * the value are escaped: UiAutomator2's UiSelector parser decodes `\"` but
+ * not `\\`, so backslashes are sent unchanged. A value that ends in `\` or
+ * contains `\"` cannot be expressed this way; use an `xpath` selector.
  */
 export const ANDROID_FORMATTERS: Record<string, SelectorFormatter> = {
   ...APPIUM_FORMATTERS,
   id:   (v) => `id=${v}`,
-  text: (v) => `android=new UiSelector().text("${escapeDoubleQuoted(v)}")`,
+  text: (v) => `android=new UiSelector().text("${escapeUiSelectorString(v)}")`,
 };
 
 /**
