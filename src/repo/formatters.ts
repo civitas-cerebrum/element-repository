@@ -3,7 +3,8 @@ export type SelectorFormatter = (value: string) => string;
 
 /**
  * Escapes a value for use inside a double-quoted string literal of an
- * NSPredicate (iOS predicate string): backslashes first, then quotes.
+ * NSPredicate (iOS predicate string) or a UiSelector argument (Android, Java
+ * string syntax): backslashes first, then quotes.
  */
 export function escapeDoubleQuoted(value: string): string {
   return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
@@ -82,7 +83,7 @@ export const APPIUM_FORMATTERS: Record<string, SelectorFormatter> = {
 export const ANDROID_FORMATTERS: Record<string, SelectorFormatter> = {
   ...APPIUM_FORMATTERS,
   id:   (v) => `id=${v}`,
-  text: (v) => `android=new UiSelector().text("${v}")`,
+  text: (v) => `android=new UiSelector().text("${escapeDoubleQuoted(v)}")`,
 };
 
 /**
@@ -96,5 +97,5 @@ export const ANDROID_FORMATTERS: Record<string, SelectorFormatter> = {
 export const IOS_FORMATTERS: Record<string, SelectorFormatter> = {
   ...APPIUM_FORMATTERS,
   id:   (v) => `-ios predicate string:name == "${escapeDoubleQuoted(v)}"`,
-  text: (v) => `-ios predicate string:label == "${v}"`,
+  text: (v) => `-ios predicate string:label == "${escapeDoubleQuoted(v)}"`,
 };

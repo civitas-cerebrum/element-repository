@@ -22,6 +22,53 @@ const ATTACH_PROBE_TIMEOUT_MS = 2_000;
 /** Poll interval for the platform TEXT lookup while waiting for a match. */
 const TEXT_POLL_INTERVAL_MS = 250;
 
+/**
+ * WebDriver / WebdriverIO error names that no amount of polling can fix.
+ * WebdriverIO sets `error.name` to the W3C WebDriver error code (`invalid
+ * selector`, `invalid session id`, ...); the class-style names cover drivers
+ * and wrappers that name errors after their class.
+ */
+const FATAL_DRIVER_ERROR_NAMES = new Set([
+  'invalid selector', 'InvalidSelectorError',
+  'invalid session id', 'InvalidSessionIdError',
+  'session not created', 'SessionNotCreatedError',
+]);
+
+/** Well-known messages of the same fatal conditions, for errors without a useful `name`. */
+const FATAL_DRIVER_ERROR_MESSAGES = [
+  /invalid selector/i,
+  /invalid session id/i,
+  /session not created/i,
+  /session is either terminated or not started/i,
+  /ECONNREFUSED/,
+];
+
+/**
+ * The rule for driver errors during a polling lookup: an error is FATAL when
+ * it says the query itself is wrong (invalid selector) or the session is
+ * gone (invalid session id, session not created, terminated / not started
+ * session, connection refused by the server). Fatal errors are rethrown at
+ * once. Every other error — `no such element`, `stale element reference`
+ * and anything unrecognised — is treated as a transient missing/stale
+ * element and polled through until the deadline.
+ */
+function isFatalDriverError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const { name, message } = err as { name?: unknown; message?: unknown };
+  if (typeof name === 'string' && FATAL_DRIVER_ERROR_NAMES.has(name)) return true;
+  return typeof message === 'string' && FATAL_DRIVER_ERROR_MESSAGES.some(re => re.test(message));
+}
+
+/** `<name>: <message>` for a named driver error, the bare message for a plain `Error`. */
+function describeError(err: unknown): string {
+  if (err && typeof err === 'object') {
+    const { name, message } = err as { name?: unknown; message?: unknown };
+    const msg = typeof message === 'string' ? message : String(err);
+    return typeof name === 'string' && name && name !== 'Error' ? `${name}: ${msg}` : msg;
+  }
+  return String(err);
+}
+
 /** Strategies `fromLocator` / `fromSelector` handle — used in the unhandled-strategy error. */
 const HANDLED_STRATEGIES = [
   SelectionStrategy.INDEX,
@@ -106,7 +153,7 @@ export class StrategyResolver {
           return element;
         }
         case SelectionStrategy.TEXT: {
-          if (!options.value) {
+          if (!options.value?.trim()) {
             throw new Error('options.value is required when using SelectionStrategy.TEXT');
           }
           const filtered = locator.filter({ hasText: options.value });
@@ -192,7 +239,7 @@ export class StrategyResolver {
           return all[pickRandomIndex(all.length)];
         }
         case SelectionStrategy.TEXT: {
-          if (!options.value) {
+          if (!options.value?.trim()) {
             throw new Error('options.value is required when using SelectionStrategy.TEXT');
           }
           if (!isWeb) {
@@ -273,15 +320,29 @@ export class StrategyResolver {
    * {@link PlatformElement.textContent}), and the chosen raw element is
    * wrapped in a {@link PlatformElement}.
    *
-   * Matching mirrors Playwright's `filter({ hasText })` on web — a
-   * case-insensitive, whitespace-normalised "contains" — except that an exact
-   * (trimmed) match is preferred over an earlier partial one.
+   * The text compared is the element's OWN text as the driver reports it
+   * through `getText()` — not the text of its descendants, as Playwright's
+   * `filter({ hasText })` uses on web. The selector must therefore target the
+   * text-bearing element itself (the label or cell title), not a container
+   * around it. An exact (trimmed) match is preferred; otherwise the first
+   * case-insensitive, whitespace-normalised "contains" match is taken.
+   *
+   * The returned element is bound to the chosen match for single-element
+   * actions, but `all()` / `count()` on it re-query `selector` and return
+   * every match, not only the text-matching one.
    *
    * Because the result is picked eagerly it is load-bearing, like ATTRIBUTE
    * and RANDOM: the lookup polls until a match appears or the caller's full
    * `timeout` elapses, rather than the swallowed 2 s attach probe of the web
-   * path. With no match it throws the same not-found error as
-   * `ElementRepository.getByText`.
+   * path. The deadline is also checked between `getText()` calls, so a long
+   * list cannot overrun the timeout by a whole sweep. With no match it throws
+   * the same not-found error as `ElementRepository.getByText`.
+   *
+   * Driver errors: see {@link isFatalDriverError}. A fatal error (invalid
+   * selector, invalid or dead session) is rethrown at once. Any other error
+   * is treated as a transient missing/stale element: the lookup keeps
+   * polling, and the last such error is appended to the final not-found
+   * message as `(last driver error: <name>: <message>)`.
    */
   private static async resolvePlatformByText(
     driver: any,
@@ -295,14 +356,21 @@ export class StrategyResolver {
     const wanted = value.trim();
     const wantedNorm = normalise(value);
     const deadline = Date.now() + timeout;
+    let lastError: unknown;
+
+    const remember = (err: unknown) => {
+      if (isFatalDriverError(err)) throw err;
+      lastError = err;
+    };
 
     for (;;) {
       let raws: any[] = [];
-      try { raws = Array.from((await driver.$$(selector)) ?? []); } catch { raws = []; }
+      try { raws = Array.from((await driver.$$(selector)) ?? []); } catch (err) { remember(err); raws = []; }
 
       const texts: Array<string | null> = [];
       for (const raw of raws) {
-        try { texts.push(((await raw.getText()) ?? '').trim()); } catch { texts.push(null); }
+        if (texts.length > 0 && Date.now() >= deadline) break;
+        try { texts.push(((await raw.getText()) ?? '').trim()); } catch (err) { remember(err); texts.push(null); }
       }
 
       let index = texts.findIndex(t => t !== null && t === wanted);
@@ -314,7 +382,8 @@ export class StrategyResolver {
       await new Promise(resolve => setTimeout(resolve, Math.min(TEXT_POLL_INTERVAL_MS, remaining)));
     }
 
-    throw new Error(`Element '${elementName}' on '${pageName}' with text "${value}" not found.`);
+    const suffix = lastError === undefined ? '' : ` (last driver error: ${describeError(lastError)})`;
+    throw new Error(`Element '${elementName}' on '${pageName}' with text "${value}" not found.${suffix}`);
   }
 
   /**

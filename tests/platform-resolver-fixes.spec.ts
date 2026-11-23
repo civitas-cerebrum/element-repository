@@ -186,3 +186,152 @@ test.describe('id formatter', () => {
     expect(repo.getSelector('e', 'M')).toBe('~v');
   });
 });
+
+// ===========================================================================
+// Platform TEXT: driver errors, deadline, empty value
+// ===========================================================================
+
+function namedError(name: string, message: string): Error {
+  const e = new Error(message);
+  e.name = name;
+  return e;
+}
+
+function listDriver($$: () => Promise<any[]>): any {
+  const driver: any = {
+    $: async () => mockNativeElement('', 'missing'),
+    $$,
+  };
+  Object.defineProperty(driver, 'locator', { get() { throw new Error('locator touched'); } });
+  return driver;
+}
+
+test.describe('TEXT on platform pages — driver errors', () => {
+  const fatal: Array<[string, Error]> = [
+    ['invalid selector (name)', namedError('invalid selector', 'Unable to locate using the given strategy')],
+    ['InvalidSelectorError', namedError('InvalidSelectorError', 'bad xpath')],
+    ['invalid session id (name)', namedError('invalid session id', 'gone')],
+    ['session not created (message)', new Error('session not created: device is locked')],
+    ['dead session (message)', new Error('A session is either terminated or not started')],
+  ];
+
+  for (const [label, err] of fatal) {
+    test(`$$ throwing ${label} is rethrown immediately`, async () => {
+      const driver = listDriver(async () => { throw err; });
+      const started = Date.now();
+      await expect(StrategyResolver.fromSelector(
+        driver, '~row', androidPage, 'row', 'Settings', 5_000,
+        { strategy: SelectionStrategy.TEXT, value: 'Wi-Fi' },
+      )).rejects.toBe(err);
+      expect(Date.now() - started).toBeLessThan(1_000);
+    });
+  }
+
+  test('getText throwing an invalid-session error is rethrown immediately', async () => {
+    const err = namedError('InvalidSessionIdError', 'invalid session id');
+    const el = { ...mockNativeElement('x', 'a'), getText: async () => { throw err; } };
+    const driver = listDriver(async () => [el]);
+    const started = Date.now();
+    await expect(StrategyResolver.fromSelector(
+      driver, '~row', iosPage, 'row', 'Settings', 5_000,
+      { strategy: SelectionStrategy.TEXT, value: 'Wi-Fi' },
+    )).rejects.toBe(err);
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
+  test('missing/stale errors keep polling and the last one is appended to not-found', async () => {
+    let calls = 0;
+    const driver = listDriver(async () => { calls++; throw namedError('stale element reference', `stale #${calls}`); });
+    const err = await StrategyResolver.fromSelector(
+      driver, '~row', androidPage, 'row', 'Settings', 600,
+      { strategy: SelectionStrategy.TEXT, value: 'Wi-Fi' },
+    ).then(() => null, (e: Error) => e);
+    expect(err).not.toBeNull();
+    expect(calls).toBeGreaterThan(1);
+    expect(err!.message).toContain(`Element 'row' on 'Settings' with text "Wi-Fi" not found.`);
+    expect(err!.message).toContain(`(last driver error: stale element reference: stale #${calls})`);
+  });
+
+  test('a stale getText error is appended to not-found', async () => {
+    const { driver } = mockPlatformDriver([null]);
+    await expect(StrategyResolver.fromSelector(
+      driver, '~row', androidPage, 'row', 'Settings', 300,
+      { strategy: SelectionStrategy.TEXT, value: 'Wi-Fi' },
+    )).rejects.toThrow(/not found\. \(last driver error: .*stale element\)$/);
+  });
+
+  test('without driver errors the not-found message has no suffix', async () => {
+    const { driver } = mockPlatformDriver(['General']);
+    await expect(StrategyResolver.fromSelector(
+      driver, '~row', androidPage, 'row', 'Settings', 300,
+      { strategy: SelectionStrategy.TEXT, value: 'Wi-Fi' },
+    )).rejects.toThrow(/^Element 'row' on 'Settings' with text "Wi-Fi" not found\.$/);
+  });
+});
+
+test('TEXT deadline is checked inside the getText sweep of a long list', async () => {
+  const slow = Array.from({ length: 60 }, (_, i) => ({
+    ...mockNativeElement(`row ${i}`, `el-${i}`),
+    getText: async () => { await new Promise(r => setTimeout(r, 50)); return `row ${i}`; },
+  }));
+  const driver = listDriver(async () => slow);
+  const started = Date.now();
+  await expect(StrategyResolver.fromSelector(
+    driver, '~row', androidPage, 'row', 'Settings', 300,
+    { strategy: SelectionStrategy.TEXT, value: 'nope' },
+  )).rejects.toThrow('not found');
+  // A full sweep is 60 x 50 ms = 3 s; the deadline must cut it short.
+  expect(Date.now() - started).toBeLessThan(1_000);
+});
+
+test('TEXT still finds a match deep in a long list within the deadline', async () => {
+  const many = Array.from({ length: 60 }, (_, i) => mockNativeElement(`row ${i}`, `el-${i}`));
+  const driver = listDriver(async () => many);
+  const el = await StrategyResolver.fromSelector(
+    driver, '~row', androidPage, 'row', 'Settings', 300,
+    { strategy: SelectionStrategy.TEXT, value: 'row 42' },
+  );
+  expect((el as PlatformElement).resolvedElement.elementId).toBe('el-42');
+});
+
+for (const page of [androidPage, iosPage, { name: 'Settings', elements: [] } as any]) {
+  test(`TEXT with a whitespace-only value throws the required-value error (${page.platform ?? 'web'})`, async () => {
+    const { driver } = mockPlatformDriver(['General']);
+    await expect(StrategyResolver.fromSelector(
+      driver, '~row', page, 'row', 'Settings', 300,
+      { strategy: SelectionStrategy.TEXT, value: '   ' },
+    )).rejects.toThrow('options.value is required when using SelectionStrategy.TEXT');
+  });
+}
+
+test('TEXT with a whitespace-only value on the locator path throws the required-value error', async () => {
+  await expect(StrategyResolver.fromLocator(
+    {} as any, 'row', 'Settings', 300,
+    { strategy: SelectionStrategy.TEXT, value: ' \t ' },
+  )).rejects.toThrow('options.value is required when using SelectionStrategy.TEXT');
+});
+
+test('all() on a TEXT-resolved platform element re-queries the selector and returns every match', async () => {
+  const { driver } = mockPlatformDriver(['General', 'Wi-Fi', 'Bluetooth']);
+  const el = await StrategyResolver.fromSelector(
+    driver, '~row', androidPage, 'row', 'Settings', 300,
+    { strategy: SelectionStrategy.TEXT, value: 'Wi-Fi' },
+  );
+  expect(await el.all()).toHaveLength(3);
+});
+
+// ===========================================================================
+// `text` formatter escaping
+// ===========================================================================
+
+test.describe('text formatter escapes quotes and backslashes', () => {
+  test('android UiSelector text', () => {
+    expect(ANDROID_FORMATTERS.text('Submit')).toBe('android=new UiSelector().text("Submit")');
+    expect(ANDROID_FORMATTERS.text('say "hi" \\ bye')).toBe('android=new UiSelector().text("say \\"hi\\" \\\\ bye")');
+  });
+
+  test('ios label predicate', () => {
+    expect(IOS_FORMATTERS.text('Submit')).toBe('-ios predicate string:label == "Submit"');
+    expect(IOS_FORMATTERS.text('say "hi" \\ bye')).toBe('-ios predicate string:label == "say \\"hi\\" \\\\ bye"');
+  });
+});
