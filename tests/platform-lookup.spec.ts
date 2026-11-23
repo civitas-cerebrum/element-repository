@@ -119,7 +119,7 @@ test.describe('Platform vocabulary', () => {
   });
 
   test('familyOf rejects an unknown platform at runtime', () => {
-    expect(() => familyOf('mobile' as Platform)).toThrow(/Unknown platform 'mobile'/);
+    expect(() => familyOf('mobile' as Platform)).toThrow(new RegExp(`^${escapeRegExp("ElementRepository: unknown platform 'mobile'. Expected one of: web, android, ios, macos, windows.")}$`));
   });
 });
 
@@ -182,7 +182,7 @@ test.describe('ElementRepository — active platform lookup', () => {
   test('throws a clear error when the page exists only for other platforms', async () => {
     const { driver } = createRecordingDriver();
     const repo = new ElementRepository(driver, samePageData, { platform: 'web' });
-    const expected = new RegExp(`^${escapeRegExp('Page "SettingsPage" has no entry for platform "web". Available: android, ios.')}$`);
+    const expected = new RegExp(`^${escapeRegExp("ElementRepository: page 'SettingsPage' has no entry for platform 'web'. Available: android, ios.")}$`);
     expect(() => repo.getPagePlatform('SettingsPage')).toThrow(expected);
     expect(() => repo.getSelector('title', 'SettingsPage')).toThrow(expected);
     expect(() => repo.getSelectorRaw('title', 'SettingsPage')).toThrow(expected);
@@ -196,7 +196,7 @@ test.describe('ElementRepository — active platform lookup', () => {
     const { driver } = createRecordingDriver();
     const repo = new ElementRepository(driver, samePageData, { platform: 'ios' });
     expect(() => repo.getPagePlatform('NoSuchPage'))
-      .toThrow(new RegExp(`^${escapeRegExp('Page "NoSuchPage" has no entry for platform "ios". Available: none.')}$`));
+      .toThrow(new RegExp(`^${escapeRegExp("ElementRepository: page 'NoSuchPage' has no entry for platform 'ios'. Available: none.")}$`));
   });
 
   test('without an active platform, a missing page keeps the existing message', () => {
@@ -279,7 +279,7 @@ test.describe('ElementRepository — constructor forms', () => {
   test('an unknown platform option throws a clear error', () => {
     const { driver } = createRecordingDriver();
     expect(() => new ElementRepository(driver, samePageData, { platform: 'mobile' as Platform }))
-      .toThrow("ElementRepository: unknown platform 'mobile'. Expected one of: web, android, ios, macos, windows.");
+      .toThrow(new RegExp(`^${escapeRegExp("ElementRepository: unknown platform 'mobile'. Expected one of: web, android, ios, macos, windows.")}$`));
   });
 
   test('the active platform is read-only', () => {

@@ -39,7 +39,7 @@ export function isPlatformName(value: unknown): value is Platform {
  */
 export function familyOf(platform: Platform): DriverFamily {
   if (!isPlatformName(platform)) {
-    throw new Error(`Unknown platform '${String(platform)}'. Expected one of: ${PLATFORMS.join(', ')}.`);
+    throw new Error(`ElementRepository: unknown platform '${String(platform)}'. Expected one of: ${PLATFORMS.join(', ')}.`);
   }
   return platform === 'web' ? 'playwright' : 'appium';
 }

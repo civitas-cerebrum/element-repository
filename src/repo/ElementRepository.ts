@@ -47,7 +47,7 @@ export interface ElementRepositoryOptions {
  * **Active platform.** A repository built with `{ platform }` resolves every
  * page name against the page block for that platform only. If the name exists
  * only for other platforms, lookups throw
- * `Page "<name>" has no entry for platform "<active>". Available: <platforms>.`
+ * `ElementRepository: page '<name>' has no entry for platform '<active>'. Available: <platforms>.`
  * — there is no silent fallback to another platform's block. The active
  * platform is held per instance (no static or global state), so repositories
  * for different platforms can be used side by side over the same data.
@@ -681,7 +681,7 @@ export class ElementRepository {
    * @returns The matching PageObject.
    * @throws Error — without an active platform:
    *   `ElementRepository: Page '<name>' not found.`; with one:
-   *   `Page "<name>" has no entry for platform "<active>". Available: <list>.`
+   *   `ElementRepository: page '<name>' has no entry for platform '<active>'. Available: <list>.`
    *   where `<list>` is the comma-separated platforms that do declare the
    *   page, in file order, or `none`.
    */
@@ -698,7 +698,7 @@ export class ElementRepository {
       if (!available.includes(platform)) available.push(platform);
     }
     throw new Error(
-      `Page "${pageName}" has no entry for platform "${this._platform}". Available: ${available.length ? available.join(', ') : 'none'}.`,
+      `ElementRepository: page '${pageName}' has no entry for platform '${this._platform}'. Available: ${available.length ? available.join(', ') : 'none'}.`,
     );
   }
 
