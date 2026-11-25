@@ -17,16 +17,25 @@
  * - CAPABILITIES: path to a W3C capabilities JSON file (see
  *   tests/live/capabilities.android.example.json). It is sent exactly as
  *   written. It must have `platformName: Android` and
- *   `appium:appPackage: com.civitas.testapp`.
+ *   `appium:appPackage: com.civitas.testapp`, and must not have
+ *   `appium:app` (no installs) or `browserName` (no browser session).
  * - APPIUM_USER / APPIUM_KEY: optional server credentials.
  *
  * Without LIVE_ANDROID=1, APPIUM_URL and CAPABILITIES the device tests are
  * skipped (the offline checks of the pages file still run).
  *
- * The checked-state and container-text tests describe the intended
- * behaviour: `isChecked()` / `check()` / `uncheck()` follow the control's
- * `checked` state (not `selected`), and a container's `textContent()`
- * joins the text of its descendants when its own text is empty.
+ * One Appium session serves the whole file: the file's tests run in one
+ * worker, in order. The screen groups are independent: each test relaunches
+ * the app and opens its screen first, so a failing test neither skips nor
+ * disturbs the others.
+ *
+ * The checked-state tests check that `isChecked()` / `check()` / `uncheck()`
+ * follow the control's `checked` state (not `selected`), that `check()`
+ * confirms the state after its click (a disabled radio button stays
+ * unchecked, so `check()` on it throws), and that `uncheck()` refuses a
+ * checked radio button. The list-row tests check that a container's
+ * `textContent()`, the TEXT strategy and `getByText` use the text of its
+ * descendants when its own text is empty.
  */
 import { test, expect } from '@playwright/test';
 import * as fs from 'fs';
@@ -65,9 +74,24 @@ function serverFromUrl(url: string): {
   return server;
 }
 
-/** Reads the capabilities file; checks it targets the Android test app. Returns it unchanged. */
+/** Reads the capabilities file and checks it with {@link checkCapabilities}. Returns it unchanged. */
 function readCapabilities(file: string): Record<string, unknown> {
-  const caps = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), file), 'utf-8')) as Record<string, unknown>;
+  return checkCapabilities(JSON.parse(fs.readFileSync(path.resolve(process.cwd(), file), 'utf-8')) as Record<string, unknown>);
+}
+
+/**
+ * Checks the capabilities target the installed Android test app: platform
+ * Android, the test app's package, and no app to install or browser to open.
+ * Returns them unchanged.
+ */
+function checkCapabilities(caps: Record<string, unknown>): Record<string, unknown> {
+  for (const refused of ['appium:app', 'browserName']) {
+    if (refused in caps) {
+      throw new Error(
+        `CAPABILITIES file must not have "${refused}" (this spec drives the installed test app only: no install, no browser).`,
+      );
+    }
+  }
   const platformName = caps.platformName;
   if (typeof platformName !== 'string' || platformName.toLowerCase() !== 'android') {
     throw new Error(`CAPABILITIES file must have platformName "Android" for this spec, got ${JSON.stringify(platformName)}.`);
@@ -144,6 +168,20 @@ test.describe('android-testapp pages file (offline)', () => {
     const example = readCapabilities(path.join(__dirname, 'capabilities.android.example.json'));
     expect(example['appium:appPackage']).toBe(APP_PACKAGE);
     expect(() => readCapabilities(path.join(__dirname, 'capabilities.ios.example.json'))).toThrow(/platformName "Android"/);
+    expect(() => checkCapabilities({ ...example, 'appium:appPackage': 'com.example.other' })).toThrow(/appium:appPackage/);
+  });
+
+  test('the capabilities gate refuses an app to install and a browser session', () => {
+    const example = readCapabilities(path.join(__dirname, 'capabilities.android.example.json'));
+    expect(() => checkCapabilities({ ...example, 'appium:app': '/path/to/app.apk' })).toThrow(/must not have "appium:app"/);
+    expect(() => checkCapabilities({ ...example, browserName: 'Chrome' })).toThrow(/must not have "browserName"/);
+  });
+
+  test('the alert dialog entries use the platform ids of another package', () => {
+    const repo = new ElementRepository({}, PAGES, { platform: 'android' });
+    expect(repo.getSelector('dialogTitle', 'Alerts')).toBe('id=android:id/alertTitle');
+    expect(repo.getSelector('dialogMessage', 'Alerts')).toBe('id=android:id/message');
+    expect(repo.getSelector('dialogOk', 'Alerts')).toBe('id=android:id/button1');
   });
 
   test('the pages have no ios block: an ios repository finds no page', () => {
@@ -152,12 +190,15 @@ test.describe('android-testapp pages file (offline)', () => {
   });
 });
 
-test.describe.serial('live Android test app', () => {
+test.describe('live Android test app', () => {
   test.skip(!ENABLED, SKIP_REASON);
-  // Generous: the first gesture of a fresh session is slow, a relaunch and
-  // two navigation taps take several seconds, and scrollIntoView may run up
-  // to 20 swipes.
-  test.describe.configure({ timeout: 300_000 });
+  // Not serial: a failing test does not skip the rest. The tests still run
+  // in order in one worker, sharing the session opened in beforeAll (a
+  // worker restarted after a failure opens its own). Generous timeout: the
+  // first gesture of a fresh session is slow, each test's relaunch and two
+  // navigation taps take several seconds, and scrollIntoView may run up to
+  // 20 swipes.
+  test.describe.configure({ mode: 'default', timeout: 300_000 });
 
   let driver: any;
   let repo: ElementRepository;
@@ -216,8 +257,7 @@ test.describe.serial('live Android test app', () => {
   });
 
   test.describe('home screen', () => {
-    test.beforeAll(async () => {
-      test.setTimeout(120_000);
+    test.beforeEach(async () => {
       await relaunch();
     });
 
@@ -277,8 +317,7 @@ test.describe.serial('live Android test app', () => {
       'toggleOffByUiAutomator', 'toggleOffByXpath', 'toggleOffByText',
     ];
 
-    test.beforeAll(async () => {
-      test.setTimeout(180_000);
+    test.beforeEach(async () => {
       await openScreen('cardElements', 'checkboxes', { name: 'checkboxUnchecked', page: 'Checkboxes' });
     });
 
@@ -343,8 +382,7 @@ test.describe.serial('live Android test app', () => {
   });
 
   test.describe('radio buttons', () => {
-    test.beforeAll(async () => {
-      test.setTimeout(180_000);
+    test.beforeEach(async () => {
       await openScreen('cardElements', 'radio', { name: 'yes', page: 'Radio' });
     });
 
@@ -356,31 +394,53 @@ test.describe.serial('live Android test app', () => {
       }
     });
 
-    test('check() on one radio button unchecks the others', async () => {
+    test('check() on one radio button unchecks the other', async () => {
+      // "yes" and "impressive" are enabled; "no" is disabled (see below).
       const yes = await get('yes', 'Radio');
       const impressive = await get('impressive', 'Radio');
-      const no = await get('no', 'Radio');
+
+      await yes.check();
+      await expect.poll(() => yes.getAttribute('checked'), { timeout: 10_000 }).toBe('true');
+      expect(await yes.isChecked()).toBe(true);
+      expect(await impressive.isChecked()).toBe(false);
+      // Checking the checked one again keeps it checked.
+      await yes.check();
+      expect(await yes.isChecked()).toBe(true);
+      expect(await impressive.isChecked()).toBe(false);
 
       await impressive.check();
       await expect.poll(() => impressive.getAttribute('checked'), { timeout: 10_000 }).toBe('true');
       expect(await impressive.isChecked()).toBe(true);
       expect(await yes.isChecked()).toBe(false);
-      expect(await no.isChecked()).toBe(false);
-      // Checking the checked one again keeps it checked.
       await impressive.check();
       expect(await impressive.isChecked()).toBe(true);
-
-      await no.check();
-      await expect.poll(() => no.getAttribute('checked'), { timeout: 10_000 }).toBe('true');
-      expect(await no.isChecked()).toBe(true);
-      expect(await impressive.isChecked()).toBe(false);
       expect(await yes.isChecked()).toBe(false);
+    });
+
+    test('check() on the disabled radio button throws and leaves it unchecked', async () => {
+      const no = await get('no', 'Radio');
+      expect(await no.isEnabled()).toBe(false);
+      await expect(no.check({ timeout: 3_000 }))
+        .rejects.toThrow(/check: .*radio-no.*is still unchecked after clicking/);
+      expect(await no.isChecked()).toBe(false);
+    });
+
+    test('uncheck() on a checked radio button throws and leaves it checked', async () => {
+      const yes = await get('yes', 'Radio');
+      await yes.check();
+      await expect.poll(() => yes.isChecked(), { timeout: 10_000 }).toBe(true);
+      // Clicking a checked radio button does not uncheck it, so uncheck()
+      // cannot succeed; the message names the method and the element.
+      const err = await yes.uncheck({ timeout: 3_000 }).then(() => null, (e: unknown) => e);
+      expect(err).toBeInstanceOf(Error);
+      expect((err as Error).message).toMatch(/uncheck/);
+      expect((err as Error).message).toContain('radio-yes');
+      expect(await yes.isChecked()).toBe(true);
     });
   });
 
   test.describe('long list', () => {
-    test.beforeAll(async () => {
-      test.setTimeout(180_000);
+    test.beforeEach(async () => {
       await openScreen('cardEdgeCases', 'longList', { name: 'item1', page: 'LongList' });
     });
 
@@ -388,6 +448,31 @@ test.describe.serial('live Android test app', () => {
       // The row's own text is empty; its two TextViews hold "Item 1" and "Alpha".
       const row = await get('item1', 'LongList');
       expect(await row.textContent()).toBe('Item 1 Alpha');
+    });
+
+    test('the TEXT strategy and getByText pick a row by the text of its child views', async () => {
+      // Exact match on the joined text of the row's two TextViews.
+      const second = await get('items', 'LongList', {
+        strategy: SelectionStrategy.TEXT,
+        value: 'Item 2 Beta',
+        timeout: 30_000,
+      });
+      expect(isPlatform(second)).toBe(true);
+      expect(await second.getAttribute('content-desc')).toBe('long-list-item-2');
+      expect(await second.textContent()).toBe('Item 2 Beta');
+
+      // A contains match: the first row whose text contains "Gamma" is row 3.
+      const gamma = await get('items', 'LongList', {
+        strategy: SelectionStrategy.TEXT,
+        value: 'gamma',
+        timeout: 30_000,
+      });
+      expect(await gamma.getAttribute('content-desc')).toBe('long-list-item-3');
+
+      const byText = await repo.getByText('items', 'LongList', 'Item 4 Delta', true);
+      expect(byText).not.toBeNull();
+      expect(await byText!.getAttribute('content-desc')).toBe('long-list-item-4');
+      expect(await byText!.boundingBox()).not.toBeNull();
     });
 
     test('locateChild finds the title TextView of a row', async () => {
@@ -441,8 +526,7 @@ test.describe.serial('live Android test app', () => {
   });
 
   test.describe('tall page', () => {
-    test.beforeAll(async () => {
-      test.setTimeout(180_000);
+    test.beforeEach(async () => {
       await openScreen('cardInteractions', 'tall', { name: 'scrollView', page: 'Tall' });
     });
 
@@ -453,18 +537,28 @@ test.describe.serial('live Android test app', () => {
       expect(before).not.toBeNull();
       const { height } = await driver.getWindowSize();
       const distance = Math.round(height * 0.2);
+      // A swipe loses some distance to touch slop and settling; half of it
+      // is still far more than any jitter.
+      const minMove = Math.round(distance / 2);
 
       // Finger up: content moves up, so the section's y decreases.
       expect(await scrollView.swipe('up', { distance })).toBe(scrollView);
       const after = await (await get('section3', 'Tall', { timeout: 2_000 })).boundingBox().catch(() => null);
-      // Either the section moved up or it scrolled out of the tree.
-      if (after) expect(after.y).toBeLessThan(before!.y);
+      // Either the section moved up by a real amount or it left the tree.
+      const movedUp = after === null ? Infinity : before!.y - after.y;
+      expect(movedUp, `section 3 moved up by ${movedUp}px (wanted at least ${minMove}px or out of the tree)`)
+        .toBeGreaterThanOrEqual(minMove);
 
       // Finger down: content moves back down.
       expect(await scrollView.swipe('down', { distance })).toBe(scrollView);
       const back = await (await get('section3', 'Tall')).boundingBox();
       expect(back).not.toBeNull();
-      if (after) expect(back!.y).toBeGreaterThan(after.y);
+      if (after !== null) {
+        expect(back!.y - after.y, 'section 3 moved back down').toBeGreaterThanOrEqual(minMove);
+      } else {
+        // It had left the tree; it is back, below where it was hidden.
+        expect(back!.y).toBeGreaterThanOrEqual(0);
+      }
     });
 
     test('scrollIntoView down reaches the last section, then up the first', async () => {
@@ -479,26 +573,38 @@ test.describe.serial('live Android test app', () => {
   });
 
   test.describe('alerts', () => {
-    test.beforeAll(async () => {
-      test.setTimeout(180_000);
+    test.beforeEach(async () => {
       await openScreen('cardAlerts', 'alerts', { name: 'info', page: 'Alerts' });
     });
 
-    test('tapAt on a button returns it and the status label changes', async () => {
+    test('tapAt on a button opens its dialog; OK closes it and the status label changes', async () => {
       const status = await get('status', 'Alerts');
       expect(await status.textContent()).toBe('Status: none');
       const info = await get('info', 'Alerts');
       const box = (await info.boundingBox())!;
       expect(await info.tapAt({ x: Math.floor(box.width / 2), y: Math.floor(box.height / 2) })).toBe(info);
-      await expect.poll(async () => (await get('status', 'Alerts')).textContent(), { timeout: 10_000 })
-        .not.toBe('Status: none');
+
+      // An in-app dialog; while it is up the status label is not in the tree.
+      const title = await get('dialogTitle', 'Alerts');
+      await title.waitFor({ state: 'visible', timeout: 10_000 });
+      expect(await title.textContent()).toBe('Info');
+      expect(await (await get('dialogMessage', 'Alerts')).textContent()).toBe('Here is some information.');
+      await expectAppInForeground();
+
+      const ok = await get('dialogOk', 'Alerts');
+      expect(await ok.textContent()).toBe('OK');
+      await ok.click();
+      await (await get('dialogTitle', 'Alerts', { timeout: 2_000 })).waitFor({ state: 'hidden', timeout: 10_000 });
+
+      await expect.poll(async () => (await get('status', 'Alerts', { timeout: 2_000 })).textContent().catch(() => null), {
+        timeout: 15_000,
+      }).toBe('Status: Info shown');
       await expectAppInForeground();
     });
   });
 
   test.describe('gallery', () => {
-    test.beforeAll(async () => {
-      test.setTimeout(180_000);
+    test.beforeEach(async () => {
       await openScreen('cardMedia', 'gallery', { name: 'grid', page: 'Gallery' });
     });
 

@@ -70,9 +70,23 @@ function serverFromUrl(url: string): {
   return server;
 }
 
-/** Reads the capabilities file; checks it targets iOS Settings. Returns it unchanged. */
+/** Reads the capabilities file and checks it with {@link checkCapabilities}. Returns it unchanged. */
 function readCapabilities(file: string): Record<string, unknown> {
-  const caps = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), file), 'utf-8')) as Record<string, unknown>;
+  return checkCapabilities(JSON.parse(fs.readFileSync(path.resolve(process.cwd(), file), 'utf-8')) as Record<string, unknown>);
+}
+
+/**
+ * Checks the capabilities target iOS Settings: platform iOS, the Settings
+ * bundle id, and no app to install or browser to open. Returns them unchanged.
+ */
+function checkCapabilities(caps: Record<string, unknown>): Record<string, unknown> {
+  for (const refused of ['appium:app', 'browserName']) {
+    if (refused in caps) {
+      throw new Error(
+        `CAPABILITIES file must not have "${refused}" (this read-only spec targets the built-in Settings app only: no install, no browser).`,
+      );
+    }
+  }
   const platformName = caps.platformName;
   if (typeof platformName !== 'string' || platformName.toLowerCase() !== 'ios') {
     throw new Error(`CAPABILITIES file must have platformName "iOS" for this spec, got ${JSON.stringify(platformName)}.`);
@@ -105,6 +119,15 @@ test.describe('ios-settings pages file (offline)', () => {
     const firstMatch = new ElementRepository({}, PAGES);
     expect(firstMatch.getPagePlatform(PAGE)).toBe('android');
     expect(new ElementRepository({}, PAGES, { platform: 'web' }).getPagePlatform(PAGE)).toBe('web');
+  });
+
+  test('the capabilities gate accepts the example file and refuses an install, a browser and another app', () => {
+    const example = readCapabilities(path.join(__dirname, 'capabilities.ios.example.json'));
+    expect(example['appium:bundleId']).toBe(SETTINGS_BUNDLE_ID);
+    expect(() => readCapabilities(path.join(__dirname, 'capabilities.android.example.json'))).toThrow(/platformName "iOS"/);
+    expect(() => checkCapabilities({ ...example, 'appium:app': '/path/to/app.ipa' })).toThrow(/must not have "appium:app"/);
+    expect(() => checkCapabilities({ ...example, browserName: 'Safari' })).toThrow(/must not have "browserName"/);
+    expect(() => checkCapabilities({ ...example, 'appium:bundleId': 'com.example.other' })).toThrow(/appium:bundleId/);
   });
 });
 

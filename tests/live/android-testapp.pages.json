@@ -92,7 +92,10 @@
       "platform": "android",
       "elements": [
         { "elementName": "info", "selector": { "accessibility id": "alert-info" } },
-        { "elementName": "status", "selector": { "id": "alert_status" } }
+        { "elementName": "status", "selector": { "id": "alert_status" } },
+        { "elementName": "dialogTitle", "selector": { "id": "android:id/alertTitle" } },
+        { "elementName": "dialogMessage", "selector": { "id": "android:id/message" } },
+        { "elementName": "dialogOk", "selector": { "id": "android:id/button1" } }
       ]
     }
   ]
