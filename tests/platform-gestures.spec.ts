@@ -242,6 +242,15 @@ test.describe('PlatformElement.tapAt', () => {
     await expect(new PlatformElement(driver, '~card').tapAt({ x: 1, y: 1 }))
       .rejects.toThrow(/tapAt: could not read the element bounds for "~card": stale element/);
   });
+
+  test('a rect read failure on an indexed element names its index', async () => {
+    const { driver } = createRecordingDriver({}, {
+      $$: async () => [createMockWdioElement({ elementId: 'a' }), createMockWdioElement({ elementId: 'b' })],
+      getElementRect: async () => null,
+    });
+    await expect(new PlatformElement(driver, '~card', undefined, 1000, { index: 1 }).tapAt({ x: 1, y: 1 }))
+      .rejects.toThrow('tapAt: could not read the element bounds for nth(1) of "~card": the driver returned no rect');
+  });
 });
 
 // ===========================================================================

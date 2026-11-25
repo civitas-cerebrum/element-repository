@@ -11,6 +11,7 @@ import { SWIPE_SETTLE_MS, TouchAction, performTouchActions, performTouchSwipe, t
 import { detectDriverPlatform, readPlatformText } from '../utils/platformText';
 import { readPlatformChecked } from '../utils/platformChecked';
 import { readElementClass } from '../utils/platformClass';
+import { androidAttribute } from '../utils/androidAttr';
 
 /** Extra construction options for {@link PlatformElement}. */
 export interface PlatformElementOptions {
@@ -134,7 +135,7 @@ export class PlatformElement implements Element {
    */
   private get polled(): boolean {
     if (this.resolvedElement) return false;
-    return this.matchesNothing || (this.index !== undefined && this.index !== 0) || !!this.parent;
+    return this.matchesNothing || this.indexed || !!this.parent;
   }
 
   /**
@@ -629,10 +630,10 @@ export class PlatformElement implements Element {
     try {
       rect = await this.readRect(el);
     } catch (err) {
-      throw new Error(`${method}: could not read the element bounds for "${this.selector}": ${errorText(err)}`);
+      throw new Error(`${method}: could not read the element bounds for ${this.describe()}: ${errorText(err)}`);
     }
     if (!rect || ![rect.x, rect.y, rect.width, rect.height].every(Number.isFinite)) {
-      throw new Error(`${method}: could not read the element bounds for "${this.selector}": the driver returned no rect`);
+      throw new Error(`${method}: could not read the element bounds for ${this.describe()}: the driver returned no rect`);
     }
     return rect;
   }
@@ -881,7 +882,14 @@ export class PlatformElement implements Element {
     return this.read('rawText', el => readPlatformText(el, this.resolvePlatform()));
   }
 
+  /**
+   * {@inheritDoc Element.getAttribute}
+   *
+   * On Android a missing attribute returns `null`: UiAutomator2 answers it
+   * with the string `"null"`, which is mapped (see {@link androidAttribute}).
+   */
   async getAttribute(name: string): Promise<string | null> {
+    if (this.isAndroid()) return this.read('getAttribute', async el => androidAttribute(await el.getAttribute(name)));
     return this.read('getAttribute', el => el.getAttribute(name));
   }
 
@@ -899,9 +907,12 @@ export class PlatformElement implements Element {
       // "unknown attribute" on uiautomator2 6.7.8 — a driver bug). Detect
       // the empty-field case by comparing `text` to `hint`: when they
       // match, the field is empty and the hint is being rendered as text.
+      // A field without a hint reads hint as "null" (see
+      // {@link androidAttribute}); that is no hint, so typing the text
+      // "null" is not taken for an empty field.
       const [text, hint] = await Promise.all([
         el.getAttribute('text').catch(() => null),
-        el.getAttribute('hint').catch(() => null),
+        el.getAttribute('hint').then(androidAttribute, () => null),
       ]);
       if (text && hint && text === hint) return '';
       return text ?? '';

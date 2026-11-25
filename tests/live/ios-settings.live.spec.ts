@@ -17,6 +17,9 @@
  * - CAPABILITIES: path to a W3C capabilities JSON file (see
  *   tests/live/capabilities.ios.example.json). It is sent exactly as written.
  *   It must have `platformName: iOS` and `appium:bundleId: com.apple.Preferences`.
+ *   The spec refuses a file that has `appium:app` (no installs) or
+ *   `browserName` (no browser session); strip those keys from a copy of a
+ *   capabilities file that has them.
  * - APPIUM_USER / APPIUM_KEY: optional server credentials.
  *
  * Without LIVE_IOS=1, APPIUM_URL and CAPABILITIES the device tests are

@@ -17,8 +17,11 @@
  * - CAPABILITIES: path to a W3C capabilities JSON file (see
  *   tests/live/capabilities.android.example.json). It is sent exactly as
  *   written. It must have `platformName: Android` and
- *   `appium:appPackage: com.civitas.testapp`, and must not have
- *   `appium:app` (no installs) or `browserName` (no browser session).
+ *   `appium:appPackage: com.civitas.testapp`. The spec refuses a file that
+ *   has `appium:app` (no installs) or `browserName` (no browser session):
+ *   the test app must already be installed on the device. To reuse a
+ *   capabilities file that installs the app, strip `appium:app` from a
+ *   copy of it.
  * - APPIUM_USER / APPIUM_KEY: optional server credentials.
  *
  * Without LIVE_ANDROID=1, APPIUM_URL and CAPABILITIES the device tests are
