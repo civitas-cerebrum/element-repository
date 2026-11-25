@@ -28,9 +28,11 @@ export const IOS_TEXT_INPUT_TYPES: ReadonlySet<string> = new Set([
 
 /**
  * Relative XPath for the descendants of an Android element that carry text,
- * returned by UiAutomator2 in document order.
+ * returned by UiAutomator2 in document order. An empty input reports its
+ * hint as its `text` with `showing-hint="true"`; it is left out, since the
+ * hint is not text the field holds.
  */
-export const ANDROID_DESCENDANT_TEXT_XPATH = ".//*[@text!='']";
+export const ANDROID_DESCENDANT_TEXT_XPATH = ".//*[@text!='' and not(@showing-hint='true')]";
 
 /** True when `s` is a string with something other than whitespace. */
 function hasText(s: unknown): s is string {
@@ -52,10 +54,17 @@ function hasText(s: unknown): s is string {
  *   whitespace only), the element is taken as a container whose visible
  *   text sits in its descendants (a list row whose title and subtitle are
  *   child TextViews): the text of every descendant with a non-empty `text`
- *   attribute, in document order, each trimmed, whitespace-only ones
- *   skipped, joined with single spaces. Descendants are not filtered by
- *   `displayed`, which keeps the read to one query plus the text reads.
- *   When no descendant has text, the element's own text is returned.
+ *   attribute that is not showing a hint, in document order, each trimmed,
+ *   whitespace-only ones skipped, joined with single spaces. Descendants
+ *   are not filtered by `displayed`, which keeps the read to one query plus
+ *   the text reads. When no descendant has text, the element's own text is
+ *   returned. Every descendant is read, so a selector matching a large
+ *   container (a whole list or screen) reads every text inside it. A
+ *   descendant is read by its own `text` and its text-bearing children are
+ *   read again on their own, so when a descendant's `text` already repeats
+ *   its children's text (a node that merges its children's text, as some
+ *   Compose layouts report), that text appears twice. Rare: a TextView has
+ *   no children.
  * - every other platform (and an unknown one): WebdriverIO `getText()`.
  *
  * On iOS the element type and `label` are read first; `value` is read only

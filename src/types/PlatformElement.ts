@@ -326,10 +326,16 @@ export class PlatformElement implements Element {
    *
    * Platform: the state is read with the platform rule of
    * {@link isChecked}. An element that is already checked is not clicked.
-   * Otherwise it is clicked once, then the state is polled until it reads
-   * checked, within the same `timeout` as the whole action (measured from
-   * its start; at least one read after the click). If it still reads
-   * unchecked, throws `check: <element> is still unchecked after clicking`.
+   * Otherwise, on Android, an element whose `checkable` attribute is
+   * `"false"` fails at once with `check: "<selector>" is not checkable`.
+   * The element must then be enabled: like Playwright's actionability
+   * check, `isEnabled()` is polled within the action's `timeout`, and a
+   * control still disabled when it runs out fails with
+   * `check: "<selector>" is disabled`, without a click. The element is
+   * clicked once, then the state is polled until it reads checked, within
+   * the same `timeout` (measured from the start of the call; at least one
+   * read after the click). If it still reads unchecked, throws
+   * `check: "<selector>" is still unchecked after clicking`.
    */
   async check(options?: ElementActionOptions): Promise<Element> {
     return this.setChecked(true, 'check', options?.timeout);
@@ -339,24 +345,53 @@ export class PlatformElement implements Element {
    * {@inheritDoc Element.uncheck}
    *
    * Platform: as {@link check}, the other way round. A checked radio button
-   * cannot be unchecked by clicking it, so `uncheck()` on one throws
-   * `uncheck: <element> is still checked after clicking`.
+   * cannot be unchecked by clicking it, so on Android `uncheck()` on a
+   * checked `android.widget.RadioButton` fails at once, without a click,
+   * with `uncheck: "<selector>" is a radio button; select another option
+   * instead`. (XCUITest has no radio button type; an iOS control that
+   * stays checked after the click fails with `is still checked after
+   * clicking`.)
    */
   async uncheck(options?: ElementActionOptions): Promise<Element> {
     return this.setChecked(false, 'uncheck', options?.timeout);
   }
 
-  /** Shared body of {@link check} / {@link uncheck}: click only when the state differs, then confirm it. */
+  /** UiAutomator2 class of a radio button: clicking a checked one never unchecks it. */
+  private static readonly ANDROID_RADIO_CLASS = 'android.widget.RadioButton';
+
+  /**
+   * Shared body of {@link check} / {@link uncheck}: click only when the
+   * state differs and the element can take the click, then confirm the
+   * new state. On iOS the element type is read once per call.
+   */
   private async setChecked(wanted: boolean, method: string, timeout?: number): Promise<Element> {
     const ms = timeout ?? this.defaultTimeout ?? 30000;
     const deadline = Date.now() + ms;
     const el = await this.ensureAttached(ms);
     const platform = this.resolvePlatform();
-    if ((await readPlatformChecked(el, platform)) === wanted) return this;
+    const iosType: string | undefined = platform === 'ios' ? await el.getTagName() : undefined;
+    const isWanted = async () => (await readPlatformChecked(el, platform, iosType)) === wanted;
+    if (await isWanted()) return this;
+    if (platform === 'android') {
+      // An attribute the driver cannot read is unknown, not a refusal.
+      const [checkable, tag] = await Promise.all([
+        el.getAttribute('checkable').catch(() => null),
+        wanted ? null : el.getTagName().catch(() => null),
+      ]);
+      if (checkable === 'false') throw new Error(`${method}: ${this.describe()} is not checkable`);
+      if (tag === PlatformElement.ANDROID_RADIO_CLASS) {
+        throw new Error(`${method}: ${this.describe()} is a radio button; select another option instead`);
+      }
+    }
+    await this.pollUntil(
+      async () => (await el.isEnabled()) === true,
+      Math.max(0, deadline - Date.now()),
+      () => new Error(`${method}: ${this.describe()} is disabled`),
+    );
     await el.click();
     const still = wanted ? 'unchecked' : 'checked';
     await this.pollUntil(
-      async () => (await readPlatformChecked(el, platform)) === wanted,
+      isWanted,
       Math.max(0, deadline - Date.now()),
       () => new Error(`${method}: ${this.describe()} is still ${still} after clicking`),
     );
@@ -759,11 +794,38 @@ export class PlatformElement implements Element {
    * The raw element a read acts on. The default path returns WebdriverIO's
    * lazy element, whose commands wait (implicit wait); a polled element
    * (see {@link polled}) has no lazy element, so it polls `$$` for its
-   * match up to the element's default timeout, as an action does.
+   * match up to the element's default timeout, as an action does. With
+   * `method`, a polled element that never appears fails with
+   * `<method>: <element> not found within N ms: <reason>`.
    */
-  private async readTarget(): Promise<any> {
-    return this.polled ? this.ensureAttached() : this.findOne();
+  private async readTarget(method?: string): Promise<any> {
+    return this.polled ? this.ensureAttached(undefined, method) : this.findOne();
   }
+
+  /**
+   * Runs `fn` on the element a read acts on (see {@link readTarget}), so a
+   * missing element fails naming the public method:
+   * `<method>: <element> not found within N ms: <reason>`. On the default
+   * path WebdriverIO's own error for a command on an element that never
+   * appeared ("Can't call getText on element with selector ... because
+   * element wasn't found") becomes the reason, N being WebdriverIO's
+   * `waitforTimeout` (left out when the driver does not report it), and
+   * the original error the `cause`. Any other error is rethrown unchanged.
+   */
+  private async read<T>(method: string, fn: (el: any) => Promise<T>): Promise<T> {
+    const el = await this.readTarget(method);
+    try {
+      return await fn(el);
+    } catch (err) {
+      if (!(err instanceof Error) || !PlatformElement.WDIO_NOT_FOUND.test(err.message)) throw err;
+      const ms = this.driver?.options?.waitforTimeout;
+      const within = typeof ms === 'number' ? ` within ${ms} ms` : '';
+      throw new Error(`${method}: ${this.describe()} not found${within}: ${err.message}`, { cause: err });
+    }
+  }
+
+  /** WebdriverIO's error for a command on a lazy element that never appeared. */
+  private static readonly WDIO_NOT_FOUND = /^Can't call \w+ on .*wasn't found$/;
 
   async isVisible(): Promise<boolean> {
     if (this.polled) {
@@ -773,7 +835,7 @@ export class PlatformElement implements Element {
     }
     return (await this.findOne()).isDisplayed();
   }
-  async isEnabled(): Promise<boolean> { return (await this.readTarget()).isEnabled(); }
+  async isEnabled(): Promise<boolean> { return this.read('isEnabled', el => el.isEnabled()); }
   /**
    * {@inheritDoc Element.isChecked}
    *
@@ -781,7 +843,9 @@ export class PlatformElement implements Element {
    * ("1" = on) for a switch and `selected` for any other type; other
    * platforms use WebdriverIO `isSelected()`. See {@link readPlatformChecked}.
    */
-  async isChecked(): Promise<boolean> { return readPlatformChecked(await this.readTarget(), this.resolvePlatform()); }
+  async isChecked(): Promise<boolean> {
+    return this.read('isChecked', el => readPlatformChecked(el, this.resolvePlatform()));
+  }
 
   // ── Extraction ───────────────────────────────────────────────
 
@@ -789,20 +853,24 @@ export class PlatformElement implements Element {
 
   /** {@inheritDoc Element.textContent} */
   async textContent(): Promise<string | null> {
-    return (await this.rawText())?.trim() ?? null;
+    return (await this.read('textContent', el => readPlatformText(el, this.resolvePlatform())))?.trim() ?? null;
   }
 
   /** {@inheritDoc Element.rawText} */
   async rawText(): Promise<string | null> {
-    return readPlatformText(await this.readTarget(), this.resolvePlatform());
+    return this.read('rawText', el => readPlatformText(el, this.resolvePlatform()));
   }
 
   async getAttribute(name: string): Promise<string | null> {
-    return (await this.readTarget()).getAttribute(name);
+    return this.read('getAttribute', el => el.getAttribute(name));
   }
 
   async inputValue(): Promise<string> {
-    const el = await this.readTarget();
+    return this.read('inputValue', el => this.readInputValue(el));
+  }
+
+  /** Body of {@link inputValue} on its resolved element. */
+  private async readInputValue(el: any): Promise<string> {
     if (this.isAndroid()) {
       // UiAutomator2 doesn't expose a `value` attribute — `text` is the
       // equivalent. When the EditText is empty, `text` returns the hint
@@ -852,7 +920,7 @@ export class PlatformElement implements Element {
    * error, not an empty string.
    */
   async getTagName(): Promise<string> {
-    return (await this.readTarget()).getTagName();
+    return this.read('getTagName', el => el.getTagName());
   }
 
   async exists(): Promise<boolean> {

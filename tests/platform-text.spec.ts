@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 import { PlatformElement, WebElement } from '../src/types';
 import { ElementRepository } from '../src/repo/ElementRepository';
 import { SelectionStrategy } from '../src/enum/Options';
-import { readPlatformText } from '../src/utils/platformText';
+import { readPlatformText, ANDROID_DESCENDANT_TEXT_XPATH as EXPORTED_DESCENDANT_XPATH } from '../src/utils/platformText';
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -276,18 +276,20 @@ test.describe('platform text lookups stop reading early', () => {
 // ---------------------------------------------------------------------------
 
 /** The relative XPath an Android container's descendants are read with. */
-const ANDROID_DESCENDANT_TEXT_XPATH = ".//*[@text!='']";
+const ANDROID_DESCENDANT_TEXT_XPATH = ".//*[@text!='' and not(@showing-hint='true')]";
 
 interface AndroidNode {
   id: string;
   text: string;
+  /** An empty input whose `text` is its hint (UiAutomator2 `showing-hint="true"`). */
+  showingHint?: boolean;
   children?: AndroidNode[];
 }
 
 /**
  * A UiAutomator2 node: `getText()` is its own `text` attribute. `$$` with
- * the descendant XPath returns its descendants that have a non-empty text,
- * in document order (as the server evaluates it); each query and read is
+ * the descendant XPath returns its descendants that have a non-empty text
+ * and are not showing a hint, in document order (as the server evaluates it); each query and read is
  * recorded in `reads`.
  */
 function androidNode(node: AndroidNode, reads: string[] = []): any {
@@ -304,7 +306,7 @@ function androidNode(node: AndroidNode, reads: string[] = []): any {
     $$: async (selector: string) => {
       reads.push(`${node.id}:$$ ${selector}`);
       if (selector !== ANDROID_DESCENDANT_TEXT_XPATH) throw new Error(`unexpected selector ${selector}`);
-      return descendants(node).filter(d => d.text !== '').map(d => androidNode(d, reads));
+      return descendants(node).filter(d => d.text !== '' && !d.showingHint).map(d => androidNode(d, reads));
     },
   };
 }
@@ -356,6 +358,21 @@ test.describe('readPlatformText on android containers', () => {
       ],
     };
     expect(await readPlatformText(androidNode(node), 'android')).toBe('Title 3 Body');
+  });
+
+  test('a descendant input showing its hint is not read as text', async () => {
+    const node: AndroidNode = {
+      id: 'form-row', text: '',
+      children: [
+        { id: 'label', text: 'Name' },
+        { id: 'input', text: 'Type your name', showingHint: true },
+      ],
+    };
+    expect(await readPlatformText(androidNode(node), 'android')).toBe('Name');
+  });
+
+  test('the exported descendant XPath excludes hints', () => {
+    expect(EXPORTED_DESCENDANT_XPATH).toBe(ANDROID_DESCENDANT_TEXT_XPATH);
   });
 
   test('no descendant text: the own text is returned unchanged', async () => {

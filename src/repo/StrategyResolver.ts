@@ -287,16 +287,23 @@ export class StrategyResolver {
    *
    * There is no lazy text filter in WebDriverIO, so the match is picked
    * eagerly: all matches of `selector` are fetched with `driver.$$`, each
-   * one's text is read with the same rule as
-   * {@link PlatformElement.textContent} (on iOS the `label`, else `value`;
-   * `value` first for text inputs; elsewhere `getText()`), and the chosen
-   * raw element is wrapped in a {@link PlatformElement}.
+   one's text is read with the same rule as
+   * {@link PlatformElement.textContent} (see `readPlatformText`: on iOS the
+   * `label`, else `value`; `value` first for text inputs; on Android
+   * `getText()`, or for an element with no text of its own its
+   * descendants' text joined with single spaces; elsewhere `getText()`),
+   * and the chosen raw element is wrapped in a {@link PlatformElement}.
    *
-   * The text compared is the element's OWN text as the driver reports it
-   * — not the text of its descendants, as Playwright's
-   * `filter({ hasText })` uses on web. The selector must therefore target the
-   * text-bearing element itself (the label or cell title), not a container
-   * around it. An exact (trimmed) match is preferred; otherwise the first
+   * The text compared is the element's OWN text as the driver reports it,
+   * not the text of its descendants as Playwright's `filter({ hasText })`
+   * uses on web, with one exception: on Android an element whose own text
+   * is empty is read as a container, by its descendants' text (a list row
+   * whose title and subtitle are child TextViews). The selector should
+   * therefore target the text-bearing element itself (the label or cell
+   * title), or on Android a container without text of its own. A container
+   * row costs 2 + K driver round trips (its own text, the descendant query,
+   * one read per K text-bearing descendants) instead of one, and a selector
+   * matching a large container reads every text inside it. An exact (trimmed) match is preferred; otherwise the first
    * case-insensitive, whitespace-normalised "contains" match is taken.
    *
    * The returned element is bound to the chosen match for single-element

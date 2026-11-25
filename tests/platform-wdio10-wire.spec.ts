@@ -24,6 +24,8 @@ const MANY = 'many';
 const MANY_IDS = [ELEMENT, 'el-2', 'el-3'];
 /** A selector value the fake server finds nothing for. */
 const MISSING = 'missing';
+/** Elements the fake server returns for an element-scoped XPath find, with their text. */
+const DESCENDANT_TEXTS: Record<string, string> = { 'txt-1': 'Item 1', 'txt-2': 'Alpha' };
 
 interface Recorded { method: string; path: string; body: any }
 
@@ -54,8 +56,15 @@ async function startFakeServer(): Promise<FakeServer> {
       } else if (method === 'POST' && /\/element\/[^/]+\/element$/.test(url) && url.startsWith(s)) {
         // Element-scoped find: a child of any element.
         value = { [W3C_ELEMENT_KEY]: ELEMENT };
+      } else if (method === 'POST' && /\/element\/[^/]+\/elements$/.test(url) && url.startsWith(s) && body?.using === 'xpath') {
+        // An element-scoped XPath find: the text-bearing descendants.
+        value = Object.keys(DESCENDANT_TEXTS).map(id => ({ [W3C_ELEMENT_KEY]: id }));
       } else if (method === 'POST' && /\/element\/[^/]+\/elements$/.test(url) && url.startsWith(s)) {
         value = [{ [W3C_ELEMENT_KEY]: ELEMENT }];
+      } else if (method === 'GET' && url === `${s}/element/${ELEMENT}/text`) {
+        value = ''; // a container: no text of its own
+      } else if (method === 'GET' && Object.keys(DESCENDANT_TEXTS).some(id => url === `${s}/element/${id}/text`)) {
+        value = DESCENDANT_TEXTS[url.split('/')[4]];
       } else if (method === 'POST' && url === `${s}/element`) {
         value = { [W3C_ELEMENT_KEY]: ELEMENT };
       } else if (method === 'POST' && url === `${s}/elements`) {
@@ -243,6 +252,20 @@ test.describe('PlatformElement against a real WebdriverIO 10 session (fake WebDr
     expect(wire()).toEqual([`GET /element/${ELEMENT}/screenshot`]);
   });
 
+  test('android container text: the descendant XPath is sent as a find-elements from the element', async () => {
+    const el = new PlatformElement(driver, '~row', undefined, 1000, { platform: 'android' });
+    expect(await el.textContent()).toBe('Item 1 Alpha');
+    const scoped = server.requests.filter(r => r.method === 'POST' && /\/element\/[^/]+\/elements$/.test(r.path));
+    expect(scoped.map(r => [r.path.replace(`/session/${server.session}`, ''), r.body])).toEqual([
+      [`/element/${ELEMENT}/elements`, { using: 'xpath', value: ".//*[@text!='' and not(@showing-hint='true')]" }],
+    ]);
+    expect(wire()).toEqual([
+      `GET /element/${ELEMENT}/text`,
+      'GET /element/txt-1/text',
+      'GET /element/txt-2/text',
+    ]);
+  });
+
   test('$$ and elementId: all() wraps every match', async () => {
     const all = await new PlatformElement(driver, '~x').all();
     expect(all).toHaveLength(1);
@@ -415,6 +438,65 @@ test.describe('a child of a missing unindexed parent (WebdriverIO 10)', () => {
     test.info().annotations.push({ type: 'timing', description: `no parent ${noParent} ms, missing parent ${withParent} ms` });
     expect(withParent).toBeLessThan(noParent * 1.5 + 1000);
     expect(scopedFinds()).toEqual([]);
+  });
+});
+
+test.describe('reads of a missing element name the method (WebdriverIO 10)', () => {
+  const WAITFOR_TIMEOUT = 300;
+  let server: FakeServer;
+  let driver: any;
+
+  test.beforeEach(async () => {
+    server = await startFakeServer();
+    const { remote } = await importEsm('webdriverio');
+    driver = await remote({
+      protocol: 'http',
+      hostname: '127.0.0.1',
+      port: server.port,
+      path: '/',
+      logLevel: 'silent',
+      connectionRetryCount: 0,
+      waitforTimeout: WAITFOR_TIMEOUT,
+      capabilities: { platformName: 'iOS', 'appium:automationName': 'XCUITest' } as any,
+    });
+  });
+
+  test.afterEach(async () => {
+    await driver?.deleteSession().catch(() => {});
+    await server?.close();
+  });
+
+  const notFound = (method: string, desc: string) => new RegExp(
+    `^${method}: ${desc} not found within ${WAITFOR_TIMEOUT} ms: Can't call \\w+ on element with selector "~${MISSING}" because element wasn't found$`,
+  );
+
+  test('textContent()', async () => {
+    await expect(new PlatformElement(driver, `~${MISSING}`).textContent()).rejects.toThrow(notFound('textContent', `"~${MISSING}"`));
+  });
+
+  test('rawText()', async () => {
+    await expect(new PlatformElement(driver, `~${MISSING}`).rawText()).rejects.toThrow(notFound('rawText', `"~${MISSING}"`));
+  });
+
+  test('getAttribute()', async () => {
+    await expect(new PlatformElement(driver, `~${MISSING}`).getAttribute('label')).rejects.toThrow(notFound('getAttribute', `"~${MISSING}"`));
+  });
+
+  test('isChecked() and isEnabled()', async () => {
+    await expect(new PlatformElement(driver, `~${MISSING}`).isChecked()).rejects.toThrow(notFound('isChecked', `"~${MISSING}"`));
+    await expect(new PlatformElement(driver, `~${MISSING}`).isEnabled()).rejects.toThrow(notFound('isEnabled', `"~${MISSING}"`));
+  });
+
+  test('the original WebdriverIO error is the cause', async () => {
+    const err = await new PlatformElement(driver, `~${MISSING}`).textContent().then(() => null, e => e);
+    expect(err.cause).toBeInstanceOf(Error);
+    expect(err.cause.message).toMatch(/because element wasn't found$/);
+  });
+
+  test('a polled read names the method too', async () => {
+    const child = new PlatformElement(driver, `~${MISSING}`, undefined, 500).locateChild('~label');
+    await expect(child.textContent())
+      .rejects.toThrow(/^textContent: "~label" inside "~missing" not found within 500 ms: parent "~missing" not found$/);
   });
 });
 

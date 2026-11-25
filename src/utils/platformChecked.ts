@@ -26,16 +26,19 @@ export const IOS_VALUE_STATE_TYPES: ReadonlySet<string> = new Set([
  * - any other platform (and an unknown one): WebdriverIO `isSelected()`.
  *
  * Cost: one driver round trip on Android and on other platforms, two on
- * iOS (the element type, then `value` or `selected`).
+ * iOS (the element type, then `value` or `selected`), or one when the
+ * caller passes the type it already read.
  *
  * Driver errors are not caught.
  *
  * @param el - A raw WebdriverIO element.
  * @param platform - The element's platform, if known.
+ * @param iosType - iOS only: the element type (`getTagName()`), when the
+ * caller has read it already; read here otherwise.
  */
-export async function readPlatformChecked(el: any, platform: Platform | undefined): Promise<boolean> {
+export async function readPlatformChecked(el: any, platform: Platform | undefined, iosType?: string): Promise<boolean> {
   if (platform === 'android') return (await el.getAttribute('checked')) === 'true';
-  if (platform === 'ios' && IOS_VALUE_STATE_TYPES.has(await el.getTagName())) {
+  if (platform === 'ios' && IOS_VALUE_STATE_TYPES.has(iosType ?? await el.getTagName())) {
     const value = String((await el.getAttribute('value')) ?? '').trim().toLowerCase();
     return value === '1' || value === 'true';
   }

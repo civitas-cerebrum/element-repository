@@ -12,21 +12,28 @@ import { readPlatformChecked } from '../src/utils/platformChecked';
  * device. A click toggles it, except that a checked radio button stays
  * checked.
  */
-function androidControl(className: string, checked: boolean, opts: { radio?: boolean; ignoresClicks?: boolean; flipAfterMs?: number } = {}) {
-  const state = { checked, clicks: 0 };
+function androidControl(
+  className: string,
+  checked: boolean,
+  opts: { radio?: boolean; ignoresClicks?: boolean; flipAfterMs?: number; checkable?: string; disabled?: boolean; enableAfterMs?: number } = {},
+) {
+  const state = { checked, clicks: 0, enabled: !opts.disabled };
+  if (opts.enableAfterMs !== undefined) setTimeout(() => { state.enabled = true; }, opts.enableAfterMs);
   const el: any = {
     elementId: 'android-control',
     getTagName: async () => className,
     getAttribute: async (name: string) => {
       if (name === 'checked') return String(state.checked);
       if (name === 'selected') return 'false';
-      if (name === 'checkable') return 'true';
+      if (name === 'checkable') return opts.checkable ?? 'true';
+      if (name === 'enabled') return String(state.enabled);
       return null;
     },
     isSelected: async () => false,
+    isEnabled: async () => state.enabled,
     click: async () => {
       state.clicks++;
-      if (opts.ignoresClicks) return;
+      if (opts.ignoresClicks || !state.enabled) return;
       const next = opts.radio ? true : !state.checked;
       if (opts.flipAfterMs) setTimeout(() => { state.checked = next; }, opts.flipAfterMs);
       else state.checked = next;
@@ -44,10 +51,10 @@ function androidControl(className: string, checked: boolean, opts: { radio?: boo
  */
 function iosControl(type: string, on: boolean) {
   const isSwitch = type === 'XCUIElementTypeSwitch' || type === 'XCUIElementTypeToggle';
-  const state = { on, clicks: 0 };
+  const state = { on, clicks: 0, tagReads: 0 };
   const el: any = {
     elementId: 'ios-control',
-    getTagName: async () => type,
+    getTagName: async () => { state.tagReads++; return type; },
     getAttribute: async (name: string) => {
       if (name === 'type') return type;
       // A non-switch row can carry a value of its own (a badge count), which
@@ -57,6 +64,7 @@ function iosControl(type: string, on: boolean) {
       return null;
     },
     isSelected: async () => !isSwitch && state.on,
+    isEnabled: async () => true,
     click: async () => { state.clicks++; state.on = !state.on; },
     isDisplayed: async () => true,
     waitForExist: async () => true,
@@ -106,6 +114,13 @@ test.describe('readPlatformChecked', () => {
   test('ios: any other type reads selected', async () => {
     expect(await readPlatformChecked(iosControl('XCUIElementTypeButton', true).el, 'ios')).toBe(true);
     expect(await readPlatformChecked(iosControl('XCUIElementTypeButton', false).el, 'ios')).toBe(false);
+  });
+
+  test('ios: a type given by the caller is used instead of reading it', async () => {
+    const { el, state } = iosControl('XCUIElementTypeSwitch', true);
+    expect(await readPlatformChecked(el, 'ios', 'XCUIElementTypeSwitch')).toBe(true);
+    expect(await readPlatformChecked(el, 'ios', 'XCUIElementTypeButton')).toBe(false);
+    expect(state.tagReads).toBe(0);
   });
 
   test('unknown platform: WebdriverIO isSelected()', async () => {
@@ -180,12 +195,61 @@ test.describe('PlatformElement checked state on android', () => {
     expect(state.clicks).toBe(1);
   });
 
-  test('uncheck() on a checked radio button throws: clicking a radio does not uncheck it', async () => {
+  test('uncheck() on a checked radio button fails at once without clicking it', async () => {
     const { el, state } = androidControl('android.widget.RadioButton', true, { radio: true });
     const element = new PlatformElement(driverFor(el), '~radio-yes', undefined, 5000, { platform: 'android' });
-    await expect(element.uncheck({ timeout: 300 }))
-      .rejects.toThrow('uncheck: "~radio-yes" is still checked after clicking');
+    const start = Date.now();
+    await expect(element.uncheck({ timeout: 3000 }))
+      .rejects.toThrow('uncheck: "~radio-yes" is a radio button; select another option instead');
+    expect(Date.now() - start).toBeLessThan(1000);
+    expect(state.clicks).toBe(0);
+    expect(state.checked).toBe(true);
+  });
+
+  test('uncheck() on an unchecked radio button does nothing', async () => {
+    const { el, state } = androidControl('android.widget.RadioButton', false, { radio: true });
+    await new PlatformElement(driverFor(el), '~radio-no', undefined, 1000, { platform: 'android' }).uncheck();
+    expect(state.clicks).toBe(0);
+  });
+
+  for (const method of ['check', 'uncheck'] as const) {
+    test(`${method}() on an element that is not checkable fails at once without clicking it`, async () => {
+      const { el, state } = androidControl('android.widget.Button', method === 'uncheck', { checkable: 'false' });
+      const element = new PlatformElement(driverFor(el), '~plain-button', undefined, 5000, { platform: 'android' });
+      const start = Date.now();
+      await expect(element[method]({ timeout: 3000 })).rejects.toThrow(`${method}: "~plain-button" is not checkable`);
+      expect(Date.now() - start).toBeLessThan(1000);
+      expect(state.clicks).toBe(0);
+    });
+  }
+
+  test('check() on a control with no checkable attribute still clicks', async () => {
+    const { el, state } = androidControl('android.view.View', false, { checkable: null as any });
+    await new PlatformElement(driverFor(el), '~custom', undefined, 1000, { platform: 'android' }).check();
     expect(state.clicks).toBe(1);
+    expect(state.checked).toBe(true);
+  });
+
+  test('check() on a disabled control waits for it to be enabled, then throws without clicking', async () => {
+    const { el, state } = androidControl('android.widget.Switch', false, { disabled: true });
+    const element = new PlatformElement(driverFor(el), '~toggle-disabled', undefined, 5000, { platform: 'android' });
+    const start = Date.now();
+    await expect(element.check({ timeout: 400 })).rejects.toThrow('check: "~toggle-disabled" is disabled');
+    expect(Date.now() - start).toBeGreaterThanOrEqual(350);
+    expect(state.clicks).toBe(0);
+  });
+
+  test('check() on a control that becomes enabled within the timeout clicks it', async () => {
+    const { el, state } = androidControl('android.widget.Switch', false, { disabled: true, enableAfterMs: 250 });
+    await new PlatformElement(driverFor(el), '~toggle-later', undefined, 2000, { platform: 'android' }).check();
+    expect(state.clicks).toBe(1);
+    expect(state.checked).toBe(true);
+  });
+
+  test('check() on a disabled control that is already checked does nothing', async () => {
+    const { el, state } = androidControl('android.widget.Switch', true, { disabled: true });
+    await new PlatformElement(driverFor(el), '~toggle-on-disabled', undefined, 1000, { platform: 'android' }).check();
+    expect(state.clicks).toBe(0);
   });
 });
 
@@ -216,6 +280,16 @@ test.describe('PlatformElement checked state on ios', () => {
     await new PlatformElement(driverFor(el, { platformName: 'iOS' }), '~wifi', undefined, 1000).check();
     expect(state.clicks).toBe(1);
     expect(state.on).toBe(true);
+  });
+
+  test('check() and uncheck() read the element type once per call', async () => {
+    const { el, state } = iosControl('XCUIElementTypeSwitch', false);
+    const element = new PlatformElement(driverFor(el), '~wifi', undefined, 1000, { platform: 'ios' });
+    await element.check();
+    expect(state.tagReads).toBe(1);
+    await element.uncheck();
+    expect(state.tagReads).toBe(2);
+    expect(state.on).toBe(false);
   });
 
   test('a selected button reads as checked', async () => {
