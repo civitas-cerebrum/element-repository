@@ -1,4 +1,5 @@
 import type { Platform } from '../enum/Platform';
+import { readElementClass } from './platformClass';
 
 /**
  * The platform an Appium driver runs, from its `platformName` capability,
@@ -89,7 +90,7 @@ export async function readPlatformText(el: any, platform: Platform | undefined):
     return joined !== '' ? joined : own;
   }
   if (platform !== 'ios') return (await el.getText()) ?? null;
-  const [type, label] = await Promise.all([el.getTagName(), el.getAttribute('label')]);
+  const [type, label] = await Promise.all([readElementClass(el, platform), el.getAttribute('label')]);
   const isInput = IOS_TEXT_INPUT_TYPES.has(type);
   if (!isInput && hasText(label)) return label;
   const value = await el.getAttribute('value');

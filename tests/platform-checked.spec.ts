@@ -10,24 +10,33 @@ import { readPlatformChecked } from '../src/utils/platformChecked';
  * A UiAutomator2 CheckBox / Switch / RadioButton. Its state is the `checked`
  * attribute; `selected` stays "false" whatever the state, as on a real
  * device. A click toggles it, except that a checked radio button stays
- * checked.
+ * checked. As UiAutomator2 does, `getTagName()` returns the content-desc
+ * when one is set and `null` otherwise, never the class; only the `class` /
+ * `className` attribute holds the class; a missing attribute reads as the
+ * string "null".
  */
 function androidControl(
   className: string,
   checked: boolean,
-  opts: { radio?: boolean; ignoresClicks?: boolean; flipAfterMs?: number; checkable?: string; disabled?: boolean; enableAfterMs?: number } = {},
+  opts: {
+    radio?: boolean; ignoresClicks?: boolean; flipAfterMs?: number; checkable?: string; disabled?: boolean;
+    enableAfterMs?: number; contentDesc?: string;
+  } = {},
 ) {
   const state = { checked, clicks: 0, enabled: !opts.disabled };
   if (opts.enableAfterMs !== undefined) setTimeout(() => { state.enabled = true; }, opts.enableAfterMs);
   const el: any = {
     elementId: 'android-control',
-    getTagName: async () => className,
+    getTagName: async () => opts.contentDesc ?? null,
     getAttribute: async (name: string) => {
+      if (name === 'class' || name === 'className') return className;
+      if (name === 'content-desc') return opts.contentDesc ?? 'null';
       if (name === 'checked') return String(state.checked);
       if (name === 'selected') return 'false';
-      if (name === 'checkable') return opts.checkable ?? 'true';
+      // A real device answers the string "null" for an attribute it lacks.
+      if (name === 'checkable') return 'checkable' in opts ? (opts.checkable ?? 'null') : 'true';
       if (name === 'enabled') return String(state.enabled);
-      return null;
+      return 'null';
     },
     isSelected: async () => false,
     isEnabled: async () => state.enabled,
@@ -196,7 +205,7 @@ test.describe('PlatformElement checked state on android', () => {
   });
 
   test('uncheck() on a checked radio button fails at once without clicking it', async () => {
-    const { el, state } = androidControl('android.widget.RadioButton', true, { radio: true });
+    const { el, state } = androidControl('android.widget.RadioButton', true, { radio: true, contentDesc: 'radio-yes' });
     const element = new PlatformElement(driverFor(el), '~radio-yes', undefined, 5000, { platform: 'android' });
     const start = Date.now();
     await expect(element.uncheck({ timeout: 3000 }))
@@ -204,6 +213,14 @@ test.describe('PlatformElement checked state on android', () => {
     expect(Date.now() - start).toBeLessThan(1000);
     expect(state.clicks).toBe(0);
     expect(state.checked).toBe(true);
+  });
+
+  test('a radio is recognised by its class attribute, not by getTagName (which is its content-desc)', async () => {
+    const { el, state } = androidControl('android.widget.RadioButton', true, { radio: true, contentDesc: 'radio-yes' });
+    expect(await el.getTagName()).toBe('radio-yes');
+    const element = new PlatformElement(driverFor(el), '~radio-yes', undefined, 5000, { platform: 'android' });
+    await expect(element.uncheck({ timeout: 300 })).rejects.toThrow('is a radio button');
+    expect(state.clicks).toBe(0);
   });
 
   test('uncheck() on an unchecked radio button does nothing', async () => {

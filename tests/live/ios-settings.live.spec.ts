@@ -180,7 +180,8 @@ test.describe.serial('live iOS Settings (read-only)', () => {
       } catch { /* the session is deleted regardless */ }
       finally {
         driver = undefined;
-        await d.deleteSession();
+        // Best effort: a session the server already dropped must not fail the run.
+        await d.deleteSession().catch(() => {});
       }
     }
   });

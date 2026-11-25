@@ -1,4 +1,5 @@
 import type { Platform } from '../enum/Platform';
+import { readElementClass } from './platformClass';
 
 /**
  * XCUITest element types that report their on/off state in `value`
@@ -33,12 +34,12 @@ export const IOS_VALUE_STATE_TYPES: ReadonlySet<string> = new Set([
  *
  * @param el - A raw WebdriverIO element.
  * @param platform - The element's platform, if known.
- * @param iosType - iOS only: the element type (`getTagName()`), when the
+ * @param iosType - iOS only: the element type ({@link readElementClass}), when the
  * caller has read it already; read here otherwise.
  */
 export async function readPlatformChecked(el: any, platform: Platform | undefined, iosType?: string): Promise<boolean> {
   if (platform === 'android') return (await el.getAttribute('checked')) === 'true';
-  if (platform === 'ios' && IOS_VALUE_STATE_TYPES.has(iosType ?? await el.getTagName())) {
+  if (platform === 'ios' && IOS_VALUE_STATE_TYPES.has(iosType ?? await readElementClass(el, platform))) {
     const value = String((await el.getAttribute('value')) ?? '').trim().toLowerCase();
     return value === '1' || value === 'true';
   }

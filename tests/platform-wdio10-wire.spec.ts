@@ -326,7 +326,7 @@ test.describe('multi-match selectors on WebdriverIO 10 (strict `$` by default)',
 
   test('a gesture on a missing element fails with "not found within N ms", not a malformed elementId', async () => {
     await expect(new PlatformElement(driver, `~${MISSING}`).longPress({ timeout: 300 }))
-      .rejects.toThrow(/^longPress: element "~missing" not found within 300 ms$/);
+      .rejects.toThrow(/^longPress: "~missing" not found within 300 ms$/);
     expect(server.requests.some(r => /\/rect$/.test(r.path) && !r.path.endsWith('/window/rect'))).toBe(false);
     expect(server.requests.some(r => r.path.endsWith('/actions'))).toBe(false);
   });

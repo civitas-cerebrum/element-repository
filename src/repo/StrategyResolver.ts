@@ -287,7 +287,7 @@ export class StrategyResolver {
    *
    * There is no lazy text filter in WebDriverIO, so the match is picked
    * eagerly: all matches of `selector` are fetched with `driver.$$`, each
-   one's text is read with the same rule as
+   * one's text is read with the same rule as
    * {@link PlatformElement.textContent} (see `readPlatformText`: on iOS the
    * `label`, else `value`; `value` first for text inputs; on Android
    * `getText()`, or for an element with no text of its own its
@@ -303,7 +303,9 @@ export class StrategyResolver {
    * title), or on Android a container without text of its own. A container
    * row costs 2 + K driver round trips (its own text, the descendant query,
    * one read per K text-bearing descendants) instead of one, and a selector
-   * matching a large container reads every text inside it. An exact (trimmed) match is preferred; otherwise the first
+   * matching a large container reads every text inside it.
+   *
+   * An exact (trimmed) match is preferred; otherwise the first
    * case-insensitive, whitespace-normalised "contains" match is taken.
    *
    * The returned element is bound to the chosen match for single-element

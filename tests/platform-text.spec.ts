@@ -297,8 +297,13 @@ function androidNode(node: AndroidNode, reads: string[] = []): any {
   return {
     elementId: node.id,
     getText: async () => { reads.push(`${node.id}:text`); return node.text; },
-    getAttribute: async (name: string) => (name === 'text' ? node.text : null),
-    getTagName: async () => 'android.widget.TwoLineListItem',
+    getAttribute: async (name: string) => {
+      if (name === 'text') return node.text;
+      if (name === 'class' || name === 'className') return 'android.widget.TwoLineListItem';
+      return 'null';
+    },
+    // UiAutomator2's tag name is the content-desc, or null without one.
+    getTagName: async () => null,
     isDisplayed: async () => true,
     isExisting: async () => true,
     waitForExist: async () => true,

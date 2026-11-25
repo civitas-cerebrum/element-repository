@@ -157,7 +157,7 @@ test.describe('gestures on a missing element', () => {
     ['pinch', (el: PlatformElement) => el.pinch({ timeout: 100 })],
     ['zoom', (el: PlatformElement) => el.zoom({ timeout: 100 })],
   ] as const) {
-    test(`${name} throws "${name}: element ... not found within N ms"`, async () => {
+    test(`${name} throws "${name}: "<selector>" not found within N ms"`, async () => {
       let rectCalls = 0;
       const driver: any = {
         // WebdriverIO resolves a missing element to an object without elementId.
@@ -166,7 +166,7 @@ test.describe('gestures on a missing element', () => {
         getWindowSize: async () => ({ width: 400, height: 800 }),
       };
       await expect(run(new PlatformElement(driver, '~gone'))).rejects.toThrow(
-        new RegExp(`^${name}: element "~gone" not found within 100 ms$`),
+        new RegExp(`^${name}: "~gone" not found within 100 ms$`),
       );
       expect(rectCalls).toBe(0);
     });
@@ -313,6 +313,43 @@ test.describe('polled element errors', () => {
       .rejects.toThrow(/^longPress: nth\(3\) of "~row" not found within 200 ms: nth\(3\): no element at that index for "~row" \(found 1\)$/);
     await expect(new PlatformElement(driver, '~row').nth(3).tapAt({ x: 1, y: 1 }, { timeout: 200 }))
       .rejects.toThrow(/^tapAt: nth\(3\) of "~row" not found within 200 ms/);
+  });
+
+  test('an element reached without a user index (first(), as the repository returns it) is named by its selector alone', async () => {
+    // WebdriverIO resolves a missing element to an object without elementId.
+    const driver: any = { $: async () => ({ elementId: undefined }), $$: async () => [], pause: async () => {} };
+    const child = new PlatformElement(driver, '~row', undefined, 200).first().locateChild('~label');
+    await expect(child.textContent())
+      .rejects.toThrow(/^textContent: "~label" inside "~row" not found within 200 ms: parent "~row" not found$/);
+    await expect(child.longPress({ timeout: 200 }))
+      .rejects.toThrow(/^longPress: "~label" inside "~row" not found within 200 ms: parent "~row" not found$/);
+  });
+
+  test('nth(0) under a parent that has no match reads "no element matches", without an index prefix', async () => {
+    const parent: any = { elementId: 'p', $$: async () => [] };
+    const driver: any = { $: async () => parent, $$: async () => [parent], pause: async () => {} };
+    const child = new PlatformElement(driver, '~list', undefined, 200).locateChild('~label').nth(0);
+    await expect(child.textContent())
+      .rejects.toThrow(/^textContent: "~label" inside "~list" not found within 200 ms: no element matches "~label" inside "~list"$/);
+  });
+
+  test('an explicit non-zero or negative index keeps its prefix', async () => {
+    const driver: any = { $$: async () => [], pause: async () => {} };
+    await expect(new PlatformElement(driver, '~row', undefined, 200).nth(-2).textContent())
+      .rejects.toThrow(/^textContent: nth\(-2\) of "~row" not found within 200 ms: /);
+  });
+
+  test('a read or gesture on an element that matches nothing omits "within N ms"', async () => {
+    const driver: any = { $$: async () => [row('a'), row('b')], pause: async () => {} };
+    const none = new PlatformElement(driver, '~row', undefined, 30_000).nth(1).nth(2) as PlatformElement;
+    const start = Date.now();
+    await expect(none.textContent()).rejects.toThrow(
+      /^textContent: nth\(2\) of "~row" not found: nth\(2\): "~row" is already a single match, so this index matches nothing$/,
+    );
+    await expect(none.longPress()).rejects.toThrow(
+      /^longPress: nth\(2\) of "~row" not found: nth\(2\): "~row" is already a single match, so this index matches nothing$/,
+    );
+    expect(Date.now() - start).toBeLessThan(2000);
   });
 
   test('count() and isVisible() rethrow a fatal driver error on an indexed element', async () => {

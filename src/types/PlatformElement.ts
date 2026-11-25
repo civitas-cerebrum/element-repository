@@ -10,6 +10,7 @@ import type { Platform } from '../enum/Platform';
 import { SWIPE_SETTLE_MS, TouchAction, performTouchActions, performTouchSwipe, touchPointers } from '../utils/touch';
 import { detectDriverPlatform, readPlatformText } from '../utils/platformText';
 import { readPlatformChecked } from '../utils/platformChecked';
+import { readElementClass } from '../utils/platformClass';
 
 /** Extra construction options for {@link PlatformElement}. */
 export interface PlatformElementOptions {
@@ -165,9 +166,22 @@ export class PlatformElement implements Element {
     return (await this.searchContext()).$(this.selector, { strict: false });
   }
 
-  /** How errors name this element: `nth(i) of "<selector>"`, plus its parent. */
+  /**
+   * True when this element was given an index other than the first match:
+   * only then do errors name the index. The repository hands out
+   * `first()` (index 0) for a plain lookup, which is the same element as
+   * the unindexed one, so it is named by its selector alone.
+   */
+  private get indexed(): boolean {
+    return this.index !== undefined && this.index !== 0;
+  }
+
+  /**
+   * How errors name this element: `"<selector>"`, or `nth(i) of "<selector>"`
+   * for an index other than 0 (see {@link indexed}), plus its parent.
+   */
   private describe(): string {
-    const own = this.index === undefined ? `"${this.selector}"` : `nth(${this.index}) of "${this.selector}"`;
+    const own = this.indexed ? `nth(${this.index}) of "${this.selector}"` : `"${this.selector}"`;
     return this.parent ? `${own} inside ${this.parent.describe()}` : own;
   }
 
@@ -185,7 +199,7 @@ export class PlatformElement implements Element {
     const index = this.index ?? 0;
     const i = index < 0 ? raws.length + index : index;
     if (i >= 0 && i < raws.length) return raws[i];
-    if (this.index === undefined) throw new NoMatchError(`no element matches ${this.describe()}`);
+    if (!this.indexed) throw new NoMatchError(`no element matches ${this.describe()}`);
     throw new NoMatchError(`nth(${index}): no element at that index for "${this.selector}" (found ${raws.length})`);
   }
 
@@ -266,8 +280,10 @@ export class PlatformElement implements Element {
    * Waits for the underlying Appium element to exist before any action fires.
    * Gives each action a predictable presence-detection preamble so failures
    * surface as "element never attached" rather than an opaque driver error.
-   * With `method` (a gesture), a polled element that never appears fails
-   * with `<method>: <element> not found within N ms: <reason>`.
+   * With `method` (a gesture or a read), a polled element that never
+   * appears fails with `<method>: <element> not found within N ms: <reason>`;
+   * an element that matches nothing (see {@link nth}) fails at once with
+   * `<method>: <element> not found: <reason>`, as no wait could find it.
    */
   private async ensureAttached(timeout?: number, method?: string): Promise<any> {
     if (this.polled) {
@@ -284,7 +300,8 @@ export class PlatformElement implements Element {
       } catch (err) {
         const notFound = err instanceof NoMatchError || (err as { cause?: unknown })?.cause instanceof NoMatchError;
         if (method && notFound) {
-          throw new Error(`${method}: ${this.describe()} not found within ${ms} ms: ${errorText(err)}`, { cause: err });
+          const within = this.matchesNothing ? '' : ` within ${ms} ms`;
+          throw new Error(`${method}: ${this.describe()} not found${within}: ${errorText(err)}`, { cause: err });
         }
         throw toPublicError(err);
       }
@@ -362,24 +379,26 @@ export class PlatformElement implements Element {
   /**
    * Shared body of {@link check} / {@link uncheck}: click only when the
    * state differs and the element can take the click, then confirm the
-   * new state. On iOS the element type is read once per call.
+   * new state. On iOS the element type is read once per call; on Android
+   * the class is read (see {@link readElementClass}) only for `uncheck()`.
    */
   private async setChecked(wanted: boolean, method: string, timeout?: number): Promise<Element> {
     const ms = timeout ?? this.defaultTimeout ?? 30000;
     const deadline = Date.now() + ms;
     const el = await this.ensureAttached(ms);
     const platform = this.resolvePlatform();
-    const iosType: string | undefined = platform === 'ios' ? await el.getTagName() : undefined;
+    const iosType: string | undefined = platform === 'ios' ? await readElementClass(el, platform) : undefined;
     const isWanted = async () => (await readPlatformChecked(el, platform, iosType)) === wanted;
     if (await isWanted()) return this;
     if (platform === 'android') {
-      // An attribute the driver cannot read is unknown, not a refusal.
-      const [checkable, tag] = await Promise.all([
+      // An attribute the driver cannot read, or reports missing ("null"), is
+      // unknown, not a refusal: only checkable "false" refuses.
+      const [checkable, cls] = await Promise.all([
         el.getAttribute('checkable').catch(() => null),
-        wanted ? null : el.getTagName().catch(() => null),
+        wanted ? null : readElementClass(el, platform).catch(() => null),
       ]);
       if (checkable === 'false') throw new Error(`${method}: ${this.describe()} is not checkable`);
-      if (tag === PlatformElement.ANDROID_RADIO_CLASS) {
+      if (cls === PlatformElement.ANDROID_RADIO_CLASS) {
         throw new Error(`${method}: ${this.describe()} is a radio button; select another option instead`);
       }
     }
@@ -604,7 +623,7 @@ export class PlatformElement implements Element {
     // rect command a missing id.
     if (!el?.elementId && !this.resolvedElement) el = await this.findOne().catch(() => null);
     if (!el?.elementId) {
-      throw new Error(`${method}: element "${this.selector}" not found within ${timeout ?? this.defaultTimeout ?? 30000} ms`);
+      throw new Error(`${method}: ${this.describe()} not found within ${timeout ?? this.defaultTimeout ?? 30000} ms`);
     }
     let rect: { x: number; y: number; width: number; height: number } | null;
     try {
@@ -796,7 +815,8 @@ export class PlatformElement implements Element {
    * (see {@link polled}) has no lazy element, so it polls `$$` for its
    * match up to the element's default timeout, as an action does. With
    * `method`, a polled element that never appears fails with
-   * `<method>: <element> not found within N ms: <reason>`.
+   * `<method>: <element> not found within N ms: <reason>` (without
+   * `within N ms` for an element that matches nothing).
    */
   private async readTarget(method?: string): Promise<any> {
     return this.polled ? this.ensureAttached(undefined, method) : this.findOne();
@@ -915,12 +935,15 @@ export class PlatformElement implements Element {
   }
 
   /**
-   * The element's tag name (on native contexts, the element class such as
-   * `XCUIElementTypeButton`). Like the web element, a missing element is an
-   * error, not an empty string.
+   * The element's tag name: on native contexts, the element class, read
+   * with {@link readElementClass}. On iOS that is the XCUIElementType
+   * (`XCUIElementTypeButton`); on Android the `class` attribute
+   * (`android.widget.Button`), not UiAutomator2's own tag name, which is
+   * the content-desc when one is set. Like the web element, a missing
+   * element is an error, not an empty string.
    */
   async getTagName(): Promise<string> {
-    return this.read('getTagName', el => el.getTagName());
+    return this.read('getTagName', el => readElementClass(el, this.resolvePlatform()));
   }
 
   async exists(): Promise<boolean> {

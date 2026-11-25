@@ -178,9 +178,10 @@ test.describe('android-testapp pages file (offline)', () => {
     expect(() => checkCapabilities({ ...example, browserName: 'Chrome' })).toThrow(/must not have "browserName"/);
   });
 
-  test('the alert dialog entries use the platform ids of another package', () => {
+  test('the alert dialog entries: the title id is the app package, message and button are android ids', () => {
     const repo = new ElementRepository({}, PAGES, { platform: 'android' });
-    expect(repo.getSelector('dialogTitle', 'Alerts')).toBe('id=android:id/alertTitle');
+    // AppCompat's title lives in the app's own package; message and button in android's.
+    expect(repo.getSelector('dialogTitle', 'Alerts')).toBe(`id=${APP_PACKAGE}:id/alertTitle`);
     expect(repo.getSelector('dialogMessage', 'Alerts')).toBe('id=android:id/message');
     expect(repo.getSelector('dialogOk', 'Alerts')).toBe('id=android:id/button1');
   });
@@ -253,7 +254,8 @@ test.describe('live Android test app', () => {
     if (driver) {
       const d = driver;
       driver = undefined;
-      await d.deleteSession();
+      // Best effort: a session the server already dropped must not fail the run.
+      await d.deleteSession().catch(() => {});
     }
   });
 
@@ -425,7 +427,8 @@ test.describe('live Android test app', () => {
       // then throws without clicking it.
       const err = await no.check({ timeout: 3_000 }).then(() => null, (e: unknown) => e);
       expect(err).toBeInstanceOf(Error);
-      expect((err as Error).message).toMatch(/^check: ".*radio-no.*" is disabled$/);
+      // A plain repository element is named by its selector alone.
+      expect((err as Error).message).toBe(`check: "${repo.getSelector('no', 'Radio')}" is disabled`);
       expect(await no.isChecked()).toBe(false);
       // No other option was selected by a stray click.
       for (const name of ['yes', 'impressive']) {
@@ -441,7 +444,7 @@ test.describe('live Android test app', () => {
       const err = await group.check({ timeout: 10_000 }).then(() => null, (e: unknown) => e);
       const elapsed = Date.now() - started;
       expect(err).toBeInstanceOf(Error);
-      expect((err as Error).message).toMatch(/^check: ".*radio_group.*" is not checkable$/);
+      expect((err as Error).message).toBe(`check: "${repo.getSelector('group', 'Radio')}" is not checkable`);
       expect(elapsed).toBeLessThan(2_000);
       for (const name of ['yes', 'impressive', 'no']) {
         expect(await (await get(name, 'Radio')).isChecked(), name).toBe(false);
@@ -459,7 +462,7 @@ test.describe('live Android test app', () => {
       const elapsed = Date.now() - started;
       expect(err).toBeInstanceOf(Error);
       expect((err as Error).message)
-        .toMatch(/^uncheck: ".*radio-yes.*" is a radio button; select another option instead$/);
+        .toBe(`uncheck: "${repo.getSelector('yes', 'Radio')}" is a radio button; select another option instead`);
       expect(elapsed).toBeLessThan(2_000);
       expect(await yes.isChecked()).toBe(true);
     });
@@ -637,7 +640,7 @@ test.describe('live Android test app', () => {
 
       await expect.poll(async () => (await get('status', 'Alerts', { timeout: 2_000 })).textContent().catch(() => null), {
         timeout: 15_000,
-      }).toBe('Status: Info shown');
+      }).toBe('Status: Info dismissed');
       await expectAppInForeground();
     });
   });
