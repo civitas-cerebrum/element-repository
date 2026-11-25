@@ -31,11 +31,12 @@
  *
  * The checked-state tests check that `isChecked()` / `check()` / `uncheck()`
  * follow the control's `checked` state (not `selected`), that `check()`
- * confirms the state after its click (a disabled radio button stays
- * unchecked, so `check()` on it throws), and that `uncheck()` refuses a
- * checked radio button. The list-row tests check that a container's
- * `textContent()`, the TEXT strategy and `getByText` use the text of its
- * descendants when its own text is empty.
+ * refuses a disabled radio button without clicking it, that `uncheck()`
+ * refuses a checked radio button at once, and that `check()` refuses a
+ * control that is not checkable. The list-row tests check that a
+ * container's `textContent()`, the TEXT strategy and `getByText` use the
+ * text of its descendants when its own text is empty, and leave out the
+ * hint an empty search field shows.
  */
 import { test, expect } from '@playwright/test';
 import * as fs from 'fs';
@@ -417,12 +418,34 @@ test.describe('live Android test app', () => {
       expect(await yes.isChecked()).toBe(false);
     });
 
-    test('check() on the disabled radio button throws and leaves it unchecked', async () => {
+    test('check() on the disabled radio button throws "is disabled" and leaves it unchecked', async () => {
       const no = await get('no', 'Radio');
       expect(await no.isEnabled()).toBe(false);
-      await expect(no.check({ timeout: 3_000 }))
-        .rejects.toThrow(/check: .*radio-no.*is still unchecked after clicking/);
+      // check() waits up to its timeout for the control to become enabled,
+      // then throws without clicking it.
+      const err = await no.check({ timeout: 3_000 }).then(() => null, (e: unknown) => e);
+      expect(err).toBeInstanceOf(Error);
+      expect((err as Error).message).toMatch(/^check: ".*radio-no.*" is disabled$/);
       expect(await no.isChecked()).toBe(false);
+      // No other option was selected by a stray click.
+      for (const name of ['yes', 'impressive']) {
+        expect(await (await get(name, 'Radio')).isChecked(), name).toBe(false);
+      }
+    });
+
+    test('check() on a control that is not checkable throws "is not checkable" at once', async () => {
+      // The RadioGroup holding the buttons has checkable="false".
+      const group = await get('group', 'Radio');
+      expect(await group.getAttribute('checkable')).toBe('false');
+      const started = Date.now();
+      const err = await group.check({ timeout: 10_000 }).then(() => null, (e: unknown) => e);
+      const elapsed = Date.now() - started;
+      expect(err).toBeInstanceOf(Error);
+      expect((err as Error).message).toMatch(/^check: ".*radio_group.*" is not checkable$/);
+      expect(elapsed).toBeLessThan(2_000);
+      for (const name of ['yes', 'impressive', 'no']) {
+        expect(await (await get(name, 'Radio')).isChecked(), name).toBe(false);
+      }
     });
 
     test('uncheck() on a checked radio button throws and leaves it checked', async () => {
@@ -430,11 +453,14 @@ test.describe('live Android test app', () => {
       await yes.check();
       await expect.poll(() => yes.isChecked(), { timeout: 10_000 }).toBe(true);
       // Clicking a checked radio button does not uncheck it, so uncheck()
-      // cannot succeed; the message names the method and the element.
-      const err = await yes.uncheck({ timeout: 3_000 }).then(() => null, (e: unknown) => e);
+      // refuses at once, without waiting out its timeout.
+      const started = Date.now();
+      const err = await yes.uncheck({ timeout: 10_000 }).then(() => null, (e: unknown) => e);
+      const elapsed = Date.now() - started;
       expect(err).toBeInstanceOf(Error);
-      expect((err as Error).message).toMatch(/uncheck/);
-      expect((err as Error).message).toContain('radio-yes');
+      expect((err as Error).message)
+        .toMatch(/^uncheck: ".*radio-yes.*" is a radio button; select another option instead$/);
+      expect(elapsed).toBeLessThan(2_000);
       expect(await yes.isChecked()).toBe(true);
     });
   });
@@ -473,6 +499,19 @@ test.describe('live Android test app', () => {
       expect(byText).not.toBeNull();
       expect(await byText!.getAttribute('content-desc')).toBe('long-list-item-4');
       expect(await byText!.boundingBox()).not.toBeNull();
+    });
+
+    test('a container holding the empty search field does not read its hint as text', async () => {
+      // The empty EditText shows its hint as `text` with showing-hint="true";
+      // the hint is not text the field holds, so the LinearLayout around it
+      // has no text, and the field's input value is empty.
+      const search = await get('search', 'LongList');
+      expect(await search.getAttribute('text')).toBe('Search by name or category...');
+      expect(await search.inputValue()).toBe('');
+      const searchRow = await get('searchRow', 'LongList');
+      const text = (await searchRow.textContent()) ?? '';
+      expect(text).not.toContain('Search by name or category');
+      expect(text).toBe('');
     });
 
     test('locateChild finds the title TextView of a row', async () => {

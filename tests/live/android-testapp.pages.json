@@ -53,7 +53,8 @@
         { "elementName": "yes", "selector": { "accessibility id": "radio-yes" } },
         { "elementName": "impressive", "selector": { "id": "radio_impressive" } },
         { "elementName": "no", "selector": { "uiautomator": "new UiSelector().description(\"radio-no\")" } },
-        { "elementName": "buttons", "selector": { "class name": "android.widget.RadioButton" }, "list": true }
+        { "elementName": "buttons", "selector": { "class name": "android.widget.RadioButton" }, "list": true },
+        { "elementName": "group", "selector": { "id": "radio_group" } }
       ]
     },
     {
@@ -61,6 +62,8 @@
       "platform": "android",
       "elements": [
         { "elementName": "recycler", "selector": { "id": "long_list_recycler" } },
+        { "elementName": "search", "selector": { "accessibility id": "long-list-search" } },
+        { "elementName": "searchRow", "selector": { "xpath": "//android.widget.LinearLayout[android.widget.EditText[@content-desc='long-list-search']]" } },
         { "elementName": "count", "selector": { "accessibility id": "long-list-count" } },
         { "elementName": "item1", "selector": { "accessibility id": "long-list-item-1" } },
         { "elementName": "item40", "selector": { "accessibility id": "long-list-item-40" } },
