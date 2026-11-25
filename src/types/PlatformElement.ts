@@ -887,6 +887,10 @@ export class PlatformElement implements Element {
    *
    * On Android a missing attribute returns `null`: UiAutomator2 answers it
    * with the string `"null"`, which is mapped (see {@link androidAttribute}).
+   * An attribute whose real value is the text `null` is indistinguishable
+   * from a missing one (UiAutomator2 sends the same string), so it also
+   * reads as `null`; `inputValue()` still returns `"null"` for a field
+   * holding that text.
    */
   async getAttribute(name: string): Promise<string | null> {
     if (this.isAndroid()) return this.read('getAttribute', async el => androidAttribute(await el.getAttribute(name)));
