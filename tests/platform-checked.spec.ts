@@ -1,0 +1,228 @@
+import { test, expect } from '@playwright/test';
+import { PlatformElement } from '../src/types';
+import { readPlatformChecked } from '../src/utils/platformChecked';
+
+// ---------------------------------------------------------------------------
+// Mocks shaped like the real drivers
+// ---------------------------------------------------------------------------
+
+/**
+ * A UiAutomator2 CheckBox / Switch / RadioButton. Its state is the `checked`
+ * attribute; `selected` stays "false" whatever the state, as on a real
+ * device. A click toggles it, except that a checked radio button stays
+ * checked.
+ */
+function androidControl(className: string, checked: boolean, opts: { radio?: boolean; ignoresClicks?: boolean; flipAfterMs?: number } = {}) {
+  const state = { checked, clicks: 0 };
+  const el: any = {
+    elementId: 'android-control',
+    getTagName: async () => className,
+    getAttribute: async (name: string) => {
+      if (name === 'checked') return String(state.checked);
+      if (name === 'selected') return 'false';
+      if (name === 'checkable') return 'true';
+      return null;
+    },
+    isSelected: async () => false,
+    click: async () => {
+      state.clicks++;
+      if (opts.ignoresClicks) return;
+      const next = opts.radio ? true : !state.checked;
+      if (opts.flipAfterMs) setTimeout(() => { state.checked = next; }, opts.flipAfterMs);
+      else state.checked = next;
+    },
+    isDisplayed: async () => true,
+    waitForExist: async () => true,
+  };
+  return { el, state };
+}
+
+/**
+ * An XCUITest element. A switch reports its state as `value` "1" / "0" and
+ * is never `selected`; any other type (a segment, a tab, a button) reports
+ * `selected`. A click toggles the state.
+ */
+function iosControl(type: string, on: boolean) {
+  const isSwitch = type === 'XCUIElementTypeSwitch' || type === 'XCUIElementTypeToggle';
+  const state = { on, clicks: 0 };
+  const el: any = {
+    elementId: 'ios-control',
+    getTagName: async () => type,
+    getAttribute: async (name: string) => {
+      if (name === 'type') return type;
+      // A non-switch row can carry a value of its own (a badge count), which
+      // says nothing about its state.
+      if (name === 'value') return isSwitch ? (state.on ? '1' : '0') : '1';
+      if (name === 'selected') return String(!isSwitch && state.on);
+      return null;
+    },
+    isSelected: async () => !isSwitch && state.on,
+    click: async () => { state.clicks++; state.on = !state.on; },
+    isDisplayed: async () => true,
+    waitForExist: async () => true,
+  };
+  return { el, state };
+}
+
+function driverFor(el: any, capabilities: Record<string, unknown> = {}): any {
+  return { capabilities, $: async () => el, $$: async () => [el], pause: async () => {} };
+}
+
+// ---------------------------------------------------------------------------
+// The rule
+// ---------------------------------------------------------------------------
+
+test.describe('readPlatformChecked', () => {
+  test('android: reads the checked attribute, not selected', async () => {
+    expect(await readPlatformChecked(androidControl('android.widget.Switch', true).el, 'android')).toBe(true);
+    expect(await readPlatformChecked(androidControl('android.widget.Switch', false).el, 'android')).toBe(false);
+  });
+
+  for (const type of ['XCUIElementTypeSwitch', 'XCUIElementTypeToggle']) {
+    test(`ios: a ${type} reads value "1" / "0"`, async () => {
+      expect(await readPlatformChecked(iosControl(type, true).el, 'ios')).toBe(true);
+      expect(await readPlatformChecked(iosControl(type, false).el, 'ios')).toBe(false);
+    });
+  }
+
+  test('ios: a switch whose value is "true" is checked; any other value is not', async () => {
+    const withValue = (value: string | null): any => ({
+      getTagName: async () => 'XCUIElementTypeSwitch',
+      getAttribute: async (name: string) => (name === 'value' ? value : null),
+      isSelected: async () => false,
+    });
+    expect(await readPlatformChecked(withValue('true'), 'ios')).toBe(true);
+    expect(await readPlatformChecked(withValue('false'), 'ios')).toBe(false);
+    expect(await readPlatformChecked(withValue(''), 'ios')).toBe(false);
+    expect(await readPlatformChecked(withValue(null), 'ios')).toBe(false);
+  });
+
+  test('ios: a button with value "1" that is not selected is not checked', async () => {
+    const { el } = iosControl('XCUIElementTypeButton', false);
+    expect(await el.getAttribute('value')).toBe('1');
+    expect(await readPlatformChecked(el, 'ios')).toBe(false);
+  });
+
+  test('ios: any other type reads selected', async () => {
+    expect(await readPlatformChecked(iosControl('XCUIElementTypeButton', true).el, 'ios')).toBe(true);
+    expect(await readPlatformChecked(iosControl('XCUIElementTypeButton', false).el, 'ios')).toBe(false);
+  });
+
+  test('unknown platform: WebdriverIO isSelected()', async () => {
+    const el: any = { isSelected: async () => true, getAttribute: async () => 'false' };
+    expect(await readPlatformChecked(el, undefined)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PlatformElement.isChecked / check / uncheck on Android
+// ---------------------------------------------------------------------------
+
+test.describe('PlatformElement checked state on android', () => {
+  test('isChecked is true for a switch that is on (checked="true", selected="false")', async () => {
+    const { el } = androidControl('android.widget.Switch', true);
+    const element = new PlatformElement(driverFor(el), '~toggle-on', undefined, 1000, { platform: 'android' });
+    expect(await element.isChecked()).toBe(true);
+  });
+
+  test('the platform can come from the driver capabilities', async () => {
+    const { el } = androidControl('android.widget.CheckBox', true);
+    const element = new PlatformElement(driverFor(el, { platformName: 'Android' }), '~checkbox-checked');
+    expect(await element.isChecked()).toBe(true);
+  });
+
+  test('check() on a checked switch does not click it', async () => {
+    const { el, state } = androidControl('android.widget.Switch', true);
+    await new PlatformElement(driverFor(el), '~toggle-on', undefined, 1000, { platform: 'android' }).check();
+    expect(state.clicks).toBe(0);
+    expect(state.checked).toBe(true);
+  });
+
+  test('check() on an unchecked checkbox clicks once and leaves it checked', async () => {
+    const { el, state } = androidControl('android.widget.CheckBox', false);
+    await new PlatformElement(driverFor(el), '~checkbox-unchecked', undefined, 1000, { platform: 'android' }).check();
+    expect(state.clicks).toBe(1);
+    expect(state.checked).toBe(true);
+  });
+
+  test('uncheck() on a checked switch clicks once and leaves it unchecked', async () => {
+    const { el, state } = androidControl('android.widget.Switch', true);
+    await new PlatformElement(driverFor(el), '~toggle-on', undefined, 1000, { platform: 'android' }).uncheck();
+    expect(state.clicks).toBe(1);
+    expect(state.checked).toBe(false);
+  });
+
+  test('uncheck() on an unchecked switch does not click it', async () => {
+    const { el, state } = androidControl('android.widget.Switch', false);
+    await new PlatformElement(driverFor(el), '~toggle-off', undefined, 1000, { platform: 'android' }).uncheck();
+    expect(state.clicks).toBe(0);
+  });
+
+  test('check() on a radio button clicks once and leaves it checked', async () => {
+    const { el, state } = androidControl('android.widget.RadioButton', false, { radio: true });
+    await new PlatformElement(driverFor(el), '~radio-yes', undefined, 1000, { platform: 'android' }).check();
+    expect(state.clicks).toBe(1);
+    expect(state.checked).toBe(true);
+  });
+
+  test('check() waits for a state change that lands after the click', async () => {
+    const { el, state } = androidControl('android.widget.Switch', false, { flipAfterMs: 300 });
+    await new PlatformElement(driverFor(el), '~toggle-off', undefined, 2000, { platform: 'android' }).check();
+    expect(state.clicks).toBe(1);
+    expect(state.checked).toBe(true);
+  });
+
+  test('check() throws when the control is still unchecked after the click', async () => {
+    const { el, state } = androidControl('android.widget.Switch', false, { ignoresClicks: true });
+    const element = new PlatformElement(driverFor(el), '~toggle-disabled', undefined, 5000, { platform: 'android' });
+    await expect(element.check({ timeout: 300 }))
+      .rejects.toThrow('check: "~toggle-disabled" is still unchecked after clicking');
+    expect(state.clicks).toBe(1);
+  });
+
+  test('uncheck() on a checked radio button throws: clicking a radio does not uncheck it', async () => {
+    const { el, state } = androidControl('android.widget.RadioButton', true, { radio: true });
+    const element = new PlatformElement(driverFor(el), '~radio-yes', undefined, 5000, { platform: 'android' });
+    await expect(element.uncheck({ timeout: 300 }))
+      .rejects.toThrow('uncheck: "~radio-yes" is still checked after clicking');
+    expect(state.clicks).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PlatformElement.isChecked / check / uncheck on iOS
+// ---------------------------------------------------------------------------
+
+test.describe('PlatformElement checked state on ios', () => {
+  test('isChecked reads a switch value', async () => {
+    const on = new PlatformElement(driverFor(iosControl('XCUIElementTypeSwitch', true).el), '~wifi', undefined, 1000, { platform: 'ios' });
+    const off = new PlatformElement(driverFor(iosControl('XCUIElementTypeSwitch', false).el), '~wifi', undefined, 1000, { platform: 'ios' });
+    expect(await on.isChecked()).toBe(true);
+    expect(await off.isChecked()).toBe(false);
+  });
+
+  test('check() on a switch that is on does not click it; uncheck() turns it off', async () => {
+    const { el, state } = iosControl('XCUIElementTypeSwitch', true);
+    const element = new PlatformElement(driverFor(el), '~wifi', undefined, 1000, { platform: 'ios' });
+    await element.check();
+    expect(state.clicks).toBe(0);
+    await element.uncheck();
+    expect(state.clicks).toBe(1);
+    expect(state.on).toBe(false);
+  });
+
+  test('check() on a switch that is off turns it on', async () => {
+    const { el, state } = iosControl('XCUIElementTypeSwitch', false);
+    await new PlatformElement(driverFor(el, { platformName: 'iOS' }), '~wifi', undefined, 1000).check();
+    expect(state.clicks).toBe(1);
+    expect(state.on).toBe(true);
+  });
+
+  test('a selected button reads as checked', async () => {
+    const { el, state } = iosControl('XCUIElementTypeButton', true);
+    const element = new PlatformElement(driverFor(el), '~segment', undefined, 1000, { platform: 'ios' });
+    expect(await element.isChecked()).toBe(true);
+    await element.check();
+    expect(state.clicks).toBe(0);
+  });
+});

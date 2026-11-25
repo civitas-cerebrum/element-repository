@@ -419,11 +419,12 @@ test.describe('PlatformElement interaction methods', () => {
     expect(called).toBe(true);
   });
 
-  test('check clicks when not selected', async () => {
+  test('check clicks when not selected (platform unknown: isSelected)', async () => {
     let clicked = false;
+    let selected = false;
     const mockEl = createMockWdioElement({
-      isSelected: async () => false,
-      click: async () => { clicked = true; },
+      isSelected: async () => selected,
+      click: async () => { clicked = true; selected = !selected; },
     });
     const driver = { ...createMockDriver(), $: async () => mockEl };
     const el = new PlatformElement(driver, '~button');
@@ -443,11 +444,12 @@ test.describe('PlatformElement interaction methods', () => {
     expect(clicked).toBe(false);
   });
 
-  test('uncheck clicks when selected', async () => {
+  test('uncheck clicks when selected (platform unknown: isSelected)', async () => {
     let clicked = false;
+    let selected = true;
     const mockEl = createMockWdioElement({
-      isSelected: async () => true,
-      click: async () => { clicked = true; },
+      isSelected: async () => selected,
+      click: async () => { clicked = true; selected = !selected; },
     });
     const driver = { ...createMockDriver(), $: async () => mockEl };
     const el = new PlatformElement(driver, '~button');
@@ -882,7 +884,7 @@ test.describe('PlatformElement state methods', () => {
     expect(await el.isEnabled()).toBe(true);
   });
 
-  test('isChecked returns element.isSelected result', async () => {
+  test('isChecked returns element.isSelected result when the platform is unknown', async () => {
     const mockEl = createMockWdioElement({ isSelected: async () => true });
     const driver = { ...createMockDriver(), $: async () => mockEl };
     const el = new PlatformElement(driver, '~button');

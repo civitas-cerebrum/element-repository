@@ -9,6 +9,7 @@ import { isFatalDriverError } from '../utils/driverErrors';
 import type { Platform } from '../enum/Platform';
 import { SWIPE_SETTLE_MS, TouchAction, performTouchActions, performTouchSwipe, touchPointers } from '../utils/touch';
 import { detectDriverPlatform, readPlatformText } from '../utils/platformText';
+import { readPlatformChecked } from '../utils/platformChecked';
 
 /** Extra construction options for {@link PlatformElement}. */
 export interface PlatformElementOptions {
@@ -320,15 +321,45 @@ export class PlatformElement implements Element {
     return this;
   }
 
+  /**
+   * {@inheritDoc Element.check}
+   *
+   * Platform: the state is read with the platform rule of
+   * {@link isChecked}. An element that is already checked is not clicked.
+   * Otherwise it is clicked once, then the state is polled until it reads
+   * checked, within the same `timeout` as the whole action (measured from
+   * its start; at least one read after the click). If it still reads
+   * unchecked, throws `check: <element> is still unchecked after clicking`.
+   */
   async check(options?: ElementActionOptions): Promise<Element> {
-    const el = await this.ensureAttached(options?.timeout);
-    if (!(await el.isSelected())) await el.click();
-    return this;
+    return this.setChecked(true, 'check', options?.timeout);
   }
 
+  /**
+   * {@inheritDoc Element.uncheck}
+   *
+   * Platform: as {@link check}, the other way round. A checked radio button
+   * cannot be unchecked by clicking it, so `uncheck()` on one throws
+   * `uncheck: <element> is still checked after clicking`.
+   */
   async uncheck(options?: ElementActionOptions): Promise<Element> {
-    const el = await this.ensureAttached(options?.timeout);
-    if (await el.isSelected()) await el.click();
+    return this.setChecked(false, 'uncheck', options?.timeout);
+  }
+
+  /** Shared body of {@link check} / {@link uncheck}: click only when the state differs, then confirm it. */
+  private async setChecked(wanted: boolean, method: string, timeout?: number): Promise<Element> {
+    const ms = timeout ?? this.defaultTimeout ?? 30000;
+    const deadline = Date.now() + ms;
+    const el = await this.ensureAttached(ms);
+    const platform = this.resolvePlatform();
+    if ((await readPlatformChecked(el, platform)) === wanted) return this;
+    await el.click();
+    const still = wanted ? 'unchecked' : 'checked';
+    await this.pollUntil(
+      async () => (await readPlatformChecked(el, platform)) === wanted,
+      Math.max(0, deadline - Date.now()),
+      () => new Error(`${method}: ${this.describe()} is still ${still} after clicking`),
+    );
     return this;
   }
 
@@ -743,7 +774,14 @@ export class PlatformElement implements Element {
     return (await this.findOne()).isDisplayed();
   }
   async isEnabled(): Promise<boolean> { return (await this.readTarget()).isEnabled(); }
-  async isChecked(): Promise<boolean> { return (await this.readTarget()).isSelected(); }
+  /**
+   * {@inheritDoc Element.isChecked}
+   *
+   * Platform: Android reads the `checked` attribute; iOS reads `value`
+   * ("1" = on) for a switch and `selected` for any other type; other
+   * platforms use WebdriverIO `isSelected()`. See {@link readPlatformChecked}.
+   */
+  async isChecked(): Promise<boolean> { return readPlatformChecked(await this.readTarget(), this.resolvePlatform()); }
 
   // ── Extraction ───────────────────────────────────────────────
 
