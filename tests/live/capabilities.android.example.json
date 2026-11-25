@@ -1,0 +1,10 @@
+{
+  "platformName": "Android",
+  "appium:automationName": "UiAutomator2",
+  "appium:udid": "<device-udid>",
+  "appium:appPackage": "com.civitas.testapp",
+  "appium:appActivity": "com.civitas.testapp.MainActivity",
+  "appium:noReset": true,
+  "appium:autoGrantPermissions": false,
+  "appium:newCommandTimeout": 300
+}
