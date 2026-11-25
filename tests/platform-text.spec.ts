@@ -27,6 +27,7 @@ function nativeElement(id: string, fields: NativeFields): any {
     isExisting: async () => true,
     waitForExist: async () => true,
     waitForDisplayed: async () => true,
+    $$: async () => [],
   };
 }
 
@@ -267,5 +268,140 @@ test.describe('platform text lookups stop reading early', () => {
     const el = await repo.getByText('rows', 'Settings', 'General', true);
     expect(reads.filter(r => r.endsWith(':label'))).toEqual(['wifi:label', 'general-tab:label', 'general:label']);
     expect(await el!.textContent()).toBe('General');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Android: a container with no text of its own reads its descendants' text
+// ---------------------------------------------------------------------------
+
+/** The relative XPath an Android container's descendants are read with. */
+const ANDROID_DESCENDANT_TEXT_XPATH = ".//*[@text!='']";
+
+interface AndroidNode {
+  id: string;
+  text: string;
+  children?: AndroidNode[];
+}
+
+/**
+ * A UiAutomator2 node: `getText()` is its own `text` attribute. `$$` with
+ * the descendant XPath returns its descendants that have a non-empty text,
+ * in document order (as the server evaluates it); each query and read is
+ * recorded in `reads`.
+ */
+function androidNode(node: AndroidNode, reads: string[] = []): any {
+  const descendants = (n: AndroidNode): AndroidNode[] => (n.children ?? []).flatMap(c => [c, ...descendants(c)]);
+  return {
+    elementId: node.id,
+    getText: async () => { reads.push(`${node.id}:text`); return node.text; },
+    getAttribute: async (name: string) => (name === 'text' ? node.text : null),
+    getTagName: async () => 'android.widget.TwoLineListItem',
+    isDisplayed: async () => true,
+    isExisting: async () => true,
+    waitForExist: async () => true,
+    waitForDisplayed: async () => true,
+    $$: async (selector: string) => {
+      reads.push(`${node.id}:$$ ${selector}`);
+      if (selector !== ANDROID_DESCENDANT_TEXT_XPATH) throw new Error(`unexpected selector ${selector}`);
+      return descendants(node).filter(d => d.text !== '').map(d => androidNode(d, reads));
+    },
+  };
+}
+
+/** A long-list row as UiAutomator2 reports it: `text=""` with two child TextViews. */
+function listRow(n: number, category: string): AndroidNode {
+  return {
+    id: `row${n}`,
+    text: '',
+    children: [
+      { id: `row${n}-title`, text: `Item ${n}` },
+      { id: `row${n}-category`, text: category },
+    ],
+  };
+}
+
+test.describe('readPlatformText on android containers', () => {
+  test('empty own text: the descendants\' text joined with single spaces, in document order', async () => {
+    expect(await readPlatformText(androidNode(listRow(1, 'Alpha')), 'android')).toBe('Item 1 Alpha');
+  });
+
+  test('costs one descendant query plus one read per text-bearing descendant', async () => {
+    const reads: string[] = [];
+    await readPlatformText(androidNode(listRow(1, 'Alpha'), reads), 'android');
+    expect(reads).toEqual([
+      'row1:text', `row1:$$ ${ANDROID_DESCENDANT_TEXT_XPATH}`, 'row1-title:text', 'row1-category:text',
+    ]);
+  });
+
+  test('own text wins and no descendant query is made', async () => {
+    const reads: string[] = [];
+    const node = { id: 'a', text: ' Wi-Fi ', children: [{ id: 'b', text: 'child' }] };
+    expect(await readPlatformText(androidNode(node, reads), 'android')).toBe(' Wi-Fi ');
+    expect(reads).toEqual(['a:text']);
+  });
+
+  test('whitespace-only own text also falls back', async () => {
+    const node = { id: 'a', text: '  ', children: [{ id: 'b', text: 'Shown' }] };
+    expect(await readPlatformText(androidNode(node), 'android')).toBe('Shown');
+  });
+
+  test('nested descendants keep document order; whitespace-only texts are skipped; parts are trimmed', async () => {
+    const node: AndroidNode = {
+      id: 'card', text: '',
+      children: [
+        { id: 'header', text: ' Title ', children: [{ id: 'badge', text: '3' }] },
+        { id: 'blank', text: '   ' },
+        { id: 'body', text: 'Body' },
+      ],
+    };
+    expect(await readPlatformText(androidNode(node), 'android')).toBe('Title 3 Body');
+  });
+
+  test('no descendant text: the own text is returned unchanged', async () => {
+    expect(await readPlatformText(androidNode({ id: 'a', text: '' }), 'android')).toBe('');
+    expect(await readPlatformText(androidNode({ id: 'a', text: '', children: [{ id: 'b', text: ' ' }] }), 'android')).toBe('');
+  });
+
+  test('unknown platforms do not query descendants', async () => {
+    const reads: string[] = [];
+    expect(await readPlatformText(androidNode(listRow(1, 'Alpha'), reads), undefined)).toBe('');
+    expect(reads).toEqual(['row1:text']);
+  });
+
+  test('PlatformElement.textContent and rawText read the joined text', async () => {
+    const driver = driverOf([androidNode(listRow(1, 'Alpha'))], { platformName: 'Android' });
+    const el = new PlatformElement(driver, '~long-list-item-1');
+    expect(await el.textContent()).toBe('Item 1 Alpha');
+    expect(await el.rawText()).toBe('Item 1 Alpha');
+  });
+});
+
+const ANDROID_PAGES = {
+  pages: [
+    {
+      name: 'LongList',
+      platform: 'android',
+      elements: [{ elementName: 'rows', selector: { xpath: "//*[starts-with(@content-desc, 'long-list-item-')]" } }],
+    },
+  ],
+};
+
+test.describe('platform text lookups on android containers', () => {
+  const rows = () => [androidNode(listRow(1, 'Alpha')), androidNode(listRow(2, 'Beta')), androidNode(listRow(3, 'Gamma'))];
+
+  test('the TEXT strategy matches a row by its descendants\' joined text', async () => {
+    const raws = rows();
+    const repo = new ElementRepository(driverOf(raws), ANDROID_PAGES, { platform: 'android', timeout: 500 });
+    const exact = await repo.get('rows', 'LongList', { strategy: SelectionStrategy.TEXT, value: 'Item 2 Beta' });
+    expect((exact as PlatformElement).resolvedElement).toBe(raws[1]);
+    const contains = await repo.get('rows', 'LongList', { strategy: SelectionStrategy.TEXT, value: 'gamma' });
+    expect((contains as PlatformElement).resolvedElement).toBe(raws[2]);
+  });
+
+  test('getByText matches a row by its descendants\' joined text', async () => {
+    const repo = new ElementRepository(driverOf(rows()), ANDROID_PAGES, { platform: 'android', timeout: 500 });
+    const el = await repo.getByText('rows', 'LongList', 'Item 3', true);
+    expect(await el!.textContent()).toBe('Item 3 Gamma');
   });
 });
