@@ -424,7 +424,25 @@ export class PlatformElement implements Element {
     return this;
   }
 
+  /**
+   * {@inheritDoc Element.doubleClick}
+   *
+   * Platform: on iOS, XCUITest's own double tap on the element
+   * (`mobile: doubleTap` with its `elementId`), which taps the element's
+   * hit point twice. WebdriverIO's `doubleClick()` sends the desktop
+   * sequence (a `mouse` pointer: move, down, up, pause 10 ms, down, up),
+   * which XCUITest takes as one tap. A missing element fails with
+   * `doubleClick: "<selector>" not found within N ms` before anything is
+   * sent. On Android (and every other platform) WebdriverIO's
+   * `doubleClick()` on the element centre is kept: UiAutomator2 takes it
+   * as two clicks.
+   */
   async doubleClick(options?: ElementActionOptions): Promise<Element> {
+    if (this.resolvePlatform() === 'ios') {
+      const el = await this.attachedWithId('doubleClick', options?.timeout);
+      await this.driver.execute('mobile: doubleTap', { elementId: el.elementId });
+      return this;
+    }
     const el = await this.ensureAttached(options?.timeout);
     await el.doubleClick();
     return this;
@@ -612,20 +630,29 @@ export class PlatformElement implements Element {
   }
 
   /**
+   * The attached raw element with its `elementId`, for a command that takes
+   * the id. WebdriverIO resolves a missing element to an object without an
+   * `elementId` and does not fill it in when the element appears later; it
+   * is looked up once more, and a still missing one fails with
+   * `<method>: <element> not found within N ms` rather than sending the
+   * command a missing id.
+   */
+  private async attachedWithId(method: string, timeout?: number): Promise<any> {
+    let el = await this.ensureAttached(timeout, method);
+    if (!el?.elementId && !this.resolvedElement) el = await this.findOne().catch(() => null);
+    if (!el?.elementId) {
+      throw new Error(`${method}: ${this.describe()} not found within ${timeout ?? this.defaultTimeout ?? 30000} ms`);
+    }
+    return el;
+  }
+
+  /**
    * Reads the element's rect for a gesture, throwing a clear error when the
    * driver has none (unlike swipe, a gesture aimed at the element must not
    * silently land somewhere else). The driver's error, if any, is appended.
    */
   private async gestureRect(method: string, timeout?: number): Promise<{ x: number; y: number; width: number; height: number }> {
-    let el = await this.ensureAttached(timeout, method);
-    // WebdriverIO resolves a missing element to an object without an
-    // `elementId` and does not fill it in when the element appears later;
-    // look it up once more, and report "not found" rather than sending the
-    // rect command a missing id.
-    if (!el?.elementId && !this.resolvedElement) el = await this.findOne().catch(() => null);
-    if (!el?.elementId) {
-      throw new Error(`${method}: ${this.describe()} not found within ${timeout ?? this.defaultTimeout ?? 30000} ms`);
-    }
+    const el = await this.attachedWithId(method, timeout);
     let rect: { x: number; y: number; width: number; height: number } | null;
     try {
       rect = await this.readRect(el);

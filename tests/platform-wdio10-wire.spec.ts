@@ -94,6 +94,8 @@ async function startFakeServer(): Promise<FakeServer> {
         value = 'rgb(1, 2, 3)';
       } else if (method === 'GET' && url === `${s}/element/${ELEMENT}/screenshot`) {
         value = Buffer.from('png-bytes').toString('base64');
+      } else if (method === 'POST' && url === `${s}/execute/sync` && body?.script === 'mobile: doubleTap') {
+        value = null;
       } else if ((method === 'POST' || method === 'DELETE') && url === `${s}/actions`) {
         value = null;
       } else if (method === 'DELETE' && url === s) {
@@ -262,6 +264,13 @@ test.describe('PlatformElement against a real WebdriverIO 10 session (fake WebDr
       `GET /element/${ELEMENT}/attribute/${UNKNOWN_ATTRIBUTE}`,
       `GET /element/${ELEMENT}/attribute/label`,
     ]);
+  });
+
+  test('doubleClick on iOS sends one `mobile: doubleTap` with the element id and no pointer actions', async () => {
+    await new PlatformElement(driver, '~x').doubleClick();
+    expect(wire()).toEqual([`POST /execute/sync`]);
+    const call = server.requests.find(r => r.path.endsWith('/execute/sync'))!;
+    expect(call.body).toEqual({ script: 'mobile: doubleTap', args: [{ elementId: ELEMENT }] });
   });
 
   test('getCssProperty sends GET /element/:id/css/:property', async () => {

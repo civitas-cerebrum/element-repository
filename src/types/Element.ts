@@ -170,7 +170,17 @@ export interface Element {
   /** Hovers over the element. */
   hover(options?: ElementActionOptions): Promise<Element>;
 
-  /** Double-clicks the element. */
+  /**
+   * Double-clicks the element.
+   *
+   * Contract on platform (Appium) elements: two taps on the element
+   * centre, close enough together to be one double tap (a 2-tap gesture
+   * recogniser fires; a plain button registers two taps). iOS sends
+   * XCUITest's own double tap on the element (`mobile: doubleTap`), which
+   * taps the element's hit point; Android sends WebdriverIO's double-click
+   * on the element centre, which UiAutomator2 takes as two clicks. Web:
+   * Playwright `dblclick`.
+   */
   doubleClick(options?: ElementActionOptions): Promise<Element>;
 
   /**

@@ -42,6 +42,8 @@ export async function browserCalls(): Promise<void> {
   const shown: boolean = await driver.isKeyboardShown();
   await driver.hideKeyboard();
   await driver.execute('mobile: hideKeyboard', { strategy: 'tapOutside' });
+  // XCUITest's double tap, used by doubleClick on iOS.
+  await driver.execute('mobile: doubleTap', { elementId: id });
   void shown;
 
   // Session facts read for the platform name.
