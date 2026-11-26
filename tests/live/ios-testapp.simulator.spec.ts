@@ -42,6 +42,7 @@ import { test, expect } from '@playwright/test';
 import * as fs from 'fs';
 import * as path from 'path';
 import { ElementRepository, Element, ScrollIntoViewOptions, isPlatform } from '../../src';
+import { flattenCapabilities } from './capabilities';
 
 const PAGES = path.join(__dirname, 'ios-testapp.pages.json');
 const BUNDLE_ID = 'com.civitas-cerebrum.test-app';
@@ -58,13 +59,6 @@ const CAPABILITIES = process.env.CAPABILITIES;
 const ENABLED = LIVE && !!APPIUM_URL && !!CAPABILITIES;
 const SKIP_REASON =
   'Live iOS simulator check: set LIVE_IOS_SIM=1, APPIUM_URL (server URL with base path) and CAPABILITIES (path to a W3C capabilities JSON file) to run it.';
-
-/**
- * scrollIntoView options with the optional sweep container. Typed here so
- * the spec states the option it relies on whatever the library's own
- * declaration of it looks like.
- */
-type ScrollOptions = ScrollIntoViewOptions & { container?: Element };
 
 // `webdriverio` is ESM; a real dynamic import (not rewritten to require by
 // the CommonJS transform).
@@ -95,37 +89,39 @@ function readCapabilities(file: string): Record<string, unknown> {
 /**
  * Checks the capabilities target the iOS test app on a simulator: platform
  * iOS, the test app's bundle id, at most the test app's simulator build to
- * install, no other app, no browser, no real-device UDID. Returns them
- * unchanged.
+ * install, no other app, no browser, no real-device UDID. Appium options
+ * are checked in every spelling (prefixed, in `appium:options`,
+ * unprefixed; see {@link flattenCapabilities}). Returns them unchanged.
  */
 function checkCapabilities(caps: Record<string, unknown>): Record<string, unknown> {
+  const flat = flattenCapabilities(caps);
   for (const refused of ['browserName', 'appium:otherApps']) {
-    if (refused in caps) {
+    if (refused in flat) {
       throw new Error(
         `CAPABILITIES file must not have "${refused}" (this spec drives the iOS test app on a simulator only: no other app, no browser).`,
       );
     }
   }
-  const platformName = caps.platformName;
+  const platformName = flat.platformName;
   if (typeof platformName !== 'string' || platformName.toLowerCase() !== 'ios') {
     throw new Error(`CAPABILITIES file must have platformName "iOS" for this spec, got ${JSON.stringify(platformName)}.`);
   }
-  const bundleId = caps['appium:bundleId'];
+  const bundleId = flat['appium:bundleId'];
   if (bundleId !== BUNDLE_ID) {
     throw new Error(
       `CAPABILITIES file must have "appium:bundleId": "${BUNDLE_ID}" (this spec drives the test app only), got ${JSON.stringify(bundleId)}.`,
     );
   }
-  if ('appium:app' in caps) {
-    const app = caps['appium:app'];
+  if ('appium:app' in flat) {
+    const app = flat['appium:app'];
     if (typeof app !== 'string' || !SIMULATOR_APP.test(app)) {
       throw new Error(
         `CAPABILITIES file may have "appium:app" only as the test app's simulator build (a path ending in .app or .app.zip), got ${JSON.stringify(app)}.`,
       );
     }
   }
-  if ('appium:udid' in caps) {
-    const udid = caps['appium:udid'];
+  if ('appium:udid' in flat) {
+    const udid = flat['appium:udid'];
     if (typeof udid !== 'string' || !SIMULATOR_UDID.test(udid)) {
       throw new Error('CAPABILITIES file "appium:udid" must be a simulator UDID (8-4-4-4-12 hex digits): this spec runs on a simulator only.');
     }
@@ -180,6 +176,23 @@ test.describe('ios-testapp pages file and simulator capabilities gate (offline)'
     expect(() => checkCapabilities({ ...example, 'appium:udid': '<device-udid>' })).toThrow(/simulator UDID/);
     const simulatorUdid = { ...example, 'appium:udid': '00000000-0000-0000-0000-000000000000' };
     expect(checkCapabilities(simulatorUdid)).toBe(simulatorUdid);
+  });
+
+  test('the capabilities gate checks options nested in appium:options and unprefixed ones too', () => {
+    const example = readCapabilities(path.join(__dirname, 'capabilities.ios-simulator.example.json'));
+    const { 'appium:bundleId': _bundleId, 'appium:app': _app, ...bare } = example;
+    expect(() => checkCapabilities({ ...example, 'appium:options': { udid: '<device-udid>' } })).toThrow(/simulator UDID/);
+    expect(() => checkCapabilities({ ...example, udid: '<device-udid>' })).toThrow(/simulator UDID/);
+    expect(() => checkCapabilities({ ...example, 'appium:options': { app: '/path/to/TestApp.ipa' } })).toThrow(/twice|simulator build/);
+    expect(() => checkCapabilities({ ...bare, app: '/path/to/TestApp.ipa', bundleId: BUNDLE_ID })).toThrow(/simulator build/);
+    expect(() => checkCapabilities({ ...example, 'appium:options': { otherApps: ['/path/to/Other.app'] } })).toThrow(/must not have "appium:otherApps"/);
+    expect(() => checkCapabilities({ ...example, otherApps: ['/path/to/Other.app'] })).toThrow(/must not have "appium:otherApps"/);
+    expect(() => checkCapabilities({ ...bare, 'appium:options': { bundleId: 'com.example.other' } })).toThrow(/appium:bundleId/);
+    expect(() => checkCapabilities({ ...example, bundleId: 'com.example.other' })).toThrow(/twice/);
+    expect(() => checkCapabilities({ alwaysMatch: example })).toThrow(/flat W3C/);
+    expect(() => checkCapabilities({ ...example, 'appium:options': 'udid' })).toThrow(/must be an object/);
+    const nested = { ...bare, 'appium:options': { bundleId: BUNDLE_ID, udid: '00000000-0000-0000-0000-000000000000' } };
+    expect(checkCapabilities(nested)).toBe(nested);
   });
 });
 
@@ -427,14 +440,14 @@ test.describe('live iOS test app (SIMULATOR)', () => {
 
     test('scrollIntoView right reaches the last product, then left the first, inside the carousel container', async () => {
       const container = await get('carousel', 'ProductCarousel');
-      const right: ScrollOptions = { direction: 'right', container, timeout: 120_000 };
+      const right: ScrollIntoViewOptions = { direction: 'right', container, timeout: 120_000 };
       const last = await get('name4', 'ProductCarousel', { timeout: 2_000 });
       expect(await last.scrollIntoView(right)).toBe(last);
       expect(await last.isVisible()).toBe(true);
       expect(await last.textContent()).toBe('USB-C Hub');
       await expectIndicator('Product 5 of 5');
 
-      const left: ScrollOptions = { direction: 'left', container, timeout: 120_000 };
+      const left: ScrollIntoViewOptions = { direction: 'left', container, timeout: 120_000 };
       const first = await get('name0', 'ProductCarousel', { timeout: 2_000 });
       await first.scrollIntoView(left);
       expect(await first.isVisible()).toBe(true);
@@ -462,13 +475,13 @@ test.describe('live iOS test app (SIMULATOR)', () => {
         });
       }
 
-      const down: ScrollOptions = { direction: 'down', container, timeout: 120_000 };
+      const down: ScrollIntoViewOptions = { direction: 'down', container, timeout: 120_000 };
       const last = await get('option17', 'Dropdown', { timeout: 2_000 });
       expect(await last.scrollIntoView(down)).toBe(last);
       expect(await last.isVisible()).toBe(true);
       expect(await last.textContent()).toBe('United States');
 
-      const up: ScrollOptions = { direction: 'up', container, timeout: 120_000 };
+      const up: ScrollIntoViewOptions = { direction: 'up', container, timeout: 120_000 };
       const first = await get('option0', 'Dropdown', { timeout: 2_000 });
       await first.scrollIntoView(up);
       expect(await first.isVisible()).toBe(true);

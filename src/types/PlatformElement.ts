@@ -1,6 +1,6 @@
 import {
   Element, ElementType, ElementActionOptions, ClickOptions, ScrollIntoViewOptions, SwipeDirection, SwipeOptions,
-  LongPressOptions, TapOffset, TapAtOptions, PinchOptions, ZoomOptions,
+  LongPressOptions, TapOffset, TapAtOptions, PinchOptions, ZoomOptions, isPlatform,
 } from './Element';
 import { checkLongPressDuration, checkMaxSwipes, checkTapOffset } from '../utils/gestureChecks';
 import { ElementChain } from './ElementChain';
@@ -445,6 +445,11 @@ export class PlatformElement implements Element {
    * missing element fails with `doubleClick: "<selector>" not found within
    * N ms` before anything is sent. Every other platform keeps WebdriverIO's
    * `doubleClick()`.
+   *
+   * On iOS, WebDriverAgent scrolls an element that is not hittable into
+   * view itself before the double tap, and fails (HTTP 500, the driver's
+   * error passed through) when it still cannot hit it, for example an
+   * element covered by another or off a scroller it cannot scroll.
    */
   async doubleClick(options?: ElementActionOptions): Promise<Element> {
     const platform = this.resolvePlatform();
@@ -484,7 +489,9 @@ export class PlatformElement implements Element {
     const started = Date.now();
     const maxSwipesPerDirection = checkMaxSwipes(options?.maxSwipes);
     const container = options?.container;
-    if (container !== undefined && !(container instanceof PlatformElement)) {
+    // By element type, not `instanceof`: a platform element made by another
+    // copy of this package is a different class.
+    if (container !== undefined && !(container && isPlatform(container))) {
       throw new Error('scrollIntoView: options.container must be a platform element (the scrollable ancestor)');
     }
     if (this.matchesNothing) await this.resolveNow().catch(err => { throw toPublicError(err); }); // can never match
@@ -1056,6 +1063,10 @@ export class PlatformElement implements Element {
    * from a missing one (UiAutomator2 sends the same string), so it also
    * reads as `null`; `inputValue()` still returns `"null"` for a field
    * holding that text.
+   *
+   * A misspelt attribute name is a name the driver does not know, so it
+   * reads as missing (`null`) rather than failing: check the spelling when
+   * an attribute reads `null` unexpectedly.
    */
   async getAttribute(name: string): Promise<string | null> {
     return this.read('getAttribute', el => readPlatformAttribute(el, name, this.resolvePlatform()));

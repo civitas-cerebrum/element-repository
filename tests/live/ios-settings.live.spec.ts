@@ -29,6 +29,7 @@ import { test, expect } from '@playwright/test';
 import * as fs from 'fs';
 import * as path from 'path';
 import { ElementRepository, Element, SelectionStrategy, isPlatform } from '../../src';
+import { flattenCapabilities } from './capabilities';
 
 const PAGES = path.join(__dirname, 'ios-settings.pages.json');
 const PAGE = 'SettingsHome';
@@ -80,21 +81,24 @@ function readCapabilities(file: string): Record<string, unknown> {
 
 /**
  * Checks the capabilities target iOS Settings: platform iOS, the Settings
- * bundle id, and no app to install or browser to open. Returns them unchanged.
+ * bundle id, and no app to install or browser to open. Appium options are
+ * checked in every spelling (prefixed, in `appium:options`, unprefixed; see
+ * {@link flattenCapabilities}). Returns them unchanged.
  */
 function checkCapabilities(caps: Record<string, unknown>): Record<string, unknown> {
-  for (const refused of ['appium:app', 'browserName']) {
-    if (refused in caps) {
+  const flat = flattenCapabilities(caps);
+  for (const refused of ['appium:app', 'appium:otherApps', 'browserName']) {
+    if (refused in flat) {
       throw new Error(
         `CAPABILITIES file must not have "${refused}" (this read-only spec targets the built-in Settings app only: no install, no browser).`,
       );
     }
   }
-  const platformName = caps.platformName;
+  const platformName = flat.platformName;
   if (typeof platformName !== 'string' || platformName.toLowerCase() !== 'ios') {
     throw new Error(`CAPABILITIES file must have platformName "iOS" for this spec, got ${JSON.stringify(platformName)}.`);
   }
-  const bundleId = caps['appium:bundleId'];
+  const bundleId = flat['appium:bundleId'];
   if (bundleId !== SETTINGS_BUNDLE_ID) {
     throw new Error(
       `CAPABILITIES file must have "appium:bundleId": "${SETTINGS_BUNDLE_ID}" (this read-only spec targets Settings only), got ${JSON.stringify(bundleId)}.`,
@@ -131,6 +135,19 @@ test.describe('ios-settings pages file (offline)', () => {
     expect(() => checkCapabilities({ ...example, 'appium:app': '/path/to/app.ipa' })).toThrow(/must not have "appium:app"/);
     expect(() => checkCapabilities({ ...example, browserName: 'Safari' })).toThrow(/must not have "browserName"/);
     expect(() => checkCapabilities({ ...example, 'appium:bundleId': 'com.example.other' })).toThrow(/appium:bundleId/);
+  });
+
+  test('the capabilities gate checks options nested in appium:options and unprefixed ones too', () => {
+    const example = readCapabilities(path.join(__dirname, 'capabilities.ios.example.json'));
+    const { 'appium:bundleId': _bundleId, ...bare } = example;
+    expect(() => checkCapabilities({ ...example, 'appium:options': { app: '/path/to/app.ipa' } })).toThrow(/must not have "appium:app"/);
+    expect(() => checkCapabilities({ ...example, app: '/path/to/app.ipa' })).toThrow(/must not have "appium:app"/);
+    expect(() => checkCapabilities({ ...example, otherApps: ['/path/to/Other.app'] })).toThrow(/must not have "appium:otherApps"/);
+    expect(() => checkCapabilities({ ...bare, bundleId: 'com.example.other' })).toThrow(/appium:bundleId/);
+    expect(() => checkCapabilities({ ...bare, 'appium:options': { bundleId: 'com.example.other' } })).toThrow(/appium:bundleId/);
+    expect(() => checkCapabilities({ alwaysMatch: example })).toThrow(/flat W3C/);
+    const nested = { ...bare, 'appium:options': { bundleId: SETTINGS_BUNDLE_ID } };
+    expect(checkCapabilities(nested)).toBe(nested);
   });
 });
 

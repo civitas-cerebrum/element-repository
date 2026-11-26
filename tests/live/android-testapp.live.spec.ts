@@ -52,19 +52,13 @@ import { test, expect } from '@playwright/test';
 import * as fs from 'fs';
 import * as path from 'path';
 import { ElementRepository, Element, ScrollIntoViewOptions, SelectionStrategy, isPlatform } from '../../src';
+import { flattenCapabilities } from './capabilities';
 
 const PAGES = path.join(__dirname, 'android-testapp.pages.json');
 const APP_PACKAGE = 'com.civitas.testapp';
 const FULL_ID_PREFIX = `${APP_PACKAGE}:id/`;
 /** An attribute name UiAutomator2 does not know at all. */
 const UNKNOWN_ATTRIBUTE = 'data-never-reported';
-
-/**
- * scrollIntoView options with the optional sweep container. Typed here so
- * the spec states the option it relies on whatever the library's own
- * declaration of it looks like.
- */
-type ScrollOptions = ScrollIntoViewOptions & { container?: Element };
 
 const LIVE = process.env.LIVE_ANDROID === '1';
 const APPIUM_URL = process.env.APPIUM_URL;
@@ -102,21 +96,24 @@ function readCapabilities(file: string): Record<string, unknown> {
 /**
  * Checks the capabilities target the installed Android test app: platform
  * Android, the test app's package, and no app to install or browser to open.
- * Returns them unchanged.
+ * Appium options are checked in every spelling (prefixed, in
+ * `appium:options`, unprefixed; see {@link flattenCapabilities}). Returns
+ * them unchanged.
  */
 function checkCapabilities(caps: Record<string, unknown>): Record<string, unknown> {
-  for (const refused of ['appium:app', 'browserName']) {
-    if (refused in caps) {
+  const flat = flattenCapabilities(caps);
+  for (const refused of ['appium:app', 'appium:otherApps', 'browserName']) {
+    if (refused in flat) {
       throw new Error(
         `CAPABILITIES file must not have "${refused}" (this spec drives the installed test app only: no install, no browser).`,
       );
     }
   }
-  const platformName = caps.platformName;
+  const platformName = flat.platformName;
   if (typeof platformName !== 'string' || platformName.toLowerCase() !== 'android') {
     throw new Error(`CAPABILITIES file must have platformName "Android" for this spec, got ${JSON.stringify(platformName)}.`);
   }
-  const appPackage = caps['appium:appPackage'];
+  const appPackage = flat['appium:appPackage'];
   if (appPackage !== APP_PACKAGE) {
     throw new Error(
       `CAPABILITIES file must have "appium:appPackage": "${APP_PACKAGE}" (this spec drives the test app only), got ${JSON.stringify(appPackage)}.`,
@@ -197,6 +194,20 @@ test.describe('android-testapp pages file (offline)', () => {
     const example = readCapabilities(path.join(__dirname, 'capabilities.android.example.json'));
     expect(() => checkCapabilities({ ...example, 'appium:app': '/path/to/app.apk' })).toThrow(/must not have "appium:app"/);
     expect(() => checkCapabilities({ ...example, browserName: 'Chrome' })).toThrow(/must not have "browserName"/);
+  });
+
+  test('the capabilities gate checks options nested in appium:options and unprefixed ones too', () => {
+    const example = readCapabilities(path.join(__dirname, 'capabilities.android.example.json'));
+    const { 'appium:appPackage': _appPackage, ...bare } = example;
+    expect(() => checkCapabilities({ ...example, 'appium:options': { app: '/path/to/app.apk' } })).toThrow(/must not have "appium:app"/);
+    expect(() => checkCapabilities({ ...example, app: '/path/to/app.apk' })).toThrow(/must not have "appium:app"/);
+    expect(() => checkCapabilities({ ...example, otherApps: ['/path/to/other.apk'] })).toThrow(/must not have "appium:otherApps"/);
+    expect(() => checkCapabilities({ ...bare, appPackage: 'com.example.other' })).toThrow(/appium:appPackage/);
+    expect(() => checkCapabilities({ ...bare, 'appium:options': { appPackage: 'com.example.other' } })).toThrow(/appium:appPackage/);
+    expect(() => checkCapabilities({ ...example, appPackage: 'com.example.other' })).toThrow(/twice/);
+    expect(() => checkCapabilities({ firstMatch: [example] })).toThrow(/flat W3C/);
+    const nested = { ...bare, 'appium:options': { appPackage: APP_PACKAGE } };
+    expect(checkCapabilities(nested)).toBe(nested);
   });
 
   test('the alert dialog entries: the title id is the app package, message and button are android ids', () => {
@@ -692,13 +703,13 @@ test.describe('live Android test app', () => {
 
     test('scrollIntoView right and left inside the table scroller container', async () => {
       const container = await get('scroller', 'Table');
-      const right: ScrollOptions = { direction: 'right', container, timeout: 120_000 };
+      const right: ScrollIntoViewOptions = { direction: 'right', container, timeout: 120_000 };
       const joinDate = await get('joinDate1', 'Table', { timeout: 2_000 });
       expect(await joinDate.scrollIntoView(right)).toBe(joinDate);
       expect(await joinDate.isVisible()).toBe(true);
       expect(await joinDate.textContent()).toBe('2022-01-15');
 
-      const left: ScrollOptions = { direction: 'left', container, timeout: 120_000 };
+      const left: ScrollIntoViewOptions = { direction: 'left', container, timeout: 120_000 };
       const checkbox = await get('rowCheckbox1', 'Table', { timeout: 2_000 });
       await checkbox.scrollIntoView(left);
       expect(await checkbox.isVisible()).toBe(true);

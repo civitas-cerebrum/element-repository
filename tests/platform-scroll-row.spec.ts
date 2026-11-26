@@ -260,9 +260,22 @@ test.describe('scrollIntoView up / down: the column the sweep runs along', () =>
 });
 
 test.describe('scrollIntoView container option', () => {
+  test('a platform element from another copy of the package is taken as the container', async () => {
+    // Two copies of the package (a consumer's and a dependency's) have two
+    // PlatformElement classes: `instanceof` fails across them, the element
+    // type does not. Model the other copy's class by its own prototype.
+    const { driver, swipes } = fakeDriver({ '~carousel': CAROUSEL });
+    const proto = Object.create(Object.getPrototypeOf(PlatformElement.prototype));
+    Object.defineProperties(proto, Object.getOwnPropertyDescriptors(PlatformElement.prototype));
+    const twin = Object.assign(Object.create(proto), el(driver, '~carousel'));
+    expect(twin instanceof PlatformElement).toBe(false);
+    await sweep(el(driver, '~product-name-2'), { direction: 'right', container: twin, maxSwipes: 1 });
+    expect(swipes).toEqual([{ from: { x: 334, y: 214 }, to: { x: 59, y: 214 } }]);
+  });
+
   test('a container that is not a platform element is refused before any swipe', async () => {
     const { driver, swipes } = fakeDriver({});
-    for (const bad of [{} as any, 'carousel' as any, { _type: 'web' } as any]) {
+    for (const bad of [{} as any, 'carousel' as any, { _type: 'web' } as any, null as any]) {
       const err = await sweep(el(driver, '~x'), { direction: 'right', container: bad });
       expect(err.message).toBe('scrollIntoView: options.container must be a platform element (the scrollable ancestor)');
     }
