@@ -316,9 +316,13 @@ export class StrategyResolver {
    * Because the result is picked eagerly it is load-bearing, like ATTRIBUTE
    * and RANDOM: the lookup polls until a match appears or the caller's full
    * `timeout` elapses, rather than the swallowed 2 s attach probe of the web
-   * path. The deadline is also checked between text reads, so a long
-   * list cannot overrun the timeout by a whole sweep. With no match it throws
-   * the same not-found error as `ElementRepository.getByText`.
+   * path. Each poll is one pass: one `$$` query, then the text of every
+   * match it returned (an exact match ends the pass early). A started pass
+   * always reads every match, so a small budget still finds a match late in
+   * a slow list; the deadline only decides whether another pass starts. A
+   * long list's last pass may therefore overrun the timeout by up to one
+   * pass. With no match it throws the same not-found error as
+   * `ElementRepository.getByText`.
    *
    * Driver errors: see {@link isFatalDriverError}. A fatal error (invalid
    * selector, invalid or dead session) is rethrown at once. Any other error
@@ -351,12 +355,12 @@ export class StrategyResolver {
       let raws: any[] = [];
       try { raws = Array.from((await driver.$$(selector)) ?? []); } catch (err) { remember(err); raws = []; }
 
-      // An exact match wins, so the first one ends the reads; otherwise the
-      // texts read are kept for the "contains" fallback.
+      // A started pass reads every match (the deadline is checked only
+      // between passes). An exact match wins, so the first one ends the
+      // reads; otherwise the texts read are kept for the "contains" fallback.
       const texts: Array<string | null> = [];
       let index = -1;
       for (const raw of raws) {
-        if (texts.length > 0 && Date.now() >= deadline) break;
         let text: string | null;
         try { text = ((await readPlatformText(raw, textPlatform)) ?? '').trim(); } catch (err) { remember(err); text = null; }
         texts.push(text);

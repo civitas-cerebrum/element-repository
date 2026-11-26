@@ -285,19 +285,53 @@ test.describe('TEXT on platform pages — driver errors', () => {
   });
 });
 
-test('TEXT deadline is checked inside the getText sweep of a long list', async () => {
-  const slow = Array.from({ length: 60 }, (_, i) => ({
+/** `count` rows whose text read takes `readMs`, counting the reads of each row. */
+function slowRows(count: number, readMs: number) {
+  const reads = Array.from({ length: count }, () => 0);
+  const rows = Array.from({ length: count }, (_, i) => ({
     ...mockNativeElement(`row ${i}`, `el-${i}`),
-    getText: async () => { await new Promise(r => setTimeout(r, 50)); return `row ${i}`; },
+    getText: async () => { reads[i]++; await new Promise(r => setTimeout(r, readMs)); return `row ${i}`; },
   }));
-  const driver = listDriver(async () => slow);
+  return { rows, reads };
+}
+
+test('TEXT reads a started pass to its end: the deadline only decides whether another pass starts', async () => {
+  const { rows, reads } = slowRows(12, 50);
+  let passes = 0;
+  const driver = listDriver(async () => { passes++; return rows; });
   const started = Date.now();
   await expect(StrategyResolver.fromSelector(
-    driver, '~row', androidPage, 'row', 'Settings', 300,
+    driver, '~row', androidPage, 'row', 'Settings', 100,
     { strategy: SelectionStrategy.TEXT, value: 'nope' },
-  )).rejects.toThrow('not found');
-  // A full sweep is 60 x 50 ms = 3 s; the deadline must cut it short.
-  expect(Date.now() - started).toBeLessThan(1_000);
+  )).rejects.toThrow(`Element 'row' on 'Settings' with text "nope" not found.`);
+  const elapsed = Date.now() - started;
+  // One pass is 12 x 50 ms = 600 ms, past the 100 ms deadline: every row is
+  // read once, and no second pass starts.
+  expect(passes).toBe(1);
+  expect(reads).toEqual(Array.from({ length: 12 }, () => 1));
+  expect(elapsed).toBeGreaterThanOrEqual(550);
+  // The overrun is at most one pass.
+  expect(elapsed).toBeLessThan(100 + 600 + 500);
+});
+
+test('TEXT with a small budget finds a match late in a slow pass', async () => {
+  const { rows, reads } = slowRows(12, 50);
+  const driver = listDriver(async () => rows);
+  const exact = await StrategyResolver.fromSelector(
+    driver, '~row', androidPage, 'row', 'Settings', 100,
+    { strategy: SelectionStrategy.TEXT, value: 'row 10' },
+  );
+  expect((exact as PlatformElement).resolvedElement.elementId).toBe('el-10');
+  // The exact match ends the pass: row 11 is not read.
+  expect(reads[11]).toBe(0);
+
+  const contains = await StrategyResolver.fromSelector(
+    driver, '~row', androidPage, 'row', 'Settings', 100,
+    { strategy: SelectionStrategy.TEXT, value: 'ROW 1' },
+  );
+  // No exact match: the whole pass is read, then the first "contains" match wins.
+  expect((contains as PlatformElement).resolvedElement.elementId).toBe('el-1');
+  expect(reads[11]).toBe(1);
 });
 
 test('TEXT still finds a match deep in a long list within the deadline', async () => {
