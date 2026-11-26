@@ -430,20 +430,28 @@ export class PlatformElement implements Element {
   /**
    * {@inheritDoc Element.doubleClick}
    *
-   * Platform: on iOS, XCUITest's own double tap on the element
-   * (`mobile: doubleTap` with its `elementId`), which taps the element's
-   * hit point twice. WebdriverIO's `doubleClick()` sends the desktop
-   * sequence (a `mouse` pointer: move, down, up, pause 10 ms, down, up),
-   * which XCUITest takes as one tap. A missing element fails with
-   * `doubleClick: "<selector>" not found within N ms` before anything is
-   * sent. On Android (and every other platform) WebdriverIO's
-   * `doubleClick()` on the element centre is kept: UiAutomator2 takes it
-   * as two clicks.
+   * Platform: a real double tap on the element, sent by the driver's own
+   * gesture with the element's `elementId`:
+   *
+   * - iOS: XCUITest's `mobile: doubleTap`, which taps the element's hit
+   *   point twice.
+   * - Android: UiAutomator2's `mobile: doubleClickGesture`, a double click
+   *   on the element centre with the platform's double-tap timing.
+   *
+   * WebdriverIO's `doubleClick()` sends the desktop sequence (a `mouse`
+   * pointer: move, down, up, pause 10 ms, down, up): XCUITest takes it as
+   * one tap, and its 10 ms gap is below Android's 40 ms minimum between the
+   * taps of a double tap, so a double-tap recogniser does not fire. A
+   * missing element fails with `doubleClick: "<selector>" not found within
+   * N ms` before anything is sent. Every other platform keeps WebdriverIO's
+   * `doubleClick()`.
    */
   async doubleClick(options?: ElementActionOptions): Promise<Element> {
-    if (this.resolvePlatform() === 'ios') {
+    const platform = this.resolvePlatform();
+    const gesture = platform === 'ios' ? 'mobile: doubleTap' : platform === 'android' ? 'mobile: doubleClickGesture' : undefined;
+    if (gesture) {
       const el = await this.attachedWithId('doubleClick', options?.timeout);
-      await this.driver.execute('mobile: doubleTap', { elementId: el.elementId });
+      await this.driver.execute(gesture, { elementId: el.elementId });
       return this;
     }
     const el = await this.ensureAttached(options?.timeout);

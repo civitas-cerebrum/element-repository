@@ -44,7 +44,7 @@
  * The attribute tests check that `getAttribute()` reads `null` for an
  * attribute name UiAutomator2 does not know (instead of throwing) and that
  * `getByAttribute` passes over elements without the attribute. The counter
- * test checks that `doubleClick()` is two clicks; the table tests check
+ * test checks that `doubleClick()` (a real double tap) registers two clicks; the table tests check
  * that a left/right `scrollIntoView` reaches a clipped column, with and
  * without a `container`.
  */
