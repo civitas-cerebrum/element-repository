@@ -24,6 +24,8 @@ const MANY = 'many';
 const MANY_IDS = [ELEMENT, 'el-2', 'el-3'];
 /** A selector value the fake server finds nothing for. */
 const MISSING = 'missing';
+/** An attribute name the fake server answers as XCUITest does for a name it does not know. */
+const UNKNOWN_ATTRIBUTE = 'data-never-reported';
 /** Elements the fake server returns for an element-scoped XPath find, with their text. */
 const DESCENDANT_TEXTS: Record<string, string> = { 'txt-1': 'Item 1', 'txt-2': 'Alpha' };
 
@@ -76,6 +78,16 @@ async function startFakeServer(): Promise<FakeServer> {
         value = { ...RECT, y: RECT.y + 100 * MANY_IDS.findIndex(id => url.includes(`/${id}/`)) };
       } else if (method === 'GET' && url === `${s}/element/${ELEMENT}/displayed`) {
         value = false; // never on screen: scrollIntoView keeps swiping
+      } else if (method === 'GET' && url === `${s}/element/${ELEMENT}/attribute/${UNKNOWN_ATTRIBUTE}`) {
+        // WebDriverAgent's answer for an attribute name XCUITest does not know.
+        status = 500;
+        value = {
+          error: 'unknown error',
+          message: `The attribute '${UNKNOWN_ATTRIBUTE}' is unknown. Valid attribute names are: (\n    UID,\n    label,\n    name,\n    value\n)`,
+          traceback: '',
+        };
+      } else if (method === 'GET' && url === `${s}/element/${ELEMENT}/attribute/label`) {
+        value = 'Wi-Fi';
       } else if (method === 'GET' && url === `${s}/window/rect`) {
         value = WINDOW;
       } else if (method === 'GET' && url === `${s}/element/${ELEMENT}/css/color`) {
@@ -239,6 +251,17 @@ test.describe('PlatformElement against a real WebdriverIO 10 session (fake WebDr
     // Every swipe is released before the next one is sent.
     const actionCalls = server.requests.filter(r => r.path.endsWith('/actions')).map(r => r.method);
     expect(actionCalls).toEqual(Array.from({ length: 20 }, () => ['POST', 'DELETE']).flat());
+  });
+
+  test('getAttribute of a name XCUITest does not know (HTTP 500 "The attribute ... is unknown") reads null', async () => {
+    const el = new PlatformElement(driver, '~x');
+    expect(await el.getAttribute(UNKNOWN_ATTRIBUTE)).toBeNull();
+    expect(await el.getAttribute('label')).toBe('Wi-Fi');
+    // One request each: the driver's answer is mapped, not retried.
+    expect(wire().filter(r => r.includes('/attribute/'))).toEqual([
+      `GET /element/${ELEMENT}/attribute/${UNKNOWN_ATTRIBUTE}`,
+      `GET /element/${ELEMENT}/attribute/label`,
+    ]);
   });
 
   test('getCssProperty sends GET /element/:id/css/:property', async () => {

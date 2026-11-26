@@ -376,6 +376,8 @@ export interface Element {
 
   /**
    * Returns the value of the given HTML attribute, or `null` if absent.
+   * On platform elements an attribute name the driver does not know at
+   * all (UiAutomator2, XCUITest) is absent too, so it reads as `null`.
    * @param name - Attribute name.
    */
   getAttribute(name: string): Promise<string | null>;

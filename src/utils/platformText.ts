@@ -1,5 +1,6 @@
 import type { Platform } from '../enum/Platform';
 import { readElementClass } from './platformClass';
+import { readPlatformAttribute } from './platformAttr';
 
 /**
  * The platform an Appium driver runs, from its `platformName` capability,
@@ -75,7 +76,8 @@ function hasText(s: unknown): s is string {
  * query ({@link ANDROID_DESCENDANT_TEXT_XPATH}) plus one `getText()` per
  * descendant that has text (issued together).
  *
- * Driver errors are not caught.
+ * The iOS attributes are read with `readPlatformAttribute` (a name the
+ * driver does not know reads as missing). Other driver errors are not caught.
  *
  * @param el - A raw WebdriverIO element.
  * @param platform - The element's platform, if known.
@@ -90,10 +92,10 @@ export async function readPlatformText(el: any, platform: Platform | undefined):
     return joined !== '' ? joined : own;
   }
   if (platform !== 'ios') return (await el.getText()) ?? null;
-  const [type, label] = await Promise.all([readElementClass(el, platform), el.getAttribute('label')]);
+  const [type, label] = await Promise.all([readElementClass(el, platform), readPlatformAttribute(el, 'label', platform)]);
   const isInput = IOS_TEXT_INPUT_TYPES.has(type);
   if (!isInput && hasText(label)) return label;
-  const value = await el.getAttribute('value');
+  const value = await readPlatformAttribute(el, 'value', platform);
   const order = IOS_TEXT_INPUT_TYPES.has(type) ? [value, label] : [label, value];
   const withText = order.find(hasText);
   if (withText !== undefined) return withText;

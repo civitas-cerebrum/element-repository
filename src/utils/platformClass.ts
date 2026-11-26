@@ -1,5 +1,5 @@
 import type { Platform } from '../enum/Platform';
-import { androidAttribute } from './androidAttr';
+import { readPlatformAttribute } from './platformAttr';
 
 /**
  * The class (element type) of a raw WebdriverIO element: the one read for
@@ -10,8 +10,8 @@ import { androidAttribute } from './androidAttr';
  *   UiAutomator2's `getTagName()` is not used: it returns the element's
  *   content-desc when one is set and `null` otherwise, never the class, so
  *   an element found by accessibility id would report its id. A missing attribute (`null`, or the
- *   string `"null"` UiAutomator2 returns for an attribute it lacks; see
- *   `androidAttribute`) reads as `''`.
+ *   string `"null"` UiAutomator2 returns for an attribute it lacks, or a
+ *   name the driver does not know; see `readPlatformAttribute`) reads as `''`.
  * - `ios`: WebdriverIO `getTagName()`, which XCUITest answers with the
  *   element type (`XCUIElementTypeSwitch`).
  * - every other platform (and an unknown one): WebdriverIO `getTagName()`.
@@ -23,7 +23,7 @@ import { androidAttribute } from './androidAttr';
  */
 export async function readElementClass(el: any, platform: Platform | undefined): Promise<string> {
   if (platform === 'android') {
-    return androidAttribute(await el.getAttribute('class')) ?? '';
+    return (await readPlatformAttribute(el, 'class', platform)) ?? '';
   }
   return el.getTagName();
 }

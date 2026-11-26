@@ -11,7 +11,7 @@ import { SWIPE_SETTLE_MS, TouchAction, performTouchActions, performTouchSwipe, t
 import { detectDriverPlatform, readPlatformText } from '../utils/platformText';
 import { readPlatformChecked } from '../utils/platformChecked';
 import { readElementClass } from '../utils/platformClass';
-import { androidAttribute } from '../utils/androidAttr';
+import { readPlatformAttribute } from '../utils/platformAttr';
 
 /** Extra construction options for {@link PlatformElement}. */
 export interface PlatformElementOptions {
@@ -395,7 +395,7 @@ export class PlatformElement implements Element {
       // An attribute the driver cannot read, or reports missing ("null"), is
       // unknown, not a refusal: only checkable "false" refuses.
       const [checkable, cls] = await Promise.all([
-        el.getAttribute('checkable').catch(() => null),
+        readPlatformAttribute(el, 'checkable', platform).catch(() => null),
         wanted ? null : readElementClass(el, platform).catch(() => null),
       ]);
       if (checkable === 'false') throw new Error(`${method}: ${this.describe()} is not checkable`);
@@ -885,16 +885,23 @@ export class PlatformElement implements Element {
   /**
    * {@inheritDoc Element.getAttribute}
    *
+   * Platform: an attribute name the driver does not know at all returns
+   * `null`, like an attribute the element lacks: UiAutomator2 answers it
+   * with `'<name>' attribute is unknown for the element` (WebDriver error
+   * `unknown command`, otherwise fatal) and XCUITest with `The attribute
+   * '<name>' is unknown` (HTTP 500). Only that answer, for that name, is
+   * mapped; any other driver error (a dead session, a missing element) is
+   * thrown as before. See {@link readPlatformAttribute}.
+   *
    * On Android a missing attribute returns `null`: UiAutomator2 answers it
-   * with the string `"null"`, which is mapped (see {@link androidAttribute}).
+   * with the string `"null"`, which is mapped (see `androidAttribute`).
    * An attribute whose real value is the text `null` is indistinguishable
    * from a missing one (UiAutomator2 sends the same string), so it also
    * reads as `null`; `inputValue()` still returns `"null"` for a field
    * holding that text.
    */
   async getAttribute(name: string): Promise<string | null> {
-    if (this.isAndroid()) return this.read('getAttribute', async el => androidAttribute(await el.getAttribute(name)));
-    return this.read('getAttribute', el => el.getAttribute(name));
+    return this.read('getAttribute', el => readPlatformAttribute(el, name, this.resolvePlatform()));
   }
 
   async inputValue(): Promise<string> {
@@ -912,11 +919,11 @@ export class PlatformElement implements Element {
       // the empty-field case by comparing `text` to `hint`: when they
       // match, the field is empty and the hint is being rendered as text.
       // A field without a hint reads hint as "null" (see
-      // {@link androidAttribute}); that is no hint, so typing the text
+      // `androidAttribute`); that is no hint, so typing the text
       // "null" is not taken for an empty field.
       const [text, hint] = await Promise.all([
         el.getAttribute('text').catch(() => null),
-        el.getAttribute('hint').then(androidAttribute, () => null),
+        readPlatformAttribute(el, 'hint', 'android').catch(() => null),
       ]);
       if (text && hint && text === hint) return '';
       return text ?? '';
@@ -927,7 +934,7 @@ export class PlatformElement implements Element {
     // (`getValue()` or `getAttribute('value')`) produced the raw value.
     const [rawValue, placeholder] = await Promise.all([
       (async () => { try { return await el.getValue(); } catch { return (await el.getAttribute('value')) ?? ''; } })(),
-      el.getAttribute('placeholderValue').catch(() => null),
+      readPlatformAttribute(el, 'placeholderValue', this.resolvePlatform()).catch(() => null),
     ]);
     if (placeholder !== null && rawValue === placeholder) return '';
     return rawValue ?? '';

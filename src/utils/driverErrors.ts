@@ -41,6 +41,10 @@ const FATAL_DRIVER_ERROR_MESSAGES = [
  * once. Every other error — `no such element`, `stale element reference`
  * and anything unrecognised — is treated as a transient missing/stale
  * element and polled through until the deadline.
+ *
+ * A driver's answer that it does not know an attribute name (UiAutomator2
+ * names it `unknown command`) never reaches this rule from a platform
+ * element: `getAttribute` reads it as a missing attribute (`null`) first.
  */
 export function isFatalDriverError(err: unknown): boolean {
   if (!err || typeof err !== 'object') return false;
