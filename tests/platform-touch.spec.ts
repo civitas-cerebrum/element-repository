@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import {
   SWIPE_HOLD_MS, SWIPE_MOVE_MS, SWIPE_SETTLE_MS, buildTouchSwipe, performTouchSwipe, performTouchActions, touchPointers,
+  SWEEP_HOLD_MS, SWEEP_MOVE_MS, SWEEP_RELEASE_HOLD_MS, SWEEP_START_FRACTION, SWEEP_END_FRACTION, SWEEP_EDGE_BAND,
 } from '../src';
 
 function recordingDriver(overrides: Record<string, any> = {}): { driver: any; calls: any[] } {
@@ -16,6 +17,27 @@ function recordingDriver(overrides: Record<string, any> = {}): { driver: any; ca
 test.describe('touch swipe helpers', () => {
   test('the constants are the gesture timings', () => {
     expect([SWIPE_HOLD_MS, SWIPE_MOVE_MS, SWIPE_SETTLE_MS]).toEqual([100, 600, 200]);
+  });
+
+  test('the sweep constants: timings and geometry of a scrollIntoView swipe', () => {
+    expect([SWEEP_HOLD_MS, SWEEP_MOVE_MS, SWEEP_RELEASE_HOLD_MS]).toEqual([50, 300, 200]);
+    expect([SWEEP_START_FRACTION, SWEEP_END_FRACTION, SWEEP_EDGE_BAND]).toEqual([0.85, 0.15, 0.1]);
+  });
+
+  test('releaseHoldMs holds the finger at the end point before it lifts', () => {
+    const [finger] = buildTouchSwipe({ x: 0, y: 0 }, { x: 0, y: 9 }, { releaseHoldMs: 200 });
+    expect(finger.actions.slice(3)).toEqual([
+      { type: 'pointerMove', duration: SWIPE_MOVE_MS, origin: 'viewport', x: 0, y: 9 },
+      { type: 'pause', duration: 200 },
+      { type: 'pointerUp', button: 0 },
+    ]);
+  });
+
+  test('no releaseHoldMs, or 0: the finger lifts on arrival, no pause sent', () => {
+    for (const options of [undefined, { releaseHoldMs: 0 }]) {
+      const [finger] = buildTouchSwipe({ x: 0, y: 0 }, { x: 0, y: 9 }, options);
+      expect(finger.actions.map(a => a.type)).toEqual(['pointerMove', 'pointerDown', 'pause', 'pointerMove', 'pointerUp']);
+    }
   });
 
   test('buildTouchSwipe is one touch finger: move, down, hold, move, up (rounded)', () => {

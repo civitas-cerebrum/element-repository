@@ -55,9 +55,10 @@ export interface ScrollIntoViewOptions extends ElementActionOptions {
    * Platform (Appium): the scrollable ancestor of the target (the
    * carousel, the list), a platform element. The sweep then swipes inside
    * its rect, clipped to the window: a `'left'` / `'right'` sweep along
-   * its vertical centre, from 75% to 25% of its width; an `'up'` /
-   * `'down'` sweep along its horizontal centre, from 75% to 25% of its
-   * height. Its rect is read once, after the fast path; a container that
+   * its vertical centre, from 85% to 15% of its width; an `'up'` /
+   * `'down'` sweep along its horizontal centre, from 85% to 15% of its
+   * height (points kept between 10% and 90% of the window where the
+   * container allows). Its rect is read once, after the fast path; a container that
    * is not found, or lies wholly outside the window, fails before any
    * swipe. Anything other than a platform element is refused.
    *
@@ -217,8 +218,9 @@ export interface Element {
    * directions.
    *
    * On platform elements the sweep makes up to `options.maxSwipes` swipes
-   * (default 20; each about 100 ms hold + 600 ms move + 200 ms settle of
-   * gesture time, around 3 s on a real device). The sweep is time-bounded
+   * (default 20; each a drag of 70% of the swept area that lifts a still
+   * finger: 50 ms hold + 300 ms move + 200 ms hold + 200 ms settle of
+   * gesture time, longer on a real device). The sweep is time-bounded
    * only by a timeout given to this call: with `options.timeout` it also
    * stops once that many ms have passed (no new swipe starts after the
    * deadline, so the call can overrun it by at most one swipe). Without

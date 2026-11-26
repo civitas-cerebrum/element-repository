@@ -19,6 +19,7 @@ export { isFatalDriverError } from './utils/driverErrors';
 // The W3C touch swipe used by platform gestures, so a screen-level swipe can send the same sequence.
 export {
   SWIPE_HOLD_MS, SWIPE_MOVE_MS, SWIPE_SETTLE_MS, touchPointers, buildTouchSwipe, performTouchActions, performTouchSwipe,
+  SWEEP_HOLD_MS, SWEEP_MOVE_MS, SWEEP_RELEASE_HOLD_MS, SWEEP_START_FRACTION, SWEEP_END_FRACTION, SWEEP_EDGE_BAND,
 } from './utils/touch';
 export type { TouchPoint, TouchAction, TouchPointerSource, TouchSwipeOptions } from './utils/touch';
 

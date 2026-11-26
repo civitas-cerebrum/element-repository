@@ -7,7 +7,10 @@ import { ElementChain } from './ElementChain';
 import { PlatformNotSupportedError } from './errors';
 import { isFatalDriverError } from '../utils/driverErrors';
 import type { Platform } from '../enum/Platform';
-import { SWIPE_SETTLE_MS, TouchAction, performTouchActions, performTouchSwipe, touchPointers } from '../utils/touch';
+import {
+  SWEEP_EDGE_BAND, SWEEP_END_FRACTION, SWEEP_HOLD_MS, SWEEP_MOVE_MS, SWEEP_RELEASE_HOLD_MS, SWEEP_START_FRACTION,
+  SWIPE_SETTLE_MS, TouchAction, performTouchActions, performTouchSwipe, touchPointers,
+} from '../utils/touch';
 import { detectDriverPlatform, readPlatformText } from '../utils/platformText';
 import { readPlatformChecked } from '../utils/platformChecked';
 import { readElementClass } from '../utils/platformClass';
@@ -542,7 +545,7 @@ export class PlatformElement implements Element {
         );
       }
       const { from, to } = await this.sweepPath(direction, windowSize, area, found);
-      await performTouchSwipe(this.driver, from, to);
+      await performTouchSwipe(this.driver, from, to, PlatformElement.SWEEP_TIMING);
       await this.driver.pause(SWIPE_SETTLE_MS);
       if (await shownNow()) return this;
     }
@@ -551,6 +554,15 @@ export class PlatformElement implements Element {
       `scrollIntoView: element not visible after ${maxSwipesPerDirection} swipes, the swipe limit (direction=${direction})`,
     );
   }
+
+  /**
+   * The touch timing of a sweep swipe: a drag (short hold, quick move) that
+   * holds still before the finger lifts, so the content moves as far as the
+   * finger did, with no fling (see {@link sweepPath}).
+   */
+  private static readonly SWEEP_TIMING = {
+    holdMs: SWEEP_HOLD_MS, moveMs: SWEEP_MOVE_MS, releaseHoldMs: SWEEP_RELEASE_HOLD_MS,
+  } as const;
 
   /**
    * The part of `rect` inside the window, or `onOutside()` thrown when no
@@ -571,8 +583,9 @@ export class PlatformElement implements Element {
 
   /**
    * One swipe of a {@link scrollIntoView} sweep, in native-context viewport
-   * coordinates. It travels along the scroll axis from 75% to 25% of the
-   * scrolled area (or back, for `'up'` / `'left'`), along a line across
+   * coordinates. It travels along the scroll axis from
+   * {@link SWEEP_START_FRACTION} (85%) to {@link SWEEP_END_FRACTION} (15%)
+   * of the swept area (or back, for `'up'` / `'left'`), along a line across
    * that axis:
    *
    * - with a container (`area`, its part inside the window): the area is
@@ -584,14 +597,23 @@ export class PlatformElement implements Element {
    *   with a non-empty rect whose centre lies inside the window on that
    *   axis; else the window's centre.
    *
-   * 25% → 75% covers half the area per swipe. Wider (e.g. 15%/85%) starts
-   * inside platform system-gesture zones; narrower reduces per-swipe travel.
+   * Every point is then kept out of the window's edge bands
+   * ({@link SWEEP_EDGE_BAND}: between 10% and 90% of the window on each
+   * axis), within the area: a point in a band is moved to the band's inner
+   * edge, unless the area lies wholly inside the band, where it stays in the
+   * area. Points are rounded and clamped to `[0, size - 1]`.
+   *
+   * 85% → 15% is a drag of 70% of the area: over half, so a paging
+   * scroller as wide as the area passes its half-page threshold, and short
+   * of the whole, so a free-scrolling one keeps part of the last view on
+   * screen. The finger lifts still ({@link SWEEP_RELEASE_HOLD_MS}), so the
+   * content moves as far as the drag and no further.
    *
    * Direction → swipe geometry:
-   *   'down'  — swipe up (75%→25%) reveals content BELOW
-   *   'up'    — swipe down (25%→75%) reveals content ABOVE
-   *   'right' — swipe left (75%→25%) reveals content to the RIGHT
-   *   'left'  — swipe right (25%→75%) reveals content to the LEFT
+   *   'down'  — swipe up (85%→15%) reveals content BELOW
+   *   'up'    — swipe down (15%→85%) reveals content ABOVE
+   *   'right' — swipe left (85%→15%) reveals content to the RIGHT
+   *   'left'  — swipe right (15%→85%) reveals content to the LEFT
    */
   private async sweepPath(
     direction: 'down' | 'up' | 'left' | 'right',
@@ -601,21 +623,43 @@ export class PlatformElement implements Element {
   ): Promise<{ from: { x: number; y: number }; to: { x: number; y: number } }> {
     const horizontal = direction === 'left' || direction === 'right';
     const box = area ?? { x: 0, y: 0, width: windowSize.width, height: windowSize.height };
-    let line = horizontal ? box.y + box.height / 2 : box.x + box.width / 2;
+    const [alongSize, crossSize] = horizontal ? [windowSize.width, windowSize.height] : [windowSize.height, windowSize.width];
+    const [alongLo, alongExtent] = horizontal ? [box.x, box.width] : [box.y, box.height];
+    const [crossLo, crossExtent] = horizontal ? [box.y, box.height] : [box.x, box.width];
+    let line = crossLo + crossExtent / 2;
     if (!area) {
       const own = await this.placedRect(target);
       if (own) {
         const centre = horizontal ? own.y + own.height / 2 : own.x + own.width / 2;
-        if (centre >= 0 && centre < (horizontal ? windowSize.height : windowSize.width)) line = centre;
+        if (centre >= 0 && centre < crossSize) line = centre;
       }
     }
-    const at = (fraction: number) => horizontal ? box.x + box.width * fraction : box.y + box.height * fraction;
+    const alongIn = PlatformElement.sweepBand(alongLo, alongLo + alongExtent, alongSize);
+    const crossIn = PlatformElement.sweepBand(crossLo, crossLo + crossExtent, crossSize);
+    const at = (fraction: number) => alongIn(alongLo + alongExtent * fraction);
     const forward = direction !== 'up' && direction !== 'left';
-    const [start, end] = forward ? [at(0.75), at(0.25)] : [at(0.25), at(0.75)];
-    const point = (along: number) => horizontal
-      ? { x: Math.round(along), y: Math.round(line) }
-      : { x: Math.round(line), y: Math.round(along) };
+    const [start, end] = forward
+      ? [at(SWEEP_START_FRACTION), at(SWEEP_END_FRACTION)]
+      : [at(SWEEP_END_FRACTION), at(SWEEP_START_FRACTION)];
+    const across = PlatformElement.clampToAxis(crossIn(line), crossSize);
+    const point = (along: number) => {
+      const a = PlatformElement.clampToAxis(along, alongSize);
+      return horizontal ? { x: a, y: across } : { x: across, y: a };
+    };
     return { from: point(start), to: point(end) };
+  }
+
+  /**
+   * A clamp into the part of `[lo, hi]` (an area on one window axis of
+   * `size`) that lies outside the window's edge bands
+   * ({@link SWEEP_EDGE_BAND} of `size` at each end); into `[lo, hi]` itself
+   * when the area lies wholly inside a band.
+   */
+  private static sweepBand(lo: number, hi: number, size: number): (value: number) => number {
+    const inLo = Math.max(lo, size * SWEEP_EDGE_BAND);
+    const inHi = Math.min(hi, size * (1 - SWEEP_EDGE_BAND));
+    const [min, max] = inLo <= inHi ? [inLo, inHi] : [lo, hi];
+    return value => Math.min(Math.max(value, min), max);
   }
 
   /**

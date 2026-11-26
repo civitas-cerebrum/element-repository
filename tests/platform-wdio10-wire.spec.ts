@@ -234,8 +234,8 @@ test.describe('PlatformElement against a real WebdriverIO 10 session (fake WebDr
 
   test('scrollIntoView with the target in the tree swipes along the target\'s own column', async () => {
     await expect(new PlatformElement(driver, '~x').scrollIntoView({ direction: 'down', maxSwipes: 2 })).rejects.toThrow(/after 2 swipes/);
-    // Target rect x 100-150: centre x 125; window 400x800: from y 600 to y 200.
-    expect(swipePoints()).toEqual([[125, 600, 125, 200], [125, 600, 125, 200]]);
+    // Target rect x 100-150: centre x 125; window 400x800: from y 680 (85%) to y 120 (15%).
+    expect(swipePoints()).toEqual([[125, 680, 125, 120], [125, 680, 125, 120]]);
     expect(wire().filter(r => r.endsWith('/rect'))).toEqual([
       'GET /window/rect', `GET /element/${ELEMENT}/rect`, `GET /element/${ELEMENT}/rect`,
     ]);
@@ -245,18 +245,19 @@ test.describe('PlatformElement against a real WebdriverIO 10 session (fake WebDr
     await expect(new PlatformElement(driver, `~${MISSING}`).scrollIntoView({
       direction: 'right', maxSwipes: 1, container: new PlatformElement(driver, '~x'),
     })).rejects.toThrow(/after 1 swipes/);
-    // Container x 100-150, y 200-240: centre y 220, from x 137.5 (75%) to x 112.5 (25%).
-    expect(swipePoints()).toEqual([[138, 220, 113, 220]]);
+    // Container x 100-150, y 200-240: centre y 220, from x 142.5 (85%) to x 107.5 (15%).
+    expect(swipePoints()).toEqual([[143, 220, 108, 220]]);
   });
 
-  test('scrollIntoView swipes with the same explicit touch body, from 75% to 25% of the window', async () => {
+  test('scrollIntoView swipes with the sweep touch body, from 85% to 15% of the window', async () => {
     // A target that is not in the tree: the window's centre line.
     await expect(new PlatformElement(driver, `~${MISSING}`).scrollIntoView({ direction: 'down' })).rejects.toThrow(/not visible after 20 swipes/);
     const performs = server.requests.filter(r => r.method === 'POST' && r.path.endsWith('/actions'));
     const releases = server.requests.filter(r => r.method === 'DELETE' && r.path.endsWith('/actions'));
     expect(performs).toHaveLength(20);
     expect(releases).toHaveLength(20);
-    // Window 400x800: centre x 200, from y 600 (75%) to y 200 (25%).
+    // Window 400x800: centre x 200, from y 680 (85%) to y 120 (15%); a
+    // 50 ms hold, a 300 ms move and a 200 ms hold before the finger lifts.
     for (const p of performs) {
       expect(p.body).toEqual({
         actions: [{
@@ -264,10 +265,11 @@ test.describe('PlatformElement against a real WebdriverIO 10 session (fake WebDr
           id: 'finger1',
           parameters: { pointerType: 'touch' },
           actions: [
-            { type: 'pointerMove', duration: 0, origin: 'viewport', x: 200, y: 600 },
+            { type: 'pointerMove', duration: 0, origin: 'viewport', x: 200, y: 680 },
             { type: 'pointerDown', button: 0 },
-            { type: 'pause', duration: 100 },
-            { type: 'pointerMove', duration: 600, origin: 'viewport', x: 200, y: 200 },
+            { type: 'pause', duration: 50 },
+            { type: 'pointerMove', duration: 300, origin: 'viewport', x: 200, y: 120 },
+            { type: 'pause', duration: 200 },
             { type: 'pointerUp', button: 0 },
           ],
         }],

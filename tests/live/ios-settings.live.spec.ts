@@ -241,7 +241,7 @@ test.describe.serial('live iOS Settings (read-only)', () => {
     await toTop();
     // At the top the General row is in the tree but below the fold
     // (isDisplayed false). `direction: 'down'` means "reveal content further
-    // DOWN the list": the finger swipes UP (75% -> 25% of the window height),
+    // DOWN the list": the finger swipes UP (85% -> 15% of the window height),
     // so the content moves up and lower rows come into view.
     const general = await get('generalByAccessibilityId');
     await general.scrollIntoView({ direction: 'down', timeout: 60_000 });
