@@ -9,7 +9,8 @@
  *
  * The spec drives the test app only: it relaunches it, navigates from its
  * home screen (home card -> category entry -> screen), taps, double-taps,
- * long-presses, toggles, swipes, scrolls, pinches and zooms inside it. It
+ * long-presses, toggles, types into a field, hides the keyboard, swipes,
+ * scrolls, pinches and zooms inside it. It
  * never opens another app and never changes the orientation.
  *
  * Run (placeholders only; never commit real values):
@@ -41,7 +42,7 @@
 import { test, expect } from '@playwright/test';
 import * as fs from 'fs';
 import * as path from 'path';
-import { ElementRepository, Element, ScrollIntoViewOptions, isPlatform } from '../../src';
+import { ElementRepository, Element, ScrollIntoViewOptions, isPlatform, dismissKeyboard } from '../../src';
 import { flattenCapabilities } from './capabilities';
 
 const PAGES = path.join(__dirname, 'ios-testapp.pages.json');
@@ -286,6 +287,27 @@ test.describe('live iOS test app (SIMULATOR)', () => {
       expect(await increment.doubleClick()).toBe(increment);
       // One tap per touchUpInside: a double tap taken as one tap reads "1".
       await expect.poll(() => value.textContent(), { timeout: 10_000 }).toBe('2');
+    });
+  });
+
+  test.describe('login form keyboard', () => {
+    test.beforeEach(async () => {
+      await openScreen('cardAuth', 'loginForm', { name: 'username', page: 'LoginForm' });
+    });
+
+    test('dismissKeyboard hides the keyboard of a filled field and keeps its text; a second call returns false', async () => {
+      // The field's default return key is not a Done key, so WebDriverAgent
+      // refuses a bare `mobile: hideKeyboard` here.
+      const username = await get('username', 'LoginForm');
+      await username.fill('kbd-check');
+      await expect.poll(() => driver.isKeyboardShown(), { timeout: 10_000 }).toBe(true);
+
+      expect(await dismissKeyboard(driver, 'ios')).toBe(true);
+      expect(await driver.isKeyboardShown()).toBe(false);
+      expect(await username.textContent()).toBe('kbd-check');
+
+      expect(await dismissKeyboard(driver, 'ios')).toBe(false);
+      expect(await driver.isKeyboardShown()).toBe(false);
     });
   });
 

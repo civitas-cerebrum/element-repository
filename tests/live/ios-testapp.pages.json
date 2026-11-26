@@ -22,7 +22,8 @@
         { "elementName": "alerts", "selector": { "accessibility id": "category-item-alerts" } },
         { "elementName": "gallery", "selector": { "accessibility id": "category-item-gallery" } },
         { "elementName": "productCarousel", "selector": { "accessibility id": "category-item-productCarousel" } },
-        { "elementName": "counter", "selector": { "accessibility id": "category-item-piniaCounter" } }
+        { "elementName": "counter", "selector": { "accessibility id": "category-item-piniaCounter" } },
+        { "elementName": "loginForm", "selector": { "accessibility id": "category-item-loginForm" } }
       ]
     },
     {
@@ -31,6 +32,14 @@
       "elements": [
         { "elementName": "primary", "selector": { "accessibility id": "btn-primary" } },
         { "elementName": "result", "selector": { "accessibility id": "btn-result" } }
+      ]
+    },
+    {
+      "name": "LoginForm",
+      "platform": "ios",
+      "elements": [
+        { "elementName": "username", "selector": { "accessibility id": "login-username" } },
+        { "elementName": "submit", "selector": { "accessibility id": "login-submit" } }
       ]
     },
     {

@@ -15,6 +15,7 @@ import { detectDriverPlatform, readPlatformText } from '../utils/platformText';
 import { readPlatformChecked } from '../utils/platformChecked';
 import { readElementClass } from '../utils/platformClass';
 import { readPlatformAttribute } from '../utils/platformAttr';
+import { dismissKeyboard, KeyboardStillShownError } from '../utils/keyboard';
 
 /** Extra construction options for {@link PlatformElement}. */
 export interface PlatformElementOptions {
@@ -473,6 +474,11 @@ export class PlatformElement implements Element {
    * (see {@link sweepPath}): inside `options.container` when given, else
    * along the target's own row / column while it is in the element tree,
    * else along the window's centre line.
+   *
+   * Before the first swipe, a shown soft keyboard is dismissed with
+   * {@link dismissKeyboard}. A keyboard that is still shown after every
+   * dismissal step does not fail the call (the sweep runs anyway); any other
+   * error of the dismissal, such as a fatal driver error, is thrown.
    */
   async scrollIntoView(options?: ScrollIntoViewOptions): Promise<Element> {
     // Deliberately skip `ensureAttached` here — the whole point of
@@ -506,33 +512,13 @@ export class PlatformElement implements Element {
     // Fast path — already on-screen.
     if (await shownNow()) return this;
 
-    // Best-effort keyboard dismiss cascade. See earlier history — the
-    // swipe gesture starts near y=75% which is inside the soft keyboard
-    // on forms; dismiss first so touches reach the content underneath.
-    // Bare `hideKeyboard()` → `mobile: hideKeyboard {pressKey, return}`
-    // → `mobile: hideKeyboard {tapOutside}`, stopping at the first that
-    // actually dismisses. No-op if the driver doesn't expose the APIs
-    // (web) or if all strategies fail (swipe proceeds anyway).
-    try {
-      const drv = this.driver as {
-        isKeyboardShown?: () => Promise<boolean>;
-        hideKeyboard?: () => Promise<void>;
-        execute?: (script: string, args: Record<string, unknown>) => Promise<unknown>;
-      };
-      if (typeof drv.isKeyboardShown === 'function' && await drv.isKeyboardShown()) {
-        const strategies: Array<() => Promise<void>> = [
-          async () => { if (drv.hideKeyboard) await drv.hideKeyboard(); },
-          async () => { if (drv.execute) await drv.execute('mobile: hideKeyboard', { strategy: 'pressKey', key: 'return' }); },
-          async () => { if (drv.execute) await drv.execute('mobile: hideKeyboard', { strategy: 'tapOutside' }); },
-        ];
-        for (const attempt of strategies) {
-          await attempt().catch(() => { /* try next */ });
-          await this.driver.pause(300);
-          const stillShown = await drv.isKeyboardShown!().catch(() => false);
-          if (!stillShown) break;
-        }
-      }
-    } catch { /* no-op — proceed to swipe regardless */ }
+    // The swipe starts inside the soft keyboard on a form (75% of the
+    // window), so a shown keyboard is dismissed first (see dismissKeyboard).
+    // A keyboard that stays up is not an error here: the sweep runs anyway.
+    // Any other error of the dismissal (a fatal driver error) is thrown.
+    await dismissKeyboard(this.driver, this.resolvePlatform()).catch(err => {
+      if (!(err instanceof KeyboardStillShownError)) throw err;
+    });
 
     const windowSize = await this.driver.getWindowSize();
     // Only a timeout given to this call bounds the sweep in time; without
