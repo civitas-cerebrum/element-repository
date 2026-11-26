@@ -419,17 +419,11 @@ test.describe('live iOS test app (SIMULATOR)', () => {
       await expectIndicator('Product 1 of 5');
     });
 
-    test('scrollIntoView right reaches the last product, then left the first (no container)', async () => {
-      const last = await get('name4', 'ProductCarousel', { timeout: 2_000 });
-      expect(await last.scrollIntoView({ direction: 'right', timeout: 120_000 })).toBe(last);
-      expect(await last.isVisible()).toBe(true);
-      await expectIndicator('Product 5 of 5');
-
-      const first = await get('name0', 'ProductCarousel', { timeout: 2_000 });
-      await first.scrollIntoView({ direction: 'left', timeout: 120_000 });
-      expect(await first.isVisible()).toBe(true);
-      await expectIndicator('Product 1 of 5');
-    });
+    // No check without a container here: the carousel pages full-width
+    // slides and only the shown slide is in the tree, so no target to the
+    // side is in the tree, and without a container the sweep runs along the
+    // window centre (outside the carousel). The no-container horizontal
+    // check runs on the Android table, which spans the window centre.
 
     test('scrollIntoView right reaches the last product, then left the first, inside the carousel container', async () => {
       const container = await get('carousel', 'ProductCarousel');
