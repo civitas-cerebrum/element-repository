@@ -41,9 +41,20 @@ export const ANDROID_DESCENDANT_TEXT_XPATH = ".//*[@text!='' and not(@showing-hi
  * carry visible text: its `XCUIElementTypeStaticText` descendants at any
  * depth, which WebDriverAgent returns in document order. Static text is
  * the leaf that holds the words, so a nested container's own (merged)
- * label is not read a second time; buttons and inputs inside are not read.
+ * label is not read a second time; a button's or input's own label / value
+ * is not read (a static text inside a button is). Descendants are not
+ * filtered by visibility, so off-screen static text is read too.
  */
 export const IOS_DESCENDANT_TEXT_SELECTOR = '-ios class chain:**/XCUIElementTypeStaticText';
+
+/**
+ * XCUITest element types that hold no static text descendants: an empty
+ * label / value on one of them is its text, with no descendant query.
+ */
+export const IOS_LEAF_TEXT_TYPES: ReadonlySet<string> = new Set([
+  'XCUIElementTypeStaticText',
+  'XCUIElementTypeImage',
+]);
 
 /** True when `s` is a string with something other than whitespace. */
 function hasText(s: unknown): s is string {
@@ -65,8 +76,14 @@ function hasText(s: unknown): s is string {
  *   with no label of its own and a child StaticText): the text of its
  *   static text descendants ({@link IOS_DESCENDANT_TEXT_SELECTOR}), each
  *   read by `label`, else `value`, in document order, each trimmed,
- *   whitespace-only ones skipped, joined with single spaces. When no
- *   descendant has text, the empty attribute (if any) is returned.
+ *   whitespace-only ones skipped, joined with single spaces. Descendants
+ *   are not filtered by visibility, and a button's or input's own label /
+ *   value is not read (only static text). A static text or image element
+ *   ({@link IOS_LEAF_TEXT_TYPES}) has no text descendants, so no query is
+ *   made for it. Every static text inside is read, so a selector matching
+ *   a large container (a bare `XCUIElementTypeOther`) reads every text
+ *   under it. When no descendant has text, the empty attribute (if any) is
+ *   returned.
  * - `android`: WebdriverIO `getText()`. When that has no text (empty or
  *   whitespace only), the element is taken as a container whose visible
  *   text sits in its descendants (a list row whose title and subtitle are
@@ -120,7 +137,7 @@ export async function readPlatformText(el: any, platform: Platform | undefined):
   const withText = order.find(hasText);
   if (withText !== undefined) return withText;
   const own = order.find(s => typeof s === 'string') ?? null;
-  if (isInput) return own;
+  if (isInput || IOS_LEAF_TEXT_TYPES.has(type)) return own;
   const descendants = Array.from((await el.$$(IOS_DESCENDANT_TEXT_SELECTOR)) ?? []);
   const texts = await Promise.all(descendants.map(async (d: any) => {
     const descendantLabel = await readPlatformAttribute(d, 'label', platform);

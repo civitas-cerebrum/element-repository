@@ -496,6 +496,14 @@ test.describe('readPlatformText on ios containers', () => {
     expect(reads.some(r => r.includes('$$'))).toBe(false);
   });
 
+  for (const type of ['XCUIElementTypeStaticText', 'XCUIElementTypeImage']) {
+    test(`a ${type} with no label or value makes no descendant query`, async () => {
+      const reads: string[] = [];
+      expect(await readPlatformText(iosNode({ id: 'leaf', type, label: '', value: null }, reads), 'ios')).toBe('');
+      expect(reads.some(r => r.includes('$$'))).toBe(false);
+    });
+  }
+
   test('no descendant text: the own (empty) text is returned unchanged', async () => {
     expect(await readPlatformText(iosNode({ id: 'a', label: '', value: null }), 'ios')).toBe('');
     expect(await readPlatformText(iosNode({ id: 'a', label: null, value: null }), 'ios')).toBeNull();

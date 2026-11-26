@@ -40,23 +40,6 @@ function swipePayload(fromX: number, fromY: number, toX: number, toY: number): a
   }];
 }
 
-/** A scrollIntoView sweep swipe: a 50 ms hold, a 300 ms move, a 200 ms hold before the finger lifts. */
-function sweepPayload(fromX: number, fromY: number, toX: number, toY: number): any[] {
-  return [{
-    type: 'pointer',
-    id: 'finger1',
-    parameters: { pointerType: 'touch' },
-    actions: [
-      { type: 'pointerMove', duration: 0, origin: 'viewport', x: fromX, y: fromY },
-      { type: 'pointerDown', button: 0 },
-      { type: 'pause', duration: 50 },
-      { type: 'pointerMove', duration: 300, origin: 'viewport', x: toX, y: toY },
-      { type: 'pause', duration: 200 },
-      { type: 'pointerUp', button: 0 },
-    ],
-  }];
-}
-
 // ---------------------------------------------------------------------------
 // Mock Playwright locator
 // ---------------------------------------------------------------------------
@@ -539,8 +522,8 @@ test.describe('PlatformElement interaction methods', () => {
     const el = new PlatformElement(driver, '~button');
     await el.scrollIntoView();
     expect(touch.calls).toEqual(['performActions', 'releaseActions']);
-    // 'down': one finger from (50%, 85%) to (50%, 15%) of 1080x2400.
-    expect(touch.performed).toEqual([sweepPayload(540, 2040, 540, 360)]);
+    // 'down': one finger from (50%, 75%) to (50%, 25%) of 1080x2400.
+    expect(touch.performed).toEqual([swipePayload(540, 1800, 540, 600)]);
     expect(pauses).toEqual([200]);
     expect(displayCalls).toBeGreaterThanOrEqual(2);
   });
@@ -565,15 +548,15 @@ test.describe('PlatformElement interaction methods', () => {
     await expect(el.scrollIntoView({ direction: 'up' })).rejects.toThrow(/not visible after/);
     expect(touch.performed).toHaveLength(20);
     expect(touch.released).toBe(20);
-    // 15% of 2400 = 360 → 85% = 2040: an 'up' sweep swipes down from near the top.
-    expect(touch.performed[0]).toEqual(sweepPayload(540, 360, 540, 2040));
+    // 25% of 2400 = 600 → 75% = 1800: an 'up' sweep swipes down from near the top.
+    expect(touch.performed[0]).toEqual(swipePayload(540, 600, 540, 1800));
   });
 
   test('scrollIntoView left/right swipe horizontally across the window centre', async () => {
     const mockEl = createMockWdioElement({ elementId: 'el-42', isDisplayed: async () => false });
     for (const [direction, expected] of [
-      ['left', sweepPayload(162, 1200, 918, 1200)],
-      ['right', sweepPayload(918, 1200, 162, 1200)],
+      ['left', swipePayload(270, 1200, 810, 1200)],
+      ['right', swipePayload(810, 1200, 270, 1200)],
     ] as const) {
       const touch = touchRecorder();
       const driver = {

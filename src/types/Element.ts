@@ -57,18 +57,29 @@ export interface ScrollIntoViewOptions extends ElementActionOptions {
    * its rect, clipped to the window: a `'left'` / `'right'` sweep along
    * its vertical centre, from 85% to 15% of its width; an `'up'` /
    * `'down'` sweep along its horizontal centre, from 85% to 15% of its
-   * height (points kept between 10% and 90% of the window where the
-   * container allows). Its rect is read once, after the fast path; a container that
-   * is not found, or lies wholly outside the window, fails before any
-   * swipe. Anything other than a platform element is refused.
+   * height. Each swipe is a drag that lifts a still finger (50 ms hold,
+   * 300 ms move, 200 ms hold at the end point), so a paging scroller as
+   * wide as the container advances a page and a free list inside it moves
+   * by the drag. A drag reaching into the window's edge bands (outside
+   * 10% - 90% of the window) is shifted inside them, whole, when it fits
+   * in the container's part there; otherwise it stays at the container's
+   * own 85% / 15%. A container too thin at the window edge to drag over
+   * half of it throws (`scrollIntoView: container "<selector>" is too
+   * close to the window edge to sweep`). Its rect is read once, after the
+   * fast path; a container that is not found, or lies wholly outside the
+   * window, fails before any swipe. Anything other than a platform element
+   * is refused.
    *
-   * Without it the sweep runs along the target's own row (left / right:
+   * Without it each swipe runs from 75% to 25% of the window (100 ms hold,
+   * 600 ms move, no end hold), for free-scrolling lists; a paging carousel
+   * needs `container`. It runs along the target's own row (left / right:
    * the target's vertical centre) or column (up / down: its horizontal
    * centre), read again before every swipe, while the target is in the
    * element tree and that line lies inside the window; otherwise along the
-   * window's centre line. Pass `container` for a scroller that does not
-   * cross the window centre (a carousel near the top of the screen, a side
-   * list) when its off-screen items are not in the element tree yet.
+   * window's centre line. The line is kept between 10% and 90% of the
+   * window. Pass `container` for a scroller that does not cross the window
+   * centre (a carousel near the top of the screen, a side list) when its
+   * off-screen items are not in the element tree yet.
    *
    * Web: ignored.
    */
@@ -219,9 +230,11 @@ export interface Element {
    * directions.
    *
    * On platform elements the sweep makes up to `options.maxSwipes` swipes
-   * (default 20; each a drag of 70% of the swept area that lifts a still
-   * finger: 50 ms hold + 300 ms move + 200 ms hold + 200 ms settle of
-   * gesture time, longer on a real device). The sweep is time-bounded
+   * (default 20). Without `options.container` each swipe goes from 75% to
+   * 25% of the window: 100 ms hold + 600 ms move + 200 ms settle of
+   * gesture time. With one it is a drag from 85% to 15% of the container
+   * that lifts a still finger: 50 ms hold + 300 ms move + 200 ms hold +
+   * 200 ms settle. Longer on a real device. The sweep is time-bounded
    * only by a timeout given to this call: with `options.timeout` it also
    * stops once that many ms have passed (no new swipe starts after the
    * deadline, so the call can overrun it by at most one swipe). Without

@@ -560,7 +560,18 @@ export class PlatformElement implements Element {
         );
       }
       const { from, to } = await this.sweepPath(direction, windowSize, area, found);
-      await performTouchSwipe(this.driver, from, to, PlatformElement.SWEEP_TIMING);
+      if (area) {
+        // A drag over less than half the container is no page turn, and a
+        // near-still finger held this long acts as a long press.
+        const horizontal = direction === 'left' || direction === 'right';
+        const travel = Math.abs(horizontal ? to.x - from.x : to.y - from.y);
+        if (travel < (horizontal ? area.width : area.height) / 2) {
+          throw new Error(`scrollIntoView: container ${container!.describe()} is too close to the window edge to sweep`);
+        }
+        await performTouchSwipe(this.driver, from, to, PlatformElement.SWEEP_TIMING);
+      } else {
+        await performTouchSwipe(this.driver, from, to);
+      }
       await this.driver.pause(SWIPE_SETTLE_MS);
       if (await shownNow()) return this;
     }
@@ -571,9 +582,11 @@ export class PlatformElement implements Element {
   }
 
   /**
-   * The touch timing of a sweep swipe: a drag (short hold, quick move) that
-   * holds still before the finger lifts, so the content moves as far as the
-   * finger did, with no fling (see {@link sweepPath}).
+   * The touch timing of a sweep swipe inside a container: a drag (short
+   * hold, quick move) that holds still before the finger lifts, so the
+   * content moves as far as the finger did, with no fling (see
+   * {@link sweepPath}). A sweep without a container uses the default swipe
+   * timing (`SWIPE_HOLD_MS` 100 ms, `SWIPE_MOVE_MS` 600 ms, no end hold).
    */
   private static readonly SWEEP_TIMING = {
     holdMs: SWEEP_HOLD_MS, moveMs: SWEEP_MOVE_MS, releaseHoldMs: SWEEP_RELEASE_HOLD_MS,
@@ -598,37 +611,35 @@ export class PlatformElement implements Element {
 
   /**
    * One swipe of a {@link scrollIntoView} sweep, in native-context viewport
-   * coordinates. It travels along the scroll axis from
-   * {@link SWEEP_START_FRACTION} (85%) to {@link SWEEP_END_FRACTION} (15%)
-   * of the swept area (or back, for `'up'` / `'left'`), along a line across
-   * that axis:
+   * coordinates, along a line across the scroll axis.
    *
-   * - with a container (`area`, its part inside the window): the area is
-   *   the container; the line is its centre (vertical centre for left /
-   *   right, horizontal centre for up / down);
-   * - otherwise the area is the window, and the line is the target's own
-   *   centre on the cross axis, its rect read now from `target` (the match
-   *   the latest visibility check found), while it is in the element tree
-   *   with a non-empty rect whose centre lies inside the window on that
-   *   axis; else the window's centre.
+   * - With a container (`area`, its part inside the window): from
+   *   {@link SWEEP_START_FRACTION} (85%) to {@link SWEEP_END_FRACTION} (15%)
+   *   of the container's extent along the scroll axis, along its centre
+   *   line (vertical centre for left / right, horizontal centre for up /
+   *   down). A drag of 70%: over half, so a paging scroller as wide as the
+   *   container passes its half-page threshold; the caller sends it with
+   *   an end hold, so the content moves as far as the drag and no further.
+   *   When the drag reaches into a window edge band ({@link SWEEP_EDGE_BAND}:
+   *   outside 10% - 90% of the window) and fits in the container's part
+   *   outside the bands, it is shifted there whole, keeping its length;
+   *   otherwise it stays at the container's own 85% / 15%.
+   * - Without a container: from 75% to 25% of the window along the scroll
+   *   axis, the swipe real-device lists scroll with (sent with the default
+   *   swipe timing), along the target's own centre on the cross axis, its
+   *   rect read now from `target` (the match the latest visibility check
+   *   found), while it is in the element tree with a non-empty rect whose
+   *   centre lies inside the window on that axis; else the window's centre.
    *
-   * Every point is then kept out of the window's edge bands
-   * ({@link SWEEP_EDGE_BAND}: between 10% and 90% of the window on each
-   * axis), within the area: a point in a band is moved to the band's inner
-   * edge, unless the area lies wholly inside the band, where it stays in the
-   * area. Points are rounded and clamped to `[0, size - 1]`.
+   * The line is kept out of the window's edge bands within the area (moved
+   * to the band's inner edge, unless the area lies wholly inside the band).
+   * Points are rounded and clamped to `[0, size - 1]`.
    *
-   * 85% → 15% is a drag of 70% of the area: over half, so a paging
-   * scroller as wide as the area passes its half-page threshold, and short
-   * of the whole, so a free-scrolling one keeps part of the last view on
-   * screen. The finger lifts still ({@link SWEEP_RELEASE_HOLD_MS}), so the
-   * content moves as far as the drag and no further.
-   *
-   * Direction → swipe geometry:
-   *   'down'  — swipe up (85%→15%) reveals content BELOW
-   *   'up'    — swipe down (15%→85%) reveals content ABOVE
-   *   'right' — swipe left (85%→15%) reveals content to the RIGHT
-   *   'left'  — swipe right (15%→85%) reveals content to the LEFT
+   * Direction → swipe geometry (start → end along the scroll axis):
+   *   'down'  — swipe up (far → near) reveals content BELOW
+   *   'up'    — swipe down (near → far) reveals content ABOVE
+   *   'right' — swipe left (far → near) reveals content to the RIGHT
+   *   'left'  — swipe right (near → far) reveals content to the LEFT
    */
   private async sweepPath(
     direction: 'down' | 'up' | 'left' | 'right',
@@ -649,13 +660,29 @@ export class PlatformElement implements Element {
         if (centre >= 0 && centre < crossSize) line = centre;
       }
     }
-    const alongIn = PlatformElement.sweepBand(alongLo, alongLo + alongExtent, alongSize);
+    // The segment along the scroll axis, `near` < `far`.
+    let near: number;
+    let far: number;
+    if (area) {
+      near = alongLo + alongExtent * SWEEP_END_FRACTION;
+      far = alongLo + alongExtent * SWEEP_START_FRACTION;
+      // The part of the container outside the window's edge bands. When the
+      // whole drag fits there it is shifted in, keeping its length;
+      // otherwise it stays at the container's own fractions.
+      const inLo = Math.max(alongLo, alongSize * SWEEP_EDGE_BAND);
+      const inHi = Math.min(alongLo + alongExtent, alongSize * (1 - SWEEP_EDGE_BAND));
+      if (inHi - inLo >= far - near) {
+        const shift = near < inLo ? inLo - near : far > inHi ? inHi - far : 0;
+        near += shift;
+        far += shift;
+      }
+    } else {
+      near = alongSize * 0.25;
+      far = alongSize * 0.75;
+    }
     const crossIn = PlatformElement.sweepBand(crossLo, crossLo + crossExtent, crossSize);
-    const at = (fraction: number) => alongIn(alongLo + alongExtent * fraction);
     const forward = direction !== 'up' && direction !== 'left';
-    const [start, end] = forward
-      ? [at(SWEEP_START_FRACTION), at(SWEEP_END_FRACTION)]
-      : [at(SWEEP_END_FRACTION), at(SWEEP_START_FRACTION)];
+    const [start, end] = forward ? [far, near] : [near, far];
     const across = PlatformElement.clampToAxis(crossIn(line), crossSize);
     const point = (along: number) => {
       const a = PlatformElement.clampToAxis(along, alongSize);

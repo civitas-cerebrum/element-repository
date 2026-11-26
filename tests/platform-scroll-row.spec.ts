@@ -8,6 +8,9 @@ import { ElementChain } from '../src/types/ElementChain';
 // Product Carousel screen. A left / right sweep must run along a row that
 // crosses the scroller: the container's (when given), else the target's
 // own row (when the target is in the element tree), else the window centre.
+// With a container the swipe is the paging-safe drag (85% -> 15% of the
+// container, held still before the finger lifts); without one it is the
+// 75% -> 25% swipe of the window that real-device lists scroll with.
 // ---------------------------------------------------------------------------
 
 type Rect = { x: number; y: number; width: number; height: number };
@@ -110,8 +113,8 @@ test.describe('scrollIntoView left / right: the row the sweep runs along', () =>
     const { driver, swipes } = fakeDriver({ '~product-name-2': { x: 806, y: 150, width: 300, height: 40 } });
     await sweep(el(driver, '~product-name-2'), { direction: 'right' });
     expect(swipes).toEqual([
-      { from: { x: 334, y: 170 }, to: { x: 59, y: 170 } },
-      { from: { x: 334, y: 170 }, to: { x: 59, y: 170 } },
+      { from: { x: 295, y: 170 }, to: { x: 98, y: 170 } },
+      { from: { x: 295, y: 170 }, to: { x: 98, y: 170 } },
     ]);
   });
 
@@ -125,19 +128,19 @@ test.describe('scrollIntoView left / right: the row the sweep runs along', () =>
   test('without a container, a target not in the tree: the window\'s vertical centre (a container is needed)', async () => {
     const { driver, swipes } = fakeDriver({});
     await sweep(el(driver, '~product-name-2'), { direction: 'right' });
-    expect(swipes[0]).toEqual({ from: { x: 334, y: 426 }, to: { x: 59, y: 426 } });
+    expect(swipes[0]).toEqual({ from: { x: 295, y: 426 }, to: { x: 98, y: 426 } });
   });
 
   test('a target whose row is outside the window: the window centre', async () => {
     const { driver, swipes } = fakeDriver({ '~product-name-2': { x: 806, y: 1200, width: 300, height: 40 } });
     await sweep(el(driver, '~product-name-2'), { direction: 'right' });
-    expect(swipes[0]).toEqual({ from: { x: 334, y: 426 }, to: { x: 59, y: 426 } });
+    expect(swipes[0]).toEqual({ from: { x: 295, y: 426 }, to: { x: 98, y: 426 } });
   });
 
   test('a target with an empty rect counts as not placed: the window centre', async () => {
     const { driver, swipes } = fakeDriver({ '~product-name-2': { x: 0, y: 0, width: 0, height: 0 } });
     await sweep(el(driver, '~product-name-2'), { direction: 'right' });
-    expect(swipes[0]).toEqual({ from: { x: 334, y: 426 }, to: { x: 59, y: 426 } });
+    expect(swipes[0]).toEqual({ from: { x: 295, y: 426 }, to: { x: 98, y: 426 } });
   });
 });
 
@@ -146,22 +149,23 @@ test.describe('scrollIntoView: the sweep stays out of the window edge bands', ()
     const { driver, swipes } = fakeDriver({ '~tab-9': { x: 900, y: 20, width: 80, height: 20 } });
     await sweep(el(driver, '~tab-9'), { direction: 'right' });
     // Centre y 30 < 85.2 (10% of 852).
-    expect(swipes[0]).toEqual({ from: { x: 334, y: 85 }, to: { x: 59, y: 85 } });
+    expect(swipes[0]).toEqual({ from: { x: 295, y: 85 }, to: { x: 98, y: 85 } });
   });
 
   test('a target row in the bottom band: the line moves up to 90% of the window', async () => {
     const { driver, swipes } = fakeDriver({ '~tab-9': { x: 900, y: 820, width: 80, height: 20 } });
     await sweep(el(driver, '~tab-9'), { direction: 'right' });
     // Centre y 830 > 766.8 (90% of 852).
-    expect(swipes[0]).toEqual({ from: { x: 334, y: 767 }, to: { x: 59, y: 767 } });
+    expect(swipes[0]).toEqual({ from: { x: 295, y: 767 }, to: { x: 98, y: 767 } });
   });
 
-  test('a container reaching into a band: its points are moved inside the band and the container', async () => {
-    // A bottom sheet y 600-852: 85% = 814.2 is in the bottom band, moved to
-    // 766.8 -> 767; 15% = 637.8 -> 638.
+  test('a container reaching into a band, shorter there than the drag: its own 85% / 15%', async () => {
+    // A bottom sheet y 600-852: the drag 637.8 -> 814.2 (176.4) does not fit
+    // between 600 and the band's edge 766.8 (166.8), so it stays inside the
+    // sheet, at its own 85% / 15%.
     const { driver, swipes } = fakeDriver({ '~sheet': { x: 0, y: 600, width: 393, height: 252 } });
     await sweep(el(driver, '~row-9'), { direction: 'down', container: el(driver, '~sheet') });
-    expect(swipes[0]).toEqual({ from: { x: 197, y: 767 }, to: { x: 197, y: 638 } });
+    expect(swipes[0]).toEqual({ from: { x: 197, y: 814 }, to: { x: 197, y: 638 } });
   });
 
   test('a container wholly inside a band: the sweep stays inside the container', async () => {
@@ -182,7 +186,7 @@ test.describe('scrollIntoView: the sweep stays out of the window edge bands', ()
 });
 
 test.describe('scrollIntoView: the sweep swipe is a drag that lifts a still finger', () => {
-  test('each swipe: down, 50 ms hold, 300 ms move, 200 ms hold at the end, up', async () => {
+  test('with a container, each swipe: down, 50 ms hold, 300 ms move, 200 ms hold at the end, up', async () => {
     const sent: any[] = [];
     const { driver } = fakeDriver({ '~carousel': CAROUSEL });
     const perform = driver.performActions;
@@ -212,15 +216,101 @@ test.describe('scrollIntoView: the sweep swipe is a drag that lifts a still fing
     expect(swipes[0].from.x - swipes[0].to.x).toBeGreaterThan(361 / 2);
   });
 
-  test('a long list without a container: one drag is shorter than the list\'s visible part', async () => {
-    // A 1080x2424 Android window whose list shows y 578-2382 (1804 px):
-    // the drag (85% -> 15% of the window) must not move the list further
-    // than it shows, or a row between two views is never on screen.
+});
+
+test.describe('scrollIntoView without a container: the 75% -> 25% swipe of the window', () => {
+  test('each swipe: down, 100 ms hold, 600 ms move, up (no hold at the end)', async () => {
+    const sent: any[] = [];
+    const { driver } = fakeDriver({});
+    const perform = driver.performActions;
+    driver.performActions = async (sources: any[]) => { sent.push(sources); return perform(sources); };
+    await sweep(el(driver, '~row-40'), { direction: 'down', maxSwipes: 1 });
+    expect(sent).toEqual([[{
+      type: 'pointer',
+      id: 'finger1',
+      parameters: { pointerType: 'touch' },
+      actions: [
+        { type: 'pointerMove', duration: 0, origin: 'viewport', x: 197, y: 639 },
+        { type: 'pointerDown', button: 0 },
+        { type: 'pause', duration: 100 },
+        { type: 'pointerMove', duration: 600, origin: 'viewport', x: 197, y: 213 },
+        { type: 'pointerUp', button: 0 },
+      ],
+    }]]);
+  });
+
+  test('a long list under a header, direction up: the swipe starts inside the list', async () => {
+    // A 1080x2424 Android window whose list shows y 578-2382 below a search
+    // header: an up sweep swipes down from 25% (606), not from the header.
+    const { driver, swipes } = fakeDriver({});
+    driver.getWindowSize = async () => ({ width: 1080, height: 2424 });
+    await sweep(el(driver, '~long-list-item-0'), { direction: 'up', maxSwipes: 1 });
+    expect(swipes[0]).toEqual({ from: { x: 540, y: 606 }, to: { x: 540, y: 1818 } });
+    expect(swipes[0].from.y).toBeGreaterThan(578);
+  });
+
+  test('a long list, direction down: from 75% to 25% of the window', async () => {
     const { driver, swipes } = fakeDriver({});
     driver.getWindowSize = async () => ({ width: 1080, height: 2424 });
     await sweep(el(driver, '~long-list-item-40'), { direction: 'down', maxSwipes: 1 });
-    expect(swipes[0]).toEqual({ from: { x: 540, y: 2060 }, to: { x: 540, y: 364 } });
-    expect(swipes[0].from.y - swipes[0].to.y).toBeLessThan(2382 - 578);
+    expect(swipes[0]).toEqual({ from: { x: 540, y: 1818 }, to: { x: 540, y: 606 } });
+  });
+
+  test('an iOS window with a bottom toolbar: the down swipe starts above the bottom 25%', async () => {
+    // 852-pt window: 75% = 639, well above a bottom toolbar from about y 760.
+    const { driver, swipes } = fakeDriver({});
+    await sweep(el(driver, '~general'), { direction: 'down', maxSwipes: 1 });
+    expect(swipes[0]).toEqual({ from: { x: 197, y: 639 }, to: { x: 197, y: 213 } });
+  });
+});
+
+test.describe('scrollIntoView with a container near the window edge: the drag keeps its length', () => {
+  test('a drag reaching into the bottom band that fits above it is shifted up whole', async () => {
+    // y 500-852: drag 552.8 -> 799.2 (246.4); allowed 500 - 766.8 (266.8):
+    // shifted up by 32.4 to 520.4 -> 766.8.
+    const { driver, swipes } = fakeDriver({ '~list': { x: 0, y: 500, width: 393, height: 352 } });
+    await sweep(el(driver, '~row-9'), { direction: 'down', container: el(driver, '~list') });
+    expect(swipes[0]).toEqual({ from: { x: 197, y: 767 }, to: { x: 197, y: 520 } });
+  });
+
+  test('a drag reaching into the top band that fits below it is shifted down whole', async () => {
+    // y 0-400: drag 60 -> 340 (280); allowed 85.2 - 400 (314.8): shifted
+    // down by 25.2 to 85.2 -> 365.2.
+    const { driver, swipes } = fakeDriver({ '~list': { x: 0, y: 0, width: 393, height: 400 } });
+    await sweep(el(driver, '~row-0'), { direction: 'up', container: el(driver, '~list') });
+    expect(swipes[0]).toEqual({ from: { x: 197, y: 85 }, to: { x: 197, y: 365 } });
+  });
+
+  test('a container y 760-852, barely above the bottom band: its own 85% / 15%, not a still finger', async () => {
+    // Allowed 760 - 766.8 is shorter than the drag (64.4): the drag stays
+    // inside the container at 773.8 -> 838.2.
+    const { driver, swipes } = fakeDriver({ '~bar': { x: 0, y: 760, width: 393, height: 92 } });
+    await sweep(el(driver, '~row-9'), { direction: 'down', container: el(driver, '~bar') });
+    expect(swipes[0]).toEqual({ from: { x: 197, y: 838 }, to: { x: 197, y: 774 } });
+    expect(swipes[0].from.y - swipes[0].to.y).toBeGreaterThanOrEqual(92 / 2);
+  });
+
+  test('a container x 0-45, barely past the left band: its own 85% / 15%', async () => {
+    const { driver, swipes } = fakeDriver({ '~strip': { x: 0, y: 300, width: 45, height: 200 } });
+    await sweep(el(driver, '~chip-9'), { direction: 'right', container: el(driver, '~strip') });
+    expect(swipes[0]).toEqual({ from: { x: 38, y: 400 }, to: { x: 7, y: 400 } });
+    expect(swipes[0].from.x - swipes[0].to.x).toBeGreaterThanOrEqual(45 / 2);
+  });
+
+  test('a container y 700-852: its own 85% / 15% (the allowed part is shorter than the drag)', async () => {
+    // Allowed 700 - 766.8 (66.8) < drag 106.4: 722.8 -> 829.2.
+    const { driver, swipes } = fakeDriver({ '~sheet': { x: 0, y: 700, width: 393, height: 152 } });
+    await sweep(el(driver, '~row-9'), { direction: 'down', container: el(driver, '~sheet') });
+    expect(swipes[0]).toEqual({ from: { x: 197, y: 829 }, to: { x: 197, y: 723 } });
+    expect(swipes[0].from.y - swipes[0].to.y).toBeGreaterThanOrEqual(152 / 2);
+  });
+
+  test('a container too thin at the window edge to drag over half of it fails before any swipe', async () => {
+    // y 851-852: both points round onto the window's last row, no travel.
+    const { driver, swipes } = fakeDriver({ '~bar': { x: 0, y: 851, width: 393, height: 1 } });
+    const err = await sweep(el(driver, '~row-9'), { direction: 'down', container: el(driver, '~bar') });
+    expect(err.message).toBe('scrollIntoView: container "~bar" is too close to the window edge to sweep');
+    expect(swipes).toEqual([]);
   });
 });
 
@@ -249,13 +339,20 @@ test.describe('scrollIntoView up / down: the column the sweep runs along', () =>
   test('without a container, a target in the tree: at the target\'s own horizontal centre', async () => {
     const { driver, swipes } = fakeDriver({ '~row-40': { x: 250, y: 1200, width: 100, height: 50 } });
     await sweep(el(driver, '~row-40'), { direction: 'down' });
-    expect(swipes[0]).toEqual({ from: { x: 300, y: 724 }, to: { x: 300, y: 128 } });
+    expect(swipes[0]).toEqual({ from: { x: 300, y: 639 }, to: { x: 300, y: 213 } });
   });
 
   test('without a container, a target not in the tree: the window\'s horizontal centre', async () => {
     const { driver, swipes } = fakeDriver({});
     await sweep(el(driver, '~row-40'), { direction: 'down' });
-    expect(swipes[0]).toEqual({ from: { x: 197, y: 724 }, to: { x: 197, y: 128 } });
+    expect(swipes[0]).toEqual({ from: { x: 197, y: 639 }, to: { x: 197, y: 213 } });
+  });
+
+  test('without a container, a target column in the right band: the line moves to 90% of the window', async () => {
+    const { driver, swipes } = fakeDriver({ '~row-40': { x: 370, y: 1200, width: 20, height: 50 } });
+    await sweep(el(driver, '~row-40'), { direction: 'down' });
+    // Centre x 380 > 353.7 (90% of 393).
+    expect(swipes[0]).toEqual({ from: { x: 354, y: 639 }, to: { x: 354, y: 213 } });
   });
 });
 
