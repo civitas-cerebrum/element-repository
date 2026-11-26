@@ -707,11 +707,34 @@ if (isPlatform(el)) {
 
 ## ✅ Verified on Real Devices
 
-The platform elements were run against real devices through Appium with the live specs in `tests/live/`.
+The platform elements were run live through Appium with the live specs in `tests/live/`. Each target is listed separately; a behaviour is only claimed for the target it was run on.
 
-- **iOS** (a real iOS device, XCUITest, the built-in Settings app, read-only): lookups by accessibility id, predicate string, class chain and `id`; `count()`, `first()` and `nth()`; `textContent()` reading the label first, and `rawText()`; the `TEXT` strategy and `getByText`; gestures returning the element; `swipe()`; `scrollIntoView()` down and up.
-- **Android** (a real Android device, UiAutomator2, the purpose-built test app): checked state of checkboxes, switches and radio buttons, including the refusals (a disabled control, a control that is not checkable, `uncheck()` on a radio button) and idempotence (`check()` on a checked control does not click); row text read from child views; the `TEXT` strategy and `getByText` by child text, with the hint of an empty search field left out; short and full resource ids; `locateChild()`; `first()` and `nth()`; `longPress()`, `tapAt()`, `pinch()`, `zoom()`, `swipe()`, `scrollIntoView()` up and down; an alert dialog flow.
-- **Not verified live:** on iOS, `longPress()`, `tapAt()`, `pinch()`, `zoom()`, `check()` and `uncheck()` (the iOS run is read-only). These are covered by the mock-driver and WebdriverIO wire tests only.
+### Real Android device (UiAutomator2, purpose-built test app)
+
+- **Checked state** of checkboxes, switches and radio buttons, including idempotence (`check()` on a checked control does not click) and the refusals: a disabled control, a control that is not checkable, and `uncheck()` on a radio button.
+- **Text:** row text read from child views; the `TEXT` strategy and `getByText` matching by child text; the hint of an empty search field is not read as text.
+- **Lookup:** short and full resource ids; `locateChild()`; `first()` and `nth()`.
+- **Gestures:** `doubleClick()` (the native double-click gesture), `longPress()`, `tapAt()`, `pinch()`, `zoom()`, `swipe()`.
+- **Scrolling:** `scrollIntoView()` up and down, and left and right, both with and without a `container`.
+- **Attributes:** an unknown attribute reads as `null`, and `getByAttribute` skips elements that do not have it.
+- **Dialogs:** an alert dialog flow.
+
+### Real iOS device (XCUITest, built-in Settings app, read-only)
+
+- **Lookup:** by accessibility id, predicate string, class chain and `id`; `count()`, `first()` and `nth()`.
+- **Text:** `textContent()` reading the label first, and `rawText()`; the `TEXT` strategy and `getByText`.
+- **Attributes:** an unknown attribute reads as `null`.
+- **Gestures and scrolling:** gestures return the element; `swipe()`; `scrollIntoView()` down and up.
+
+### iOS simulator only (not yet verified on a real iOS device)
+
+These ran on the iOS simulator against a purpose-built test app. The real-device run is read-only, so they are not yet verified on a real iOS device.
+
+- **Gestures:** `doubleClick()` (the native double tap), `longPress()`, `tapAt()`, `pinch()` and `zoom()`.
+- **Checked state:** `check()` and `uncheck()`, with switch values reported as `"0"` / `"1"`.
+- **Text:** a container's text read from its descendants.
+- **Scrolling:** horizontal paging scroll inside a `container`, and vertical scroll inside a `container`.
+- **Attributes:** unknown attribute reads.
 
 ## ⚠️ Breaking Changes (v0.4.0)
 
