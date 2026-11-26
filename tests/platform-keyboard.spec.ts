@@ -37,12 +37,14 @@ function fakeDriver(options: {
   caps?: Record<string, unknown>;
   isKeyboardShown?: () => Promise<boolean>;
   omit?: string[];
+  keyboardRect?: { x: number; y: number; width: number; height: number };
 }) {
   let shown = options.shown ?? true;
   const calls: Call[] = [];
   const executes: Array<[string, unknown]> = [];
   const pauses: number[] = [];
   const actions: any[] = [];
+  const finds: Array<[string, unknown]> = [];
   const act = async (name: string) => {
     calls.push(name);
     const outcome = options.outcomes?.[name] ?? 'noop';
@@ -62,18 +64,19 @@ function fakeDriver(options: {
       if (args?.strategy === 'tapOutside') return act('tapOutside');
       return act('bare');
     },
-    $: async (selector: string) => {
+    $: async (selector: string, opts?: unknown) => {
       calls.push(`$ ${selector}`);
+      finds.push([selector, opts]);
       return { elementId: 'kb-1' };
     },
-    getElementRect: async () => KEYBOARD_RECT,
+    getElementRect: async () => options.keyboardRect ?? KEYBOARD_RECT,
     getWindowSize: async () => WINDOW,
     performActions: async (sources: any[]) => { actions.push(sources); await act('drag'); },
     releaseActions: async () => { calls.push('releaseActions'); },
     pause: async (ms: number) => { pauses.push(ms); },
   };
   for (const key of options.omit ?? []) delete driver[key];
-  return { driver, calls, executes, pauses, actions, isShown: () => shown };
+  return { driver, calls, executes, pauses, actions, finds, isShown: () => shown };
 }
 
 const dismissing = (calls: Call[]) => calls.filter(c => c !== 'isKeyboardShown' && !c.startsWith('$ ') && c !== 'releaseActions');
@@ -112,16 +115,29 @@ test.describe('dismissKeyboard: no keyboard', () => {
     }
   });
 
-  test('any other error of the first check is thrown, before any step', async () => {
-    const dead = driverError('A session is either terminated or not started', 'invalid session id');
-    const { driver, executes } = fakeDriver({ isKeyboardShown: async () => { throw dead; } });
-    await expect(dismissKeyboard(driver, 'ios')).rejects.toBe(dead);
-    expect(executes).toEqual([]);
+  test('a fatal error of the first check is thrown, before any step', async () => {
+    for (const err of [
+      driverError('A session is either terminated or not started', 'invalid session id'),
+      driverError('connect ECONNREFUSED <appium-server>'),
+    ]) {
+      const { driver, executes } = fakeDriver({ isKeyboardShown: async () => { throw err; } });
+      await expect(dismissKeyboard(driver, 'ios')).rejects.toBe(err);
+      expect(executes).toEqual([]);
+    }
+  });
 
-    const odd = driverError('something odd');
-    const second = fakeDriver({ isKeyboardShown: async () => { throw odd; } });
-    await expect(dismissKeyboard(second.driver, 'ios')).rejects.toBe(odd);
-    expect(second.executes).toEqual([]);
+  test('a non-fatal error of the first check means "cannot tell": false, nothing sent', async () => {
+    for (const err of [
+      driverError('something odd'),
+      driverError('Unknown mobile command "mobile: isKeyboardShown"', 'unknown method'),
+      driverError('Operation not supported', 'unsupported operation'),
+    ]) {
+      const { driver, calls, executes, pauses } = fakeDriver({ isKeyboardShown: async () => { throw err; } });
+      expect(await dismissKeyboard(driver, 'ios')).toBe(false);
+      expect(calls).toEqual([]);
+      expect(executes).toEqual([]);
+      expect(pauses).toEqual([]);
+    }
   });
 });
 
@@ -231,6 +247,80 @@ test.describe('dismissKeyboard: iOS steps', () => {
     expect(flaky.executes).toHaveLength(2);
   });
 
+  test('the keyboard is looked up with a non-strict $', async () => {
+    const { driver, finds } = fakeDriver({ outcomes: { bare: 'refuse', keys: 'refuse', drag: 'dismiss' } });
+    expect(await dismissKeyboard(driver, 'ios')).toBe(true);
+    expect(finds).toEqual([['-ios class chain:**/XCUIElementTypeKeyboard', { strict: false }]]);
+  });
+
+  test('a step answered "unknown method" is skipped, not fatal: the next step runs at once', async () => {
+    const unknown = driverError('Unknown mobile command "mobile: hideKeyboard"', 'unknown method');
+    const { driver, calls, pauses } = fakeDriver({ outcomes: { bare: unknown, keys: 'dismiss' } });
+    expect(await dismissKeyboard(driver, 'ios')).toBe(true);
+    // No settle pause or re-check after a step the driver did not run.
+    expect(calls).toEqual(['isKeyboardShown', 'bare', 'keys', 'isKeyboardShown']);
+    expect(pauses).toEqual([KEYBOARD_SETTLE_MS]);
+  });
+
+  test('every unsupported spelling skips the step; "invalid argument" skips the drag', async () => {
+    for (const err of [
+      driverError('The requested resource could not be found', 'unknown command'),
+      driverError('Method has not yet been implemented'),
+      driverError('Operation not supported', 'unsupported operation'),
+      driverError('not here', 'NotImplementedError'),
+    ]) {
+      const { driver, calls } = fakeDriver({ outcomes: { bare: err, keys: 'dismiss' } });
+      expect(await dismissKeyboard(driver, 'ios')).toBe(true);
+      expect(dismissing(calls)).toEqual(['bare', 'keys']);
+    }
+    const bad = driverError('The coordinates are outside the window', 'invalid argument');
+    const { driver } = fakeDriver({ outcomes: { bare: 'refuse', keys: 'refuse', drag: bad } });
+    await expect(dismissKeyboard(driver, 'ios')).rejects.toThrow(
+      /, a drag from above the keyboard down onto it \(skipped: The coordinates are outside the window\)$/,
+    );
+  });
+
+  test('"invalid argument" of a hideKeyboard step is not a skip: it is fatal', async () => {
+    const bad = driverError('bad keys', 'invalid argument');
+    const { driver, calls } = fakeDriver({ outcomes: { bare: 'refuse', keys: bad } });
+    await expect(dismissKeyboard(driver, 'ios')).rejects.toBe(bad);
+    expect(dismissing(calls)).toEqual(['bare', 'keys']);
+  });
+
+  test('a keyboard below the window leaves no room for the drag: refused with a reason, nothing sent', async () => {
+    // Start 880 - 30 = 850 is not above the end 852 - 10 = 842.
+    const { driver, actions, pauses } = fakeDriver({
+      outcomes: { bare: 'refuse', keys: 'refuse' },
+      keyboardRect: { x: 0, y: 880, width: 393, height: 336 },
+    });
+    await expect(dismissKeyboard(driver, 'ios')).rejects.toThrow(
+      /, a drag from above the keyboard down onto it \(failed: the drag start y 850 \(30 pt above the keyboard's top 880\) is not above its end y 842 \(10 pt above the window's bottom\)\)$/,
+    );
+    expect(actions).toEqual([]);
+    expect(pauses).toEqual([KEYBOARD_SETTLE_MS, KEYBOARD_SETTLE_MS]);
+  });
+
+  test('a keyboard off the window\'s centre line (a floating keyboard) is not dragged', async () => {
+    const { driver, actions } = fakeDriver({
+      outcomes: { bare: 'refuse', keys: 'refuse' },
+      keyboardRect: { x: 220, y: 500, width: 160, height: 250 },
+    });
+    await expect(dismissKeyboard(driver, 'ios')).rejects.toThrow(
+      /\(failed: the window's centre x 197 is outside the keyboard's x range 220-380\)$/,
+    );
+    expect(actions).toEqual([]);
+  });
+
+  test('a keyboard near the top: the drag start is clamped into the window', async () => {
+    const { driver, actions } = fakeDriver({
+      outcomes: { bare: 'refuse', keys: 'refuse', drag: 'dismiss' },
+      keyboardRect: { x: 0, y: 12, width: 393, height: 840 },
+    });
+    expect(await dismissKeyboard(driver, 'ios')).toBe(true);
+    const sent = actions[0][0].actions;
+    expect([sent[0].x, sent[0].y, sent[3].x, sent[3].y]).toEqual([197, 0, 197, 842]);
+  });
+
   test('the platform is read from the driver when not given', async () => {
     const { driver, executes } = fakeDriver({ caps: { platformName: 'iOS' }, outcomes: { bare: 'refuse', keys: 'dismiss' } });
     expect(await dismissKeyboard(driver)).toBe(true);
@@ -289,6 +379,25 @@ test.describe('dismissKeyboard: Android steps (unchanged commands)', () => {
       "dismissKeyboard: the keyboard is still shown after hideKeyboard(), mobile: hideKeyboard { strategy: 'pressKey', key: 'return' }, mobile: hideKeyboard { strategy: 'tapOutside' }",
     );
     expect(actions).toEqual([]);
+  });
+
+  test('hideKeyboard() answered 404 "unknown command" (no legacy route) is skipped: the mobile: steps follow', async () => {
+    const legacy = driverError('The requested resource could not be found, or a request was received using an HTTP method that is not supported by the mapped resource', 'unknown command');
+    const { driver, calls, pauses } = fakeDriver({ outcomes: { hideKeyboard: legacy, pressKey: 'dismiss' } });
+    expect(await dismissKeyboard(driver, 'android')).toBe(true);
+    expect(dismissing(calls)).toEqual(['hideKeyboard', 'pressKey']);
+    expect(pauses).toEqual([KEYBOARD_SETTLE_MS]);
+  });
+
+  test('a skipped step is named as skipped in the still-shown error', async () => {
+    const legacy = driverError('The requested resource could not be found', 'unknown command');
+    const { driver } = fakeDriver({ outcomes: { hideKeyboard: legacy } });
+    const err = await dismissKeyboard(driver, 'android').then(() => null, (e: unknown) => e);
+    expect(err).toBeInstanceOf(KeyboardStillShownError);
+    expect((err as Error).message).toBe(
+      'dismissKeyboard: the keyboard is still shown after hideKeyboard() (skipped: The requested resource could not be found), ' +
+      "mobile: hideKeyboard { strategy: 'pressKey', key: 'return' }, mobile: hideKeyboard { strategy: 'tapOutside' }",
+    );
   });
 
   test('a driver without hideKeyboard skips that step', async () => {
