@@ -14,7 +14,10 @@
         { "elementName": "cardAlerts", "selector": { "accessibility id": "home-card-alerts" } },
         { "elementName": "cardInteractions", "selector": { "accessibility id": "home-card-sortable" } },
         { "elementName": "cardMedia", "selector": { "accessibility id": "home-card-gallery" } },
-        { "elementName": "cardEdgeCases", "selector": { "accessibility id": "home-card-longList" } }
+        { "elementName": "cardEdgeCases", "selector": { "accessibility id": "home-card-longList" } },
+        { "elementName": "cardAuth", "selector": { "accessibility id": "home-card-loginForm" } },
+        { "elementName": "cardWidgets", "selector": { "accessibility id": "home-card-tabs" } },
+        { "elementName": "titlesThenAlertsCard", "selector": { "xpath": "//*[@resource-id='com.civitas.testapp:id/category_title' or @content-desc='home-card-alerts']" }, "list": true }
       ]
     },
     {
@@ -26,7 +29,9 @@
         { "elementName": "alerts", "selector": { "accessibility id": "category-item-alerts" } },
         { "elementName": "tall", "selector": { "accessibility id": "category-item-tall" } },
         { "elementName": "longList", "selector": { "accessibility id": "category-item-longList" } },
-        { "elementName": "gallery", "selector": { "accessibility id": "category-item-gallery" } }
+        { "elementName": "gallery", "selector": { "accessibility id": "category-item-gallery" } },
+        { "elementName": "counter", "selector": { "accessibility id": "category-item-piniaCounter" } },
+        { "elementName": "table", "selector": { "accessibility id": "category-item-table" } }
       ]
     },
     {
@@ -88,6 +93,23 @@
       "elements": [
         { "elementName": "grid", "selector": { "id": "gallery_grid" } },
         { "elementName": "item1", "selector": { "accessibility id": "gallery-item-1" } }
+      ]
+    },
+    {
+      "name": "Counter",
+      "platform": "android",
+      "elements": [
+        { "elementName": "value", "selector": { "accessibility id": "counter-value" } },
+        { "elementName": "increment", "selector": { "accessibility id": "counter-increment" } }
+      ]
+    },
+    {
+      "name": "Table",
+      "platform": "android",
+      "elements": [
+        { "elementName": "scroller", "selector": { "class name": "android.widget.HorizontalScrollView" } },
+        { "elementName": "rowCheckbox1", "selector": { "accessibility id": "table-row-checkbox-1" } },
+        { "elementName": "joinDate1", "selector": { "text": "2022-01-15" } }
       ]
     },
     {

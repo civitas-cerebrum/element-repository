@@ -310,6 +310,17 @@ test.describe.serial('live iOS Settings (read-only)', () => {
     });
   }
 
+  test('getAttribute reads null for an attribute XCUITest does not know, and reads a known one', async () => {
+    // Read-only: attribute reads on the General row. XCUITest answers an
+    // unknown name with HTTP 500 "The attribute ... is unknown".
+    const general = await get('generalByAccessibilityId');
+    const started = Date.now();
+    expect(await general.getAttribute('data-never-reported')).toBeNull();
+    // Read once, not polled to a timeout.
+    expect(Date.now() - started).toBeLessThan(10_000);
+    expect(await general.getAttribute('name')).toBe(GENERAL_NAME);
+  });
+
   test('all four selector kinds resolve to the same row', async () => {
     const boxes = [];
     for (const name of GENERAL_KINDS) boxes.push(await (await get(name)).boundingBox());

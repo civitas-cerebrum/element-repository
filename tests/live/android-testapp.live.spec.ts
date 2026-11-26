@@ -40,15 +40,31 @@
  * container's `textContent()`, the TEXT strategy and `getByText` use the
  * text of its descendants when its own text is empty, and leave out the
  * hint an empty search field shows.
+ *
+ * The attribute tests check that `getAttribute()` reads `null` for an
+ * attribute name UiAutomator2 does not know (instead of throwing) and that
+ * `getByAttribute` passes over elements without the attribute. The counter
+ * test checks that `doubleClick()` is two clicks; the table tests check
+ * that a left/right `scrollIntoView` reaches a clipped column, with and
+ * without a `container`.
  */
 import { test, expect } from '@playwright/test';
 import * as fs from 'fs';
 import * as path from 'path';
-import { ElementRepository, Element, SelectionStrategy, isPlatform } from '../../src';
+import { ElementRepository, Element, ScrollIntoViewOptions, SelectionStrategy, isPlatform } from '../../src';
 
 const PAGES = path.join(__dirname, 'android-testapp.pages.json');
 const APP_PACKAGE = 'com.civitas.testapp';
 const FULL_ID_PREFIX = `${APP_PACKAGE}:id/`;
+/** An attribute name UiAutomator2 does not know at all. */
+const UNKNOWN_ATTRIBUTE = 'data-never-reported';
+
+/**
+ * scrollIntoView options with the optional sweep container. Typed here so
+ * the spec states the option it relies on whatever the library's own
+ * declaration of it looks like.
+ */
+type ScrollOptions = ScrollIntoViewOptions & { container?: Element };
 
 const LIVE = process.env.LIVE_ANDROID === '1';
 const APPIUM_URL = process.env.APPIUM_URL;
@@ -148,6 +164,8 @@ test.describe('android-testapp pages file (offline)', () => {
     // text: an exact UiSelector text match.
     expect(repo.getSelector('mediaTitleByText', 'Home')).toBe('android=new UiSelector().text("Media")');
     expect(repo.getSelector('toggleOffByText', 'Checkboxes')).toBe('android=new UiSelector().text("Toggle (off)")');
+    expect(repo.getSelector('joinDate1', 'Table')).toBe('android=new UiSelector().text("2022-01-15")');
+    expect(repo.getSelector('scroller', 'Table')).toBe('android.widget.HorizontalScrollView');
   });
 
   test('UiSelector text escaping: double quotes escaped, backslashes kept, a trailing backslash refused', () => {
@@ -308,6 +326,31 @@ test.describe('live Android test app', () => {
       const edgeBox = await byText!.boundingBox();
       expect(edgeBox).not.toBeNull();
       expect(edgeBox!.y).toBeGreaterThan(expected!.y);
+    });
+
+    test('getAttribute reads null for an attribute UiAutomator2 does not know, and reads a known one', async () => {
+      const grid = await get('grid', 'Home');
+      // UiAutomator2 answers an unknown name with "'<name>' attribute is unknown for the element".
+      expect(await grid.getAttribute(UNKNOWN_ATTRIBUTE)).toBeNull();
+      expect(await grid.getAttribute('resource-id')).toBe(`${FULL_ID_PREFIX}home_grid`);
+      // The session is still usable after the unknown name.
+      expect(await grid.isVisible()).toBe(true);
+    });
+
+    test('getByAttribute skips elements that lack the attribute and finds the one that has it', async () => {
+      // Document order: the category titles (no content-desc) come before
+      // the Alerts card (content-desc "home-card-alerts").
+      const all = await repo.getAll('titlesThenAlertsCard', 'Home');
+      expect(all.length).toBeGreaterThan(1);
+      expect(await all[0].getAttribute('content-desc')).toBeNull();
+
+      const card = await repo.getByAttribute('titlesThenAlertsCard', 'Home', 'content-desc', 'home-card-alerts', { exact: true });
+      expect(card).not.toBeNull();
+      expect(isPlatform(card!)).toBe(true);
+      expect(await card!.boundingBox()).toEqual(await (await get('cardAlerts', 'Home')).boundingBox());
+
+      // No element knows the attribute: no match, and no error.
+      expect(await repo.getByAttribute('titlesThenAlertsCard', 'Home', UNKNOWN_ATTRIBUTE, 'x')).toBeNull();
     });
   });
 
@@ -614,6 +657,51 @@ test.describe('live Android test app', () => {
       const first = await get('section1', 'Tall', { timeout: 2_000 });
       await first.scrollIntoView({ direction: 'up', timeout: 120_000 });
       expect(await first.isVisible()).toBe(true);
+    });
+  });
+
+  test.describe('counter', () => {
+    test.beforeEach(async () => {
+      await openScreen('cardAuth', 'counter', { name: 'increment', page: 'Counter' });
+    });
+
+    test('doubleClick on the increment button clicks it twice: the counter reads 2', async () => {
+      const value = await get('value', 'Counter');
+      expect(await value.textContent()).toBe('0');
+      const increment = await get('increment', 'Counter');
+      expect(await increment.doubleClick()).toBe(increment);
+      await expect.poll(() => value.textContent(), { timeout: 10_000 }).toBe('2');
+    });
+  });
+
+  test.describe('table (horizontal)', () => {
+    test.beforeEach(async () => {
+      await openScreen('cardWidgets', 'table', { name: 'rowCheckbox1', page: 'Table' });
+    });
+
+    test('scrollIntoView right reaches the clipped Join Date column, then left the checkbox column (no container)', async () => {
+      // The Join Date cells are absent from the tree until the table scrolls right.
+      const joinDate = await get('joinDate1', 'Table', { timeout: 2_000 });
+      expect(await joinDate.scrollIntoView({ direction: 'right', timeout: 120_000 })).toBe(joinDate);
+      expect(await joinDate.isVisible()).toBe(true);
+
+      const checkbox = await get('rowCheckbox1', 'Table', { timeout: 2_000 });
+      await checkbox.scrollIntoView({ direction: 'left', timeout: 120_000 });
+      expect(await checkbox.isVisible()).toBe(true);
+    });
+
+    test('scrollIntoView right and left inside the table scroller container', async () => {
+      const container = await get('scroller', 'Table');
+      const right: ScrollOptions = { direction: 'right', container, timeout: 120_000 };
+      const joinDate = await get('joinDate1', 'Table', { timeout: 2_000 });
+      expect(await joinDate.scrollIntoView(right)).toBe(joinDate);
+      expect(await joinDate.isVisible()).toBe(true);
+      expect(await joinDate.textContent()).toBe('2022-01-15');
+
+      const left: ScrollOptions = { direction: 'left', container, timeout: 120_000 };
+      const checkbox = await get('rowCheckbox1', 'Table', { timeout: 2_000 });
+      await checkbox.scrollIntoView(left);
+      expect(await checkbox.isVisible()).toBe(true);
     });
   });
 
