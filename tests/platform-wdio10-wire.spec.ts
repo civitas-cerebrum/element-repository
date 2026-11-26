@@ -227,8 +227,31 @@ test.describe('PlatformElement against a real WebdriverIO 10 session (fake WebDr
     });
   });
 
+  /** The start and end points of every swipe sent, in order. */
+  const swipePoints = () => server.requests
+    .filter(r => r.method === 'POST' && r.path.endsWith('/actions'))
+    .map(r => { const a = r.body.actions[0].actions; return [a[0].x, a[0].y, a[3].x, a[3].y]; });
+
+  test('scrollIntoView with the target in the tree swipes along the target\'s own column', async () => {
+    await expect(new PlatformElement(driver, '~x').scrollIntoView({ direction: 'down', maxSwipes: 2 })).rejects.toThrow(/after 2 swipes/);
+    // Target rect x 100-150: centre x 125; window 400x800: from y 600 to y 200.
+    expect(swipePoints()).toEqual([[125, 600, 125, 200], [125, 600, 125, 200]]);
+    expect(wire().filter(r => r.endsWith('/rect'))).toEqual([
+      'GET /window/rect', `GET /element/${ELEMENT}/rect`, `GET /element/${ELEMENT}/rect`,
+    ]);
+  });
+
+  test('scrollIntoView with a container swipes inside the container\'s rect', async () => {
+    await expect(new PlatformElement(driver, `~${MISSING}`).scrollIntoView({
+      direction: 'right', maxSwipes: 1, container: new PlatformElement(driver, '~x'),
+    })).rejects.toThrow(/after 1 swipes/);
+    // Container x 100-150, y 200-240: centre y 220, from x 137.5 (75%) to x 112.5 (25%).
+    expect(swipePoints()).toEqual([[138, 220, 113, 220]]);
+  });
+
   test('scrollIntoView swipes with the same explicit touch body, from 75% to 25% of the window', async () => {
-    await expect(new PlatformElement(driver, '~x').scrollIntoView({ direction: 'down' })).rejects.toThrow(/not visible after 20 swipes/);
+    // A target that is not in the tree: the window's centre line.
+    await expect(new PlatformElement(driver, `~${MISSING}`).scrollIntoView({ direction: 'down' })).rejects.toThrow(/not visible after 20 swipes/);
     const performs = server.requests.filter(r => r.method === 'POST' && r.path.endsWith('/actions'));
     const releases = server.requests.filter(r => r.method === 'DELETE' && r.path.endsWith('/actions'));
     expect(performs).toHaveLength(20);

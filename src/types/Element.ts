@@ -51,6 +51,27 @@ export interface ScrollIntoViewOptions extends ElementActionOptions {
    * one step), but still validated.
    */
   maxSwipes?: number;
+  /**
+   * Platform (Appium): the scrollable ancestor of the target (the
+   * carousel, the list), a platform element. The sweep then swipes inside
+   * its rect, clipped to the window: a `'left'` / `'right'` sweep along
+   * its vertical centre, from 75% to 25% of its width; an `'up'` /
+   * `'down'` sweep along its horizontal centre, from 75% to 25% of its
+   * height. Its rect is read once, after the fast path; a container that
+   * is not found, or lies wholly outside the window, fails before any
+   * swipe. Anything other than a platform element is refused.
+   *
+   * Without it the sweep runs along the target's own row (left / right:
+   * the target's vertical centre) or column (up / down: its horizontal
+   * centre), read again before every swipe, while the target is in the
+   * element tree and that line lies inside the window; otherwise along the
+   * window's centre line. Pass `container` for a scroller that does not
+   * cross the window centre (a carousel near the top of the screen, a side
+   * list) when its off-screen items are not in the element tree yet.
+   *
+   * Web: ignored.
+   */
+  container?: Element;
 }
 
 /** Options for {@link Element.swipe}. */

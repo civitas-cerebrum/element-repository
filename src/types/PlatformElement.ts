@@ -453,7 +453,10 @@ export class PlatformElement implements Element {
    *
    * Platform: makes up to `options.maxSwipes` swipes (default 20). Only
    * `options.timeout` bounds the sweep in time; this element's default
-   * timeout does not.
+   * timeout does not. Each swipe runs along one line across the scroller
+   * (see {@link sweepPath}): inside `options.container` when given, else
+   * along the target's own row / column while it is in the element tree,
+   * else along the window's centre line.
    */
   async scrollIntoView(options?: ScrollIntoViewOptions): Promise<Element> {
     // Deliberately skip `ensureAttached` here — the whole point of
@@ -469,9 +472,17 @@ export class PlatformElement implements Element {
     // not exist yet is simply "not shown yet" rather than an error.
     const started = Date.now();
     const maxSwipesPerDirection = checkMaxSwipes(options?.maxSwipes);
+    const container = options?.container;
+    if (container !== undefined && !(container instanceof PlatformElement)) {
+      throw new Error('scrollIntoView: options.container must be a platform element (the scrollable ancestor)');
+    }
     if (this.matchesNothing) await this.resolveNow().catch(err => { throw toPublicError(err); }); // can never match
+    // The match the latest check found (none when the lookup failed): the
+    // next swipe reads its rect for the sweep line, without a second lookup.
+    let found: any = null;
     const shownNow = async (): Promise<boolean> => {
-      try { return !!(await (await this.findOne()).isDisplayed()); }
+      found = null;
+      try { found = await this.findOne(); return !!(await found.isDisplayed()); }
       catch (err) { if (isFatalDriverError(err)) throw err; return false; }
     };
     // Fast path — already on-screen.
@@ -506,40 +517,22 @@ export class PlatformElement implements Element {
     } catch { /* no-op — proceed to swipe regardless */ }
 
     const windowSize = await this.driver.getWindowSize();
-    const cx = Math.round(windowSize.width / 2);
-    const cy = Math.round(windowSize.height / 2);
-    // 25% → 75% covers 50% of viewport per swipe. Wider (e.g. 15%/85%)
-    // starts inside platform system-gesture zones; narrower reduces
-    // per-swipe travel.
-    const yNear = Math.round(windowSize.height * 0.25);
-    const yFar = Math.round(windowSize.height * 0.75);
-    const xNear = Math.round(windowSize.width * 0.25);
-    const xFar = Math.round(windowSize.width * 0.75);
     // Only a timeout given to this call bounds the sweep in time; without
     // one, the swipe limit alone does (a swipe takes ~3 s on a real device,
     // so a default element or chain timeout would cut a sweep short).
     const deadline = options?.timeout === undefined ? undefined : started + options.timeout;
-
-    const swipeXY = async (fromX: number, fromY: number, toX: number, toY: number): Promise<void> => {
-      await performTouchSwipe(this.driver, { x: fromX, y: fromY }, { x: toX, y: toY });
-      await this.driver.pause(SWIPE_SETTLE_MS);
-    };
-
     const direction = options?.direction ?? 'down';
-
-    // Direction → swipe geometry:
-    //   'down'  — swipe up (yFar→yNear) reveals content BELOW
-    //   'up'    — swipe down (yNear→yFar) reveals content ABOVE
-    //   'right' — swipe left (xFar→xNear) reveals content to the RIGHT
-    //   'left'  — swipe right (xNear→xFar) reveals content to the LEFT
-    const [fromX, fromY, toX, toY] = (() => {
-      switch (direction) {
-        case 'up':    return [cx, yNear, cx, yFar];
-        case 'left':  return [xNear, cy, xFar, cy];
-        case 'right': return [xFar, cy, xNear, cy];
-        case 'down':  default: return [cx, yFar, cx, yNear];
-      }
-    })();
+    // The container's rect is read once: the scroller itself does not move
+    // while its content scrolls.
+    const area = container
+      ? PlatformElement.visiblePart(
+        await container.gestureRect('scrollIntoView (container)', options?.timeout), windowSize,
+        () => new Error(
+          `scrollIntoView: the container ${container.describe()} is outside the window ` +
+          `(${windowSize.width}x${windowSize.height}); scroll it into view first`,
+        ),
+      )
+      : undefined;
 
     for (let i = 0; i < maxSwipesPerDirection; i++) {
       if (deadline !== undefined && Date.now() >= deadline) {
@@ -548,13 +541,98 @@ export class PlatformElement implements Element {
           `(${i} of at most ${maxSwipesPerDirection} swipes made, direction=${direction})`,
         );
       }
-      await swipeXY(fromX, fromY, toX, toY);
+      const { from, to } = await this.sweepPath(direction, windowSize, area, found);
+      await performTouchSwipe(this.driver, from, to);
+      await this.driver.pause(SWIPE_SETTLE_MS);
       if (await shownNow()) return this;
     }
 
     throw new Error(
       `scrollIntoView: element not visible after ${maxSwipesPerDirection} swipes, the swipe limit (direction=${direction})`,
     );
+  }
+
+  /**
+   * The part of `rect` inside the window, or `onOutside()` thrown when no
+   * part of it is.
+   */
+  private static visiblePart(
+    rect: { x: number; y: number; width: number; height: number },
+    win: { width: number; height: number },
+    onOutside: () => Error,
+  ): { x: number; y: number; width: number; height: number } {
+    const left = Math.max(0, rect.x);
+    const top = Math.max(0, rect.y);
+    const right = Math.min(win.width, rect.x + rect.width);
+    const bottom = Math.min(win.height, rect.y + rect.height);
+    if (!(right > left && bottom > top)) throw onOutside();
+    return { x: left, y: top, width: right - left, height: bottom - top };
+  }
+
+  /**
+   * One swipe of a {@link scrollIntoView} sweep, in native-context viewport
+   * coordinates. It travels along the scroll axis from 75% to 25% of the
+   * scrolled area (or back, for `'up'` / `'left'`), along a line across
+   * that axis:
+   *
+   * - with a container (`area`, its part inside the window): the area is
+   *   the container; the line is its centre (vertical centre for left /
+   *   right, horizontal centre for up / down);
+   * - otherwise the area is the window, and the line is the target's own
+   *   centre on the cross axis, its rect read now from `target` (the match
+   *   the latest visibility check found), while it is in the element tree
+   *   with a non-empty rect whose centre lies inside the window on that
+   *   axis; else the window's centre.
+   *
+   * 25% → 75% covers half the area per swipe. Wider (e.g. 15%/85%) starts
+   * inside platform system-gesture zones; narrower reduces per-swipe travel.
+   *
+   * Direction → swipe geometry:
+   *   'down'  — swipe up (75%→25%) reveals content BELOW
+   *   'up'    — swipe down (25%→75%) reveals content ABOVE
+   *   'right' — swipe left (75%→25%) reveals content to the RIGHT
+   *   'left'  — swipe right (25%→75%) reveals content to the LEFT
+   */
+  private async sweepPath(
+    direction: 'down' | 'up' | 'left' | 'right',
+    windowSize: { width: number; height: number },
+    area?: { x: number; y: number; width: number; height: number },
+    target?: any,
+  ): Promise<{ from: { x: number; y: number }; to: { x: number; y: number } }> {
+    const horizontal = direction === 'left' || direction === 'right';
+    const box = area ?? { x: 0, y: 0, width: windowSize.width, height: windowSize.height };
+    let line = horizontal ? box.y + box.height / 2 : box.x + box.width / 2;
+    if (!area) {
+      const own = await this.placedRect(target);
+      if (own) {
+        const centre = horizontal ? own.y + own.height / 2 : own.x + own.width / 2;
+        if (centre >= 0 && centre < (horizontal ? windowSize.height : windowSize.width)) line = centre;
+      }
+    }
+    const at = (fraction: number) => horizontal ? box.x + box.width * fraction : box.y + box.height * fraction;
+    const forward = direction !== 'up' && direction !== 'left';
+    const [start, end] = forward ? [at(0.75), at(0.25)] : [at(0.25), at(0.75)];
+    const point = (along: number) => horizontal
+      ? { x: Math.round(along), y: Math.round(line) }
+      : { x: Math.round(line), y: Math.round(along) };
+    return { from: point(start), to: point(end) };
+  }
+
+  /**
+   * The rect of a raw element `el` when it has an id and a finite,
+   * non-empty rect; `null` otherwise (no match, no id, no rect). A fatal
+   * driver error is thrown.
+   */
+  private async placedRect(el: any): Promise<{ x: number; y: number; width: number; height: number } | null> {
+    try {
+      if (!el?.elementId) return null;
+      const rect = await this.readRect(el);
+      if (!rect || ![rect.x, rect.y, rect.width, rect.height].every(Number.isFinite)) return null;
+      return rect.width > 0 && rect.height > 0 ? rect : null;
+    } catch (err) {
+      if (isFatalDriverError(err)) throw err;
+      return null;
+    }
   }
 
   /**
