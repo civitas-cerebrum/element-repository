@@ -715,7 +715,7 @@ The platform elements were run live through Appium with the live specs in `tests
 - **Text:** row text read from child views; the `TEXT` strategy and `getByText` matching by child text; the hint of an empty search field is not read as text.
 - **Lookup:** short and full resource ids; `locateChild()`; `first()` and `nth()`.
 - **Gestures:** `doubleClick()` (the native double-click gesture), `longPress()`, `tapAt()`, `pinch()`, `zoom()`, `swipe()`.
-- **Scrolling:** `scrollIntoView()` up and down, and left and right, both with and without a `container`.
+- **Scrolling:** `scrollIntoView()` up and down; left and right, both with and without a `container`.
 - **Attributes:** an unknown attribute reads as `null`, and `getByAttribute` skips elements that do not have it.
 - **Dialogs:** an alert dialog flow.
 
@@ -731,10 +731,10 @@ The platform elements were run live through Appium with the live specs in `tests
 These ran on the iOS simulator against a purpose-built test app. The real-device run is read-only, so they are not yet verified on a real iOS device.
 
 - **Gestures:** `doubleClick()` (the native double tap), `longPress()`, `tapAt()`, `pinch()` and `zoom()`.
-- **Checked state:** `check()` and `uncheck()`, with switch values reported as `"0"` / `"1"`.
-- **Text:** a container's text read from its descendants.
+- **Checked state:** `check()` and `uncheck()`, with switch values reported as `"0"` / `"1"`; `check()` on a disabled switch throws "is disabled" and leaves it off.
+- **Text:** the label is read first (a switch reads "On" / "Off", not its value), and a list row with no label or value (a dropdown option cell) reads the text of its child views.
 - **Scrolling:** horizontal paging scroll inside a `container`, and vertical scroll inside a `container`.
-- **Attributes:** unknown attribute reads.
+- **Attributes:** an unknown attribute reads as `null`, and `getByAttribute` skips elements that do not have it.
 
 ## ⚠️ Breaking Changes (v0.4.0)
 
