@@ -2,7 +2,9 @@ import { test, expect } from '@playwright/test';
 import { PlatformElement, WebElement } from '../src/types';
 import { ElementRepository } from '../src/repo/ElementRepository';
 import { SelectionStrategy } from '../src/enum/Options';
-import { readPlatformText, ANDROID_DESCENDANT_TEXT_XPATH as EXPORTED_DESCENDANT_XPATH } from '../src/utils/platformText';
+import {
+  readPlatformText, ANDROID_DESCENDANT_TEXT_XPATH as EXPORTED_DESCENDANT_XPATH, IOS_DESCENDANT_TEXT_SELECTOR as EXPORTED_IOS_SELECTOR,
+} from '../src/utils/platformText';
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -396,6 +398,135 @@ test.describe('readPlatformText on android containers', () => {
     const el = new PlatformElement(driver, '~long-list-item-1');
     expect(await el.textContent()).toBe('Item 1 Alpha');
     expect(await el.rawText()).toBe('Item 1 Alpha');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// iOS: an element with neither label nor value reads its descendants' text
+// ---------------------------------------------------------------------------
+
+/** The element-scoped class chain an iOS container's text descendants are read with. */
+const IOS_DESCENDANT_TEXT_SELECTOR = '-ios class chain:**/XCUIElementTypeStaticText';
+
+interface IosNode {
+  id: string;
+  type?: string;
+  label?: string | null;
+  value?: string | null;
+  children?: IosNode[];
+}
+
+/**
+ * An XCUITest node: the type from `getTagName()`, `label` / `value` from
+ * `getAttribute()` (null when unset, as WebDriverAgent answers). `$$` with
+ * the class chain returns its StaticText descendants in document order (as
+ * WebDriverAgent evaluates `**` from the element). Every read is recorded.
+ */
+function iosNode(node: IosNode, reads: string[] = []): any {
+  const descendants = (n: IosNode): IosNode[] => (n.children ?? []).flatMap(c => [c, ...descendants(c)]);
+  return {
+    elementId: node.id,
+    getTagName: async () => { reads.push(`${node.id}:tag`); return node.type ?? 'XCUIElementTypeCell'; },
+    getAttribute: async (name: string) => {
+      reads.push(`${node.id}:${name}`);
+      return name === 'label' ? node.label ?? null : name === 'value' ? node.value ?? null : null;
+    },
+    getText: async () => { reads.push(`${node.id}:text`); return node.value || node.label || ''; },
+    isDisplayed: async () => true,
+    isExisting: async () => true,
+    waitForExist: async () => true,
+    waitForDisplayed: async () => true,
+    $$: async (selector: string) => {
+      reads.push(`${node.id}:$$ ${selector}`);
+      if (selector !== IOS_DESCENDANT_TEXT_SELECTOR) throw new Error(`unexpected selector ${selector}`);
+      return descendants(node).filter(d => d.type === 'XCUIElementTypeStaticText').map(d => iosNode(d, reads));
+    },
+  };
+}
+
+/** A custom dropdown option as XCUITest reports it: a Cell with no label or value, its text in a child StaticText. */
+function dropdownOption(n: number, text: string): IosNode {
+  return {
+    id: `option${n}`,
+    type: 'XCUIElementTypeCell',
+    children: [{ id: `option${n}-text`, type: 'XCUIElementTypeStaticText', label: text }],
+  };
+}
+
+test.describe('readPlatformText on ios containers', () => {
+  test('no label and no value: the StaticText descendants\' text joined with single spaces, in document order', async () => {
+    const node: IosNode = {
+      id: 'card', type: 'XCUIElementTypeOther',
+      children: [
+        { id: 'title', type: 'XCUIElementTypeStaticText', label: ' Option ' },
+        { id: 'group', type: 'XCUIElementTypeOther', children: [{ id: 'n', type: 'XCUIElementTypeStaticText', label: '2' }] },
+        { id: 'blank', type: 'XCUIElementTypeStaticText', label: '  ' },
+        { id: 'sub', type: 'XCUIElementTypeStaticText', label: '', value: 'Beta' },
+      ],
+    };
+    expect(await readPlatformText(iosNode(node), 'ios')).toBe('Option 2 Beta');
+  });
+
+  test('a custom dropdown option Cell reads its child text', async () => {
+    expect(await readPlatformText(iosNode(dropdownOption(3, 'Banana')), 'ios')).toBe('Banana');
+  });
+
+  test('costs one element-scoped query plus the descendants\' label reads, only after label and value are empty', async () => {
+    const reads: string[] = [];
+    await readPlatformText(iosNode(dropdownOption(3, 'Banana'), reads), 'ios');
+    expect([...reads].sort()).toEqual([
+      'option3:label', 'option3:tag', 'option3:value', `option3:$$ ${IOS_DESCENDANT_TEXT_SELECTOR}`, 'option3-text:label',
+    ].sort());
+    expect(reads.indexOf(`option3:$$ ${IOS_DESCENDANT_TEXT_SELECTOR}`)).toBeGreaterThan(reads.indexOf('option3:value'));
+  });
+
+  test('own label or value wins and no descendant query is made', async () => {
+    for (const own of [{ label: 'Own' }, { label: '', value: 'Own' }]) {
+      const reads: string[] = [];
+      const node = { ...dropdownOption(1, 'child'), ...own };
+      expect(await readPlatformText(iosNode(node, reads), 'ios')).toBe('Own');
+      expect(reads.some(r => r.includes('$$'))).toBe(false);
+    }
+  });
+
+  test('a text input with no text does not read its descendants', async () => {
+    const reads: string[] = [];
+    const node: IosNode = { ...dropdownOption(1, 'child'), type: 'XCUIElementTypeTextField', label: '', value: '' };
+    expect(await readPlatformText(iosNode(node, reads), 'ios')).toBe('');
+    expect(reads.some(r => r.includes('$$'))).toBe(false);
+  });
+
+  test('no descendant text: the own (empty) text is returned unchanged', async () => {
+    expect(await readPlatformText(iosNode({ id: 'a', label: '', value: null }), 'ios')).toBe('');
+    expect(await readPlatformText(iosNode({ id: 'a', label: null, value: null }), 'ios')).toBeNull();
+    const blank: IosNode = { id: 'a', label: null, children: [{ id: 'b', type: 'XCUIElementTypeStaticText', label: ' ' }] };
+    expect(await readPlatformText(iosNode(blank), 'ios')).toBeNull();
+  });
+
+  test('the exported class chain is element-scoped StaticText', () => {
+    expect(EXPORTED_IOS_SELECTOR).toBe(IOS_DESCENDANT_TEXT_SELECTOR);
+  });
+
+  test('PlatformElement.textContent and rawText read the joined text', async () => {
+    const driver = driverOf([iosNode(dropdownOption(2, 'Apple'))], { platformName: 'iOS' });
+    const el = new PlatformElement(driver, '~dropdown-custom-option-2');
+    expect(await el.textContent()).toBe('Apple');
+    expect(await el.rawText()).toBe('Apple');
+  });
+
+  test('the TEXT strategy and getByText match an option by its child text', async () => {
+    const raws = [iosNode(dropdownOption(1, 'Apple')), iosNode(dropdownOption(2, 'Banana')), iosNode(dropdownOption(3, 'Cherry'))];
+    const pages = {
+      pages: [{
+        name: 'Dropdown', platform: 'ios',
+        elements: [{ elementName: 'options', selector: { 'accessibility id': 'option' } }],
+      }],
+    };
+    const repo = new ElementRepository(driverOf(raws), pages, { platform: 'ios', timeout: 500 });
+    const exact = await repo.get('options', 'Dropdown', { strategy: SelectionStrategy.TEXT, value: 'Banana' });
+    expect((exact as PlatformElement).resolvedElement).toBe(raws[1]);
+    const byText = await repo.getByText('options', 'Dropdown', 'Cherry', true);
+    expect((byText as PlatformElement).resolvedElement).toBe(raws[2]);
   });
 });
 

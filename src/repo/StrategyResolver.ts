@@ -290,20 +290,21 @@ export class StrategyResolver {
    * one's text is read with the same rule as
    * {@link PlatformElement.textContent} (see `readPlatformText`: on iOS the
    * `label`, else `value`; `value` first for text inputs; on Android
-   * `getText()`, or for an element with no text of its own its
+   * `getText()`; on both, for an element with no text of its own, its
    * descendants' text joined with single spaces; elsewhere `getText()`),
    * and the chosen raw element is wrapped in a {@link PlatformElement}.
    *
    * The text compared is the element's OWN text as the driver reports it,
    * not the text of its descendants as Playwright's `filter({ hasText })`
-   * uses on web, with one exception: on Android an element whose own text
-   * is empty is read as a container, by its descendants' text (a list row
-   * whose title and subtitle are child TextViews). The selector should
-   * therefore target the text-bearing element itself (the label or cell
-   * title), or on Android a container without text of its own. A container
-   * row costs 2 + K driver round trips (its own text, the descendant query,
-   * one read per K text-bearing descendants) instead of one, and a selector
-   * matching a large container reads every text inside it.
+   * uses on web, with one exception: on iOS and Android an element whose
+   * own text is empty is read as a container, by its descendants' text (a
+   * list row whose title and subtitle are child TextViews, an iOS Cell
+   * whose text is a child StaticText). The selector should therefore
+   * target the text-bearing element itself (the label or cell title), or a
+   * container without text of its own. A container row costs extra driver
+   * round trips (the descendant query and one read per text-bearing
+   * descendant), and a selector matching a large container reads every
+   * text inside it.
    *
    * An exact (trimmed) match is preferred; otherwise the first
    * case-insensitive, whitespace-normalised "contains" match is taken.

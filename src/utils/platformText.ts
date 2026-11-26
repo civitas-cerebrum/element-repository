@@ -36,6 +36,15 @@ export const IOS_TEXT_INPUT_TYPES: ReadonlySet<string> = new Set([
  */
 export const ANDROID_DESCENDANT_TEXT_XPATH = ".//*[@text!='' and not(@showing-hint='true')]";
 
+/**
+ * Element-scoped class chain for the descendants of an iOS element that
+ * carry visible text: its `XCUIElementTypeStaticText` descendants at any
+ * depth, which WebDriverAgent returns in document order. Static text is
+ * the leaf that holds the words, so a nested container's own (merged)
+ * label is not read a second time; buttons and inputs inside are not read.
+ */
+export const IOS_DESCENDANT_TEXT_SELECTOR = '-ios class chain:**/XCUIElementTypeStaticText';
+
 /** True when `s` is a string with something other than whitespace. */
 function hasText(s: unknown): s is string {
   return typeof s === 'string' && s.trim() !== '';
@@ -50,8 +59,14 @@ function hasText(s: unknown): s is string {
  *   ({@link IOS_TEXT_INPUT_TYPES}) `value` comes first, then `label`.
  *   XCUITest's own `getText()` returns `value` before `label`, so a
  *   Settings row with a badge reads as the badge count; the label is what
- *   the user reads as the row's text. When neither attribute has text, the
- *   empty one (if any) is returned.
+ *   the user reads as the row's text. When neither attribute has text and
+ *   the element is not a text input, it is taken as a container whose
+ *   visible text sits in its descendants (a custom dropdown option, a Cell
+ *   with no label of its own and a child StaticText): the text of its
+ *   static text descendants ({@link IOS_DESCENDANT_TEXT_SELECTOR}), each
+ *   read by `label`, else `value`, in document order, each trimmed,
+ *   whitespace-only ones skipped, joined with single spaces. When no
+ *   descendant has text, the empty attribute (if any) is returned.
  * - `android`: WebdriverIO `getText()`. When that has no text (empty or
  *   whitespace only), the element is taken as a container whose visible
  *   text sits in its descendants (a list row whose title and subtitle are
@@ -69,9 +84,14 @@ function hasText(s: unknown): s is string {
  *   no children.
  * - every other platform (and an unknown one): WebdriverIO `getText()`.
  *
+ * One rule on both platforms: an element's text is its own, else its
+ * descendants'.
+ *
  * On iOS the element type and `label` are read first; `value` is read only
  * for a text input or when the label has no text, so a typical row costs
- * two driver round trips rather than three. On Android an element with its
+ * two driver round trips rather than three. An element with neither costs
+ * one more query plus a `label` read per static text descendant (and a
+ * `value` read for one whose label is empty), issued together. On Android an element with its
  * own text costs one round trip; a container without one costs one more
  * query ({@link ANDROID_DESCENDANT_TEXT_XPATH}) plus one `getText()` per
  * descendant that has text (issued together).
@@ -96,8 +116,16 @@ export async function readPlatformText(el: any, platform: Platform | undefined):
   const isInput = IOS_TEXT_INPUT_TYPES.has(type);
   if (!isInput && hasText(label)) return label;
   const value = await readPlatformAttribute(el, 'value', platform);
-  const order = IOS_TEXT_INPUT_TYPES.has(type) ? [value, label] : [label, value];
+  const order = isInput ? [value, label] : [label, value];
   const withText = order.find(hasText);
   if (withText !== undefined) return withText;
-  return order.find(s => typeof s === 'string') ?? null;
+  const own = order.find(s => typeof s === 'string') ?? null;
+  if (isInput) return own;
+  const descendants = Array.from((await el.$$(IOS_DESCENDANT_TEXT_SELECTOR)) ?? []);
+  const texts = await Promise.all(descendants.map(async (d: any) => {
+    const descendantLabel = await readPlatformAttribute(d, 'label', platform);
+    return hasText(descendantLabel) ? descendantLabel : readPlatformAttribute(d, 'value', platform);
+  }));
+  const joined = texts.filter(hasText).map(t => t.trim()).join(' ');
+  return joined !== '' ? joined : own;
 }
