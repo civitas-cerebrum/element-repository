@@ -574,7 +574,33 @@ Every method that takes a `pageName` resolves it the same way: with an active pl
   - The descendant query of iOS selects the matches whose own `label` / `value` does not contain the longest word, so a match whose label is only whitespace (which the rule reads as empty) is still covered; a match with a label of its own and a matching StaticText inside is a hit too, and the rule then reads its label.
   - **Cost**: a hit costs 1 query (Android) or 2 (iOS) plus the hits' reads; a miss costs only the queries (about 100–250 ms on iOS), so polling until the timeout stays cheap. No hit is a clean miss for that poll, and polling goes on as before.
   - **What got faster, what did not**: a value of several words, one of them common to every row (`"Item 9"`, `"Apple Pie"` among `"Apple …"` rows), now reads only the rows holding all its words, usually one: 1 query + 1 read on Android, 2 queries + the hit's type and label reads on iOS, where it read every row before. A value of one word that every row contains (`"Item"`) still reads every hit, as does a value whose other words are left out (unsafe for the query, or past the four longest); container rows on iOS are still narrowed by the longest word only.
-  - **Measured**: the figures on the iOS simulator and on a real Android device are in the release notes.
+  - **Measured** (median of 3 runs, ms, previous release → this release; `repo.get(..., { strategy: TEXT })` unless the row says `getByText`; absent values with a 3000 ms timeout):
+
+    | Screen | Lookup | Before | After |
+    | --- | --- | ---: | ---: |
+    | iOS simulator, 16 cells labelled `"Item N - Lorem ipsum dolor sit amet"` | prefix `"Item 1 - "` | 3597 | 2054 |
+    | | exact `"Item 9 - Lorem ipsum dolor sit amet"` | 2605 | 2764 |
+    | | exact last `"Item 16 - Lorem ipsum dolor sit amet"` | 3621 | 3760 |
+    | | contains `"item 9"` | 3587 | 551 |
+    | | absent | 3791 | 3203 |
+    | | `getByText`, present | 4216 | 4351 |
+    | | `getByText`, absent | 5062 | 1705 |
+    | iOS simulator, 18 option cells (text in a child StaticText) | first `"Argentina"` | 3226 | 1631 |
+    | | middle `"Japan"` | 8612 | 1580 |
+    | | last `"United States"` | 13838 | 2394 |
+    | | contains `"apa"` | 13694 | 1627 |
+    | | absent | 12844 | 3153 |
+    | | `getByText`, present | 10824 | 3766 |
+    | | `getByText`, absent | 14993 | 2431 |
+    | Real Android device, 11 rows (text in child views) | first `"Item 1 Alpha"` | 666 | 699 |
+    | | middle `"Item 6 Beta"` | 1500 | 612 |
+    | | last `"Item 11 Gamma"` | 2527 | 620 |
+    | | contains `"beta"` | 2259 | 923 |
+    | | absent | 4427 | 3285 |
+    | | `getByText`, present | 1656 | 952 |
+    | | `getByText`, absent | 2231 | 610 |
+
+    **What did not get faster**: a value of more than four words whose words, except a short distinguishing one, are shared by every row. For `"Item 9 - Lorem ipsum dolor sit amet"` the four longest words (`lorem`, `ipsum`, `dolor`, `item`) are in all 16 rows, so every row is still read (about 2.6–3.8 s), slightly slower than before because of the narrowed queries. Likewise a one-word value that every row contains, and iOS container rows, which are narrowed by the longest word only. An absent lookup now ends close to its timeout; before, a started pass could overrun it by many seconds.
   - **Falls back to reading every match** when the platform is neither iOS nor Android, the selector kind cannot be composed onto (UiAutomator, a short resource id — UiAutomator2 prefixes it with the current app package —, an XPath on iOS, data / view matchers, …), no word of the value is safe for the query, or a narrowed query fails. On iOS a word is safe only when every character is Latin, Greek, Cyrillic, Han, Hiragana, Katakana, a precomposed Hangul syllable, an ASCII digit or ASCII punctuation other than a backtick or `$`: NSPredicate's `CONTAINS` matches on whole composed characters, so a word next to a combining mark, a virama, a joiner or a variation selector in the label might not match (Devanagari, Thai, Arabic, Hebrew, emoji, … are not narrowed on; another word of the value may be). A safe word can still sit next to a combining mark in decomposed text (`e` + U+0301); `CONTAINS[cd]` drops such diacritics of Latin, Greek and Cyrillic, and a safe word joined to a mark of another script is assumed not to occur. On Android a sigma or the dot of `İ` is unsafe, on both a control character. A lost session or connection is thrown; any other error of a narrowed query (`invalid selector` and `invalid argument` included) makes that poll and every later one of the lookup read every match. That error is not reported (it belongs to a query you never wrote): a final miss's message and `lastDriverError` carry only the full passes' own errors, as before. On iOS a `value CONTAINS` on a non-string value (a switch, a slider) may make WebDriverAgent fail the narrowed query: the lookup then reads every match, slower but with the same answer.
   - **Known limit (Android)**: the narrowed XPath runs on the page source, which UiAutomator2 caps at `snapshotMaxDepth` (default 70). A match nested deeper than that is not found by a narrowed lookup (its miss is a clean miss for the poll). Raise `appium:snapshotMaxDepth` for such a screen (rare).
   - The returned element keeps the entry's selector: `all()` / `count()` are unchanged.
