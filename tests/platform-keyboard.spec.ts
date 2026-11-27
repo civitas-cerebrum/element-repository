@@ -401,6 +401,32 @@ test.describe('dismissKeyboard: iOS tapElement', () => {
     expect(elapsed).toBeLessThan(TAP_ELEMENT_WAIT_MS + 1500);
   });
 
+  test('timeout 1000 and a slow missing tapElement: the tap takes at most half the time left, so both hideKeyboard steps are still sent', async () => {
+    const { driver, calls, executes, displayWaits } = fakeDriver({ outcomes: { bare: 'refuse', keys: 'refuse' }, slowMissing: true });
+    const title = new PlatformElement(driver, MISSING_SELECTOR, undefined, 30000, { platform: 'ios' });
+    const err = await dismissKeyboard(driver, 'ios', { tapElement: title, timeout: 1000 }).then(() => null, (e: unknown) => e);
+    expect(err).toBeInstanceOf(KeyboardStillShownError);
+    expect((err as KeyboardStillShownError).steps).toEqual([
+      `a tap on options.tapElement "${MISSING_SELECTOR}"`, 'mobile: hideKeyboard', KEYS_STEP,
+    ]);
+    expect(executes.map(e => e[1])).toEqual([{}, { keys: KEYS }]);
+    expect(calls).not.toContain('missing click');
+    expect(displayWaits).toHaveLength(1);
+    expect(displayWaits[0]).toBeGreaterThan(0);
+    expect(displayWaits[0]).toBeLessThanOrEqual(500);
+  });
+
+  test('a fatal driver error wrapped by WebdriverIO\'s waitUntil (original in cause) is thrown at once: no further step', async () => {
+    const original = driverError('target window already closed', 'no such window');
+    const wrapped = new Error(`waitUntil condition failed with the following reason: ${original.message}`, { cause: original });
+    const { driver, calls, executes } = fakeDriver({});
+    const title = label(driver);
+    (title as any).waitFor = async () => { throw wrapped; };
+    await expect(dismissKeyboard(driver, 'ios', { tapElement: title })).rejects.toBe(wrapped);
+    expect(dismissing(calls)).toEqual([]);
+    expect(executes).toEqual([]);
+  });
+
   test('a fatal driver error of the presence wait is thrown at once: no click, no further step', async () => {
     const dead = driverError('A session is either terminated or not started', 'invalid session id');
     const { driver, calls, executes } = fakeDriver({});

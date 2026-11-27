@@ -13,10 +13,14 @@ export const KEYBOARD_SETTLE_MS = 300;
 
 /**
  * Upper bound in ms of the iOS `tapElement` step: how long it waits for the
- * element to be shown, and then for the click, together. A `tapElement`
- * that is not shown within it (or within what is left of `options.timeout`,
- * when that is less) fails the step at once, leaving time for the
- * `mobile: hideKeyboard` steps.
+ * element to be shown, and then for the click, together. With
+ * `options.timeout` the step's bound is `min(TAP_ELEMENT_WAIT_MS,
+ * floor(timeLeft / 2))` (at least 1 ms), half of what is left, so a missing
+ * `tapElement` never uses the whole budget. A `tapElement` that is not
+ * shown within it fails the step at once, leaving time for the
+ * `mobile: hideKeyboard` steps. A session implicit-wait timeout (set on the
+ * server, Appium default 0) lengthens each lookup; the rare race where the
+ * element disappears between the visible wait and the click may overrun it.
  */
 export const TAP_ELEMENT_WAIT_MS = 2000;
 
@@ -54,8 +58,12 @@ export interface DismissKeyboardOptions {
    * It must be a platform
    * element (`isPlatform`), else the call throws before anything is sent.
    * The step waits for it to be shown at most {@link TAP_ELEMENT_WAIT_MS}
-   * (or what is left of `timeout`, when that is less), then clicks it; one
-   * not shown within that is a failed step, not fatal, and is not clicked.
+   * (with `timeout`: at most half of what is left of it, when that is
+   * less), then clicks it; one not shown within that is a failed step, not
+   * fatal, and is not clicked. A session implicit-wait timeout (server
+   * side, Appium default 0) lengthens each lookup, and the rare race where
+   * the element disappears between the visible wait and the click may
+   * overrun the bound.
    * The library never taps a coordinate of its own choosing. Android
    * ignores it.
    */
@@ -75,6 +83,11 @@ export class KeyboardStillShownError extends Error {
 
 /** A step that failed without performing its action (nothing reached the screen): no pause or re-check follows. */
 class StepRefused extends Error {}
+
+/** A step's fatal error that `isFatalDriverError` alone does not see (found in its `cause`): `error` is thrown as it is. */
+class StepFatal {
+  constructor(readonly error: unknown) {}
+}
 
 interface Step {
   name: string;
@@ -112,21 +125,33 @@ async function pause(driver: any, ms: number): Promise<void> {
 /**
  * iOS step "tap": an element click on the caller's neutral `tapElement`.
  * It first waits for the element to be shown, at most
- * {@link TAP_ELEMENT_WAIT_MS} or `timeLeft` when that is less (at least
- * 1 ms), through the element's own bounded wait, so a missing element costs
- * that bound and not the element's default timeout or WebdriverIO's implicit
- * wait. Not shown: the step fails at once, with no click, pause or re-check.
- * Shown: it is clicked with what is left of that bound. A click that fails
- * with an error that is not fatal did not tap: the step fails the same way.
+ * {@link TAP_ELEMENT_WAIT_MS}; with `options.timeout`, at most
+ * `min(TAP_ELEMENT_WAIT_MS, floor(timeLeft / 2))` (at least 1 ms), so a
+ * missing element never uses the whole budget and the `mobile:
+ * hideKeyboard` steps still get their turn. The wait is the element's own
+ * bounded wait, so a missing element costs that bound and not the
+ * element's default timeout or WebdriverIO's implicit wait (a session
+ * implicit-wait timeout set on the server, Appium default 0, still
+ * lengthens each lookup). Not shown: the step fails at once, with no click,
+ * pause or re-check. Shown: it is clicked with what is left of that bound;
+ * in the rare race where the element disappears between the visible wait
+ * and the click, the click's own lookup may overrun the bound. A click that
+ * fails with an error that is not fatal did not tap: the step fails the
+ * same way. A fatal error is recognised also in `err.cause` (WebdriverIO
+ * wraps a `waitUntil` failure as "waitUntil condition failed with the
+ * following reason: ..." and keeps the original there).
  */
 async function tapNeutralElement(tapElement: Element, timeLeft: number | undefined): Promise<void> {
   const started = Date.now();
-  const bound = Math.max(1, Math.min(TAP_ELEMENT_WAIT_MS, timeLeft ?? TAP_ELEMENT_WAIT_MS));
+  const bound = timeLeft === undefined
+    ? TAP_ELEMENT_WAIT_MS
+    : Math.max(1, Math.min(TAP_ELEMENT_WAIT_MS, Math.floor(timeLeft / 2)));
   try {
     await tapElement.waitFor({ state: 'visible', timeout: bound });
     await tapElement.click({ timeout: Math.max(1, bound - (Date.now() - started)) });
   } catch (err) {
     if (isFatalDriverError(err)) throw err;
+    if (isFatalDriverError((err as { cause?: unknown } | null)?.cause)) throw new StepFatal(err);
     throw new StepRefused(messageOf(err));
   }
 }
@@ -222,10 +247,16 @@ function stepsFor(
  *         screen that ends editing on a tap outside the field, without
  *         pressing the keyboard's action key. It must be on screen and not
  *         covered by the keyboard, else the tap may land on a key. The step
- *         waits at most {@link TAP_ELEMENT_WAIT_MS} (or what is left of
- *         `options.timeout`, when less) for it to be shown, then clicks it.
- *         Not shown (or any other error that is not fatal): the step fails,
- *         with no click, pause or re-check.
+ *         waits at most {@link TAP_ELEMENT_WAIT_MS} (with `options.timeout`:
+ *         at most half of what is left of it, when less, so the later steps
+ *         keep time) for it to be shown, then clicks it. Not shown (or any
+ *         other error that is not fatal): the step fails, with no click,
+ *         pause or re-check. A fatal error is recognised also in the
+ *         error's `cause` (WebdriverIO's wrapped `waitUntil` failure) and
+ *         thrown as it is. A session implicit-wait timeout (server side,
+ *         Appium default 0) lengthens each lookup; the rare race where the
+ *         element disappears between the visible wait and the click may
+ *         overrun the bound.
  *      2. `mobile: hideKeyboard` with no keys. XCUITest adds the key name
  *         `done` itself; on an iPad WebDriverAgent also taps the keyboard's
  *         hide key. On an iPhone keyboard without a Done key WebDriverAgent
@@ -319,6 +350,7 @@ export async function dismissKeyboard(driver: any, platform?: Platform, options?
     try {
       await step.run();
     } catch (err) {
+      if (err instanceof StepFatal) throw err.error;
       if (err instanceof StepRefused) {
         tried.push(`${step.name} (failed: ${err.message})`);
         continue;
