@@ -1040,7 +1040,29 @@ export class PlatformElement implements Element {
     const { name, message } = err as { name?: unknown; message?: unknown };
     if (name === 'no such element' || name === 'NoSuchElementError') return true;
     return typeof message === 'string'
-      && (/no such element|could not be located on the page/i.test(message) || PlatformElement.WDIO_NOT_FOUND.test(message));
+      && (PlatformElement.NO_SUCH_ELEMENT.test(message) || PlatformElement.WDIO_NOT_FOUND.test(message));
+  }
+
+  /**
+   * A message that IS the W3C `no such element` answer: it starts with the
+   * phrase (optionally after an `Error:` style prefix) or with the W3C
+   * description. A mention deep inside another error (an `unknown error`
+   * quoting it) is not a no-match.
+   */
+  private static readonly NO_SUCH_ELEMENT =
+    /^(?:\w*Error:\s*)?(?:no such element\b|an element could not be located on the page)/i;
+
+  /**
+   * Classifies a non-fatal error of a polled lookup or read: `'no-match'`
+   * (see {@link isNoMatch}), `'stale'` (see {@link isStale}) or
+   * `'transient'` (any other driver error). A fatal driver error
+   * ({@link isFatalDriverError}) is thrown.
+   */
+  private static classifyReadError(err: unknown): 'no-match' | 'stale' | 'transient' {
+    if (isFatalDriverError(err)) throw err;
+    if (PlatformElement.isNoMatch(err)) return 'no-match';
+    if (PlatformElement.isStale(err)) return 'stale';
+    return 'transient';
   }
 
   /** True for the W3C `stale element reference` error (by name or message): the match left the tree. */
@@ -1073,10 +1095,10 @@ export class PlatformElement implements Element {
     for (let attempt = 0; ; attempt++) {
       try { return await (await this.resolveNow()).isDisplayed(); }
       catch (err) {
-        if (isFatalDriverError(err)) throw err;
+        const kind = PlatformElement.classifyReadError(err);
         // Like Playwright, a missing match is simply not visible.
-        if (PlatformElement.isNoMatch(err)) return false;
-        if (attempt === 0 && PlatformElement.isStale(err)) continue;
+        if (kind === 'no-match') return false;
+        if (attempt === 0 && kind === 'stale') continue;
         throw err;
       }
     }
@@ -1327,15 +1349,18 @@ export class PlatformElement implements Element {
 
   /** {@link waitFor} for a polled element (see {@link polled}): polls `$$`. */
   private async waitForPolled(state: string, timeout: number): Promise<void> {
-    // A missing match counts as absent / not shown; a fatal driver error
-    // (dead session, invalid selector) must not pass as "hidden" or "detached".
+    // Only a real no-match counts as absent / not shown. A stale reference or
+    // any other non-fatal driver error leaves the answer undecided: it is
+    // rethrown, so pollUntil keeps trying until its timeout instead of
+    // passing "hidden" or "detached" on one transient error. A fatal driver
+    // error (dead session, invalid selector) is thrown by pollUntil at once.
     const present = async () => {
       try { await this.resolveNow(); return true; }
-      catch (err) { if (isFatalDriverError(err)) throw err; return false; }
+      catch (err) { if (PlatformElement.classifyReadError(err) === 'no-match') return false; throw err; }
     };
     const shown = async () => {
       try { return !!(await (await this.resolveNow()).isDisplayed()); }
-      catch (err) { if (isFatalDriverError(err)) throw err; return false; }
+      catch (err) { if (PlatformElement.classifyReadError(err) === 'no-match') return false; throw err; }
     };
     const timedOut = (what: string) => () =>
       new Error(`${this.describe()} did not become ${what} within ${timeout} ms`);

@@ -159,3 +159,46 @@ test.describe('isVisible on a non-polled element (unchanged)', () => {
     expect(await item(driver).isVisible()).toBe(false);
   });
 });
+
+test.describe('isVisible: a "no such element" mention deep inside another error', () => {
+  test('an unknown error whose text mentions "no such element" deep inside is rethrown, not false', async () => {
+    const err = driverError('An unknown server-side error occurred while processing the command. Original error: lookup failed after a no such element: retry');
+    const { driver } = scriptedDriver([err, two()]);
+    await expect(item(driver).nth(1).isVisible()).rejects.toBe(err);
+  });
+});
+
+test.describe('waitFor hidden / detached on a polled element: a transient error is not "gone"', () => {
+  const UNKNOWN = () => driverError('An unknown server-side error occurred while processing the command.');
+
+  for (const state of ['hidden', 'detached'] as const) {
+    test(`an unknown error once during waitFor('${state}') on a shown nth(1) does not resolve early`, async () => {
+      // One transient error, then the element is shown again for good.
+      const { driver, state: calls } = scriptedDriver([UNKNOWN(), two()]);
+      await expect(item(driver).nth(1).waitFor({ state, timeout: 300 })).rejects.toThrow();
+      expect(calls.$$calls).toBeGreaterThan(1);
+    });
+
+    test(`an unknown error during waitFor('${state}') resolves only once the element is truly gone`, async () => {
+      const { driver, state: calls } = scriptedDriver([UNKNOWN(), two(), UNKNOWN(), [row('a')]]);
+      await item(driver).nth(1).waitFor({ state, timeout: 5000 });
+      expect(calls.$$calls).toBe(4);
+    });
+
+    test(`a stale element reference during waitFor('${state}') is not "gone" either`, async () => {
+      const { driver } = scriptedDriver([STALE(), two()]);
+      await expect(item(driver).nth(1).waitFor({ state, timeout: 300 })).rejects.toThrow();
+    });
+  }
+
+  test(`waitFor('hidden') resolves when the element is present but not displayed`, async () => {
+    const { driver } = scriptedDriver([UNKNOWN(), [row('a'), row('b', { isDisplayed: async () => false })]]);
+    await item(driver).nth(1).waitFor({ state: 'hidden', timeout: 5000 });
+  });
+
+  test(`waitFor('visible') keeps polling through an unknown error`, async () => {
+    const { driver, state: calls } = scriptedDriver([UNKNOWN(), [row('a')], two()]);
+    await item(driver).nth(1).waitFor({ state: 'visible', timeout: 5000 });
+    expect(calls.$$calls).toBe(3);
+  });
+});
