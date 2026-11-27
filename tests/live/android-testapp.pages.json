@@ -1,0 +1,127 @@
+{
+  "pages": [
+    {
+      "name": "Home",
+      "platform": "android",
+      "elements": [
+        { "elementName": "grid", "selector": { "accessibility id": "home-grid" } },
+        { "elementName": "gridByShortId", "selector": { "id": "home_grid" } },
+        { "elementName": "gridByFullId", "selector": { "id": "com.civitas.testapp:id/home_grid" } },
+        { "elementName": "gridByClassName", "selector": { "class name": "android.widget.GridView" } },
+        { "elementName": "categoryTitles", "selector": { "id": "category_title" }, "list": true },
+        { "elementName": "mediaTitleByText", "selector": { "text": "Media" } },
+        { "elementName": "cardElements", "selector": { "accessibility id": "home-card-buttons" } },
+        { "elementName": "cardAlerts", "selector": { "accessibility id": "home-card-alerts" } },
+        { "elementName": "cardInteractions", "selector": { "accessibility id": "home-card-sortable" } },
+        { "elementName": "cardMedia", "selector": { "accessibility id": "home-card-gallery" } },
+        { "elementName": "cardEdgeCases", "selector": { "accessibility id": "home-card-longList" } },
+        { "elementName": "cardAuth", "selector": { "accessibility id": "home-card-loginForm" } },
+        { "elementName": "cardWidgets", "selector": { "accessibility id": "home-card-tabs" } },
+        { "elementName": "titlesThenAlertsCard", "selector": { "xpath": "//*[@resource-id='com.civitas.testapp:id/category_title' or @content-desc='home-card-alerts']" }, "list": true }
+      ]
+    },
+    {
+      "name": "Category",
+      "platform": "android",
+      "elements": [
+        { "elementName": "checkboxes", "selector": { "accessibility id": "category-item-checkboxes" } },
+        { "elementName": "radio", "selector": { "accessibility id": "category-item-radiobuttons" } },
+        { "elementName": "alerts", "selector": { "accessibility id": "category-item-alerts" } },
+        { "elementName": "tall", "selector": { "accessibility id": "category-item-tall" } },
+        { "elementName": "longList", "selector": { "accessibility id": "category-item-longList" } },
+        { "elementName": "gallery", "selector": { "accessibility id": "category-item-gallery" } },
+        { "elementName": "counter", "selector": { "accessibility id": "category-item-piniaCounter" } },
+        { "elementName": "table", "selector": { "accessibility id": "category-item-table" } }
+      ]
+    },
+    {
+      "name": "Checkboxes",
+      "platform": "android",
+      "elements": [
+        { "elementName": "checkboxUnchecked", "selector": { "accessibility id": "checkbox-unchecked" } },
+        { "elementName": "checkboxChecked", "selector": { "accessibility id": "checkbox-checked" } },
+        { "elementName": "toggleOff", "selector": { "accessibility id": "toggle-off" } },
+        { "elementName": "toggleOn", "selector": { "accessibility id": "toggle-on" } },
+        { "elementName": "toggleOffByShortId", "selector": { "id": "toggle_off" } },
+        { "elementName": "toggleOffByFullId", "selector": { "id": "com.civitas.testapp:id/toggle_off" } },
+        { "elementName": "toggleOffByUiAutomator", "selector": { "uiautomator": "new UiSelector().resourceId(\"com.civitas.testapp:id/toggle_off\")" } },
+        { "elementName": "toggleOffByXpath", "selector": { "xpath": "//android.widget.Switch[@content-desc='toggle-off']" } },
+        { "elementName": "toggleOffByText", "selector": { "text": "Toggle (off)" } },
+        { "elementName": "checkboxes", "selector": { "class name": "android.widget.CheckBox" }, "list": true },
+        { "elementName": "stateSummary", "selector": { "id": "checkbox_state_summary" } }
+      ]
+    },
+    {
+      "name": "Radio",
+      "platform": "android",
+      "elements": [
+        { "elementName": "yes", "selector": { "accessibility id": "radio-yes" } },
+        { "elementName": "impressive", "selector": { "id": "radio_impressive" } },
+        { "elementName": "no", "selector": { "uiautomator": "new UiSelector().description(\"radio-no\")" } },
+        { "elementName": "buttons", "selector": { "class name": "android.widget.RadioButton" }, "list": true },
+        { "elementName": "group", "selector": { "id": "radio_group" } }
+      ]
+    },
+    {
+      "name": "LongList",
+      "platform": "android",
+      "elements": [
+        { "elementName": "recycler", "selector": { "id": "long_list_recycler" } },
+        { "elementName": "search", "selector": { "accessibility id": "long-list-search" } },
+        { "elementName": "searchRow", "selector": { "xpath": "//android.widget.LinearLayout[android.widget.EditText[@content-desc='long-list-search']]" } },
+        { "elementName": "count", "selector": { "accessibility id": "long-list-count" } },
+        { "elementName": "item1", "selector": { "accessibility id": "long-list-item-1" } },
+        { "elementName": "item40", "selector": { "accessibility id": "long-list-item-40" } },
+        { "elementName": "items", "selector": { "class name": "android.widget.TwoLineListItem" }, "list": true },
+        { "elementName": "itemTitles", "selector": { "id": "android:id/text1" }, "list": true },
+        { "elementName": "itemByXpath", "selector": { "xpath": "//android.widget.TwoLineListItem[@content-desc='long-list-item-2']" } }
+      ]
+    },
+    {
+      "name": "Tall",
+      "platform": "android",
+      "elements": [
+        { "elementName": "scrollView", "selector": { "id": "com.civitas.testapp:id/tall_scroll_view" } },
+        { "elementName": "section1", "selector": { "accessibility id": "tall-section-1" } },
+        { "elementName": "section3", "selector": { "uiautomator": "new UiSelector().description(\"tall-section-3\")" } },
+        { "elementName": "section10", "selector": { "accessibility id": "tall-section-10" } }
+      ]
+    },
+    {
+      "name": "Gallery",
+      "platform": "android",
+      "elements": [
+        { "elementName": "grid", "selector": { "id": "gallery_grid" } },
+        { "elementName": "item1", "selector": { "accessibility id": "gallery-item-1" } }
+      ]
+    },
+    {
+      "name": "Counter",
+      "platform": "android",
+      "elements": [
+        { "elementName": "value", "selector": { "accessibility id": "counter-value" } },
+        { "elementName": "increment", "selector": { "accessibility id": "counter-increment" } }
+      ]
+    },
+    {
+      "name": "Table",
+      "platform": "android",
+      "elements": [
+        { "elementName": "scroller", "selector": { "class name": "android.widget.HorizontalScrollView" } },
+        { "elementName": "rowCheckbox1", "selector": { "accessibility id": "table-row-checkbox-1" } },
+        { "elementName": "joinDate1", "selector": { "text": "2022-01-15" } }
+      ]
+    },
+    {
+      "name": "Alerts",
+      "platform": "android",
+      "elements": [
+        { "elementName": "info", "selector": { "accessibility id": "alert-info" } },
+        { "elementName": "status", "selector": { "id": "alert_status" } },
+        { "elementName": "dialogTitle", "selector": { "id": "com.civitas.testapp:id/alertTitle" } },
+        { "elementName": "dialogMessage", "selector": { "id": "android:id/message" } },
+        { "elementName": "dialogOk", "selector": { "id": "android:id/button1" } }
+      ]
+    }
+  ]
+}

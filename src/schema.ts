@@ -1,3 +1,5 @@
+import { Platform } from './enum/Platform';
+
 export interface Selector {
   [key: string]: string;
 }
@@ -30,7 +32,8 @@ export interface ElementMeta {
 
 export interface PageObject {
   name: string;
-  platform?: string;
+  /** The platform this page block belongs to; missing means `'web'`. */
+  platform?: Platform;
   elements: ElementDefinition[];
 }
 

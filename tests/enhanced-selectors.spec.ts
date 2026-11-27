@@ -154,6 +154,50 @@ test.describe('EnhancedResolver — static methods', () => {
     expect(result).toBe("-ios predicate string:label MATCHES 'Error.*failed'");
   });
 
+  test('resolve — android UiSelector arguments escape double quotes only (role + name)', () => {
+    const pageObj = {
+      name: 'TestPage',
+      platform: 'android',
+      elements: [{ elementName: 'btn', selector: { role: 'button', name: 'Say "hi" C:\\dir' } }],
+    };
+    const result = EnhancedResolver.resolve(createMockPage(), pageObj, 'btn', {});
+    expect(result).toBe('android=new UiSelector().className("android.widget.Button").text("Say \\"hi\\" C:\\dir")');
+  });
+
+  test('resolve — android UiSelector arguments escape double quotes only (role + regex name)', () => {
+    const pageObj = {
+      name: 'TestPage',
+      platform: 'android',
+      elements: [{ elementName: 'btn', selector: { role: 'button', name: { regex: '"Save" \\d+' } } }],
+    };
+    const result = EnhancedResolver.resolve(createMockPage(), pageObj, 'btn', {});
+    expect(result).toBe('android=new UiSelector().className("android.widget.Button").textMatches("\\"Save\\" \\d+")');
+  });
+
+  test('resolve — android UiSelector arguments escape double quotes only (regex text)', () => {
+    const pageObj = {
+      name: 'TestPage',
+      platform: 'android',
+      elements: [{ elementName: 'alert', selector: { text: { regex: 'Error "\\w+"' } } }],
+    };
+    const result = EnhancedResolver.resolve(createMockPage(), pageObj, 'alert', {});
+    expect(result).toBe('android=new UiSelector().textMatches("Error \\"\\w+\\"")');
+  });
+
+  test('resolve — android UiSelector arguments ending in a backslash throw, pointing to xpath', () => {
+    const page = (selector: any) => ({
+      name: 'TestPage', platform: 'android', elements: [{ elementName: 'e', selector }],
+    });
+    for (const selector of [
+      { role: 'button', name: 'Path C:\\' },
+      { role: 'button', name: { regex: 'ends\\' } },
+      { text: { regex: 'ends\\' } },
+    ]) {
+      expect(() => EnhancedResolver.resolve(createMockPage(), page(selector), 'e', {}))
+        .toThrow(/ends in a backslash.*use an xpath selector/);
+    }
+  });
+
   test('resolveFrameScope — resolves single frame', () => {
     const page = createMockPage();
     const pageObj = {

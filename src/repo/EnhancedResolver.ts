@@ -1,5 +1,6 @@
 import { PageObject, RegexPattern, Selector, SelectorValue } from '../schema/repository';
 import { SelectorFormatter } from './formatters';
+import { escapeUiSelectorString } from '../utils/escape';
 
 /**
  * Resolves enhanced selector types that go beyond simple strategy-to-value
@@ -233,9 +234,9 @@ export class EnhancedResolver {
     if (platform === 'android') {
       const className = EnhancedResolver.ROLE_TO_ANDROID_CLASS[role];
       if (!className) return null;
-      let uiSelector = `new UiSelector().className("${className}")`;
-      if (nameStr) uiSelector += `.text("${nameStr}")`;
-      else if (nameRegex) uiSelector += `.textMatches("${nameRegex.regex}")`;
+      let uiSelector = `new UiSelector().className("${escapeUiSelectorString(className)}")`;
+      if (nameStr) uiSelector += `.text("${escapeUiSelectorString(nameStr)}")`;
+      else if (nameRegex) uiSelector += `.textMatches("${escapeUiSelectorString(nameRegex.regex)}")`;
       return `android=${uiSelector}`;
     }
 
@@ -268,7 +269,7 @@ export class EnhancedResolver {
     const textSpec = selector.text as RegexPattern;
 
     if (platform === 'android') {
-      return `android=new UiSelector().textMatches("${textSpec.regex}")`;
+      return `android=new UiSelector().textMatches("${escapeUiSelectorString(textSpec.regex)}")`;
     }
 
     if (platform === 'ios') {

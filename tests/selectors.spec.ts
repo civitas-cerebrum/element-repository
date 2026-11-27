@@ -14,6 +14,7 @@ test.describe('getSelector — Appium platform formatting', () => {
           { elementName: 'byId', selector: { id: 'submit-btn' } },
           { elementName: 'byUiAutomator', selector: { uiautomator: 'new UiSelector().text("Submit")' } },
           { elementName: 'byText', selector: { text: 'Submit' } },
+          { elementName: 'byQuotedText', selector: { text: 'Say "hi" \\ now' } },
           { elementName: 'byClassName', selector: { 'class name': 'android.widget.EditText' } },
           { elementName: 'byUnknown', selector: { nativeId: 'com.example.button' } },
         ],
@@ -27,6 +28,7 @@ test.describe('getSelector — Appium platform formatting', () => {
           { elementName: 'byPredicate', selector: { predicate: 'label == "Login"' } },
           { elementName: 'byClassChain', selector: { 'class chain': '**/XCUIElementTypeButton' } },
           { elementName: 'byText', selector: { text: 'Submit' } },
+          { elementName: 'byQuotedText', selector: { text: 'Say "hi" \\ now' } },
           { elementName: 'byClassName', selector: { 'class name': 'XCUIElementTypeTextField' } },
         ],
       },
@@ -44,8 +46,8 @@ test.describe('getSelector — Appium platform formatting', () => {
       expect(repo.getSelector('byXpath', 'TestPageAndroid')).toBe('//android.widget.Button');
     });
 
-    test('id → #value', () => {
-      expect(repo.getSelector('byId', 'TestPageAndroid')).toBe('#submit-btn');
+    test('id → id=value (resource-id)', () => {
+      expect(repo.getSelector('byId', 'TestPageAndroid')).toBe('id=submit-btn');
     });
 
     test('uiautomator → android=value', () => {
@@ -54,6 +56,10 @@ test.describe('getSelector — Appium platform formatting', () => {
 
     test('text → UiSelector text query', () => {
       expect(repo.getSelector('byText', 'TestPageAndroid')).toBe('android=new UiSelector().text("Submit")');
+    });
+
+    test('text → only double quotes escaped in the UiSelector literal (backslash sent as-is)', () => {
+      expect(repo.getSelector('byQuotedText', 'TestPageAndroid')).toBe('android=new UiSelector().text("Say \\"hi\\" \\ now")');
     });
 
     test('class name → raw value', () => {
@@ -86,6 +92,10 @@ test.describe('getSelector — Appium platform formatting', () => {
 
     test('text → -ios predicate string label', () => {
       expect(repo.getSelector('byText', 'TestPageIOS')).toBe('-ios predicate string:label == "Submit"');
+    });
+
+    test('text → quotes and backslashes escaped in the label predicate', () => {
+      expect(repo.getSelector('byQuotedText', 'TestPageIOS')).toBe('-ios predicate string:label == "Say \\"hi\\" \\\\ now"');
     });
 
     test('class name → raw value', () => {

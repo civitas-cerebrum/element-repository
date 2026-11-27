@@ -1,3 +1,5 @@
+import type { LookupAbortedError } from '../types/errors';
+
 export enum SelectionStrategy {
     INDEX = 'index',
     TEXT = 'text',
@@ -8,9 +10,57 @@ export enum SelectionStrategy {
 }
 
 /**
- * Configuration options for resolving an element.
+ * Options every `ElementRepository` getter takes as its trailing argument.
  */
-export interface ElementResolutionOptions {
+export interface LookupOptions {
+  /**
+   * Cancels the lookup. Once the signal is aborted, the lookup starts no
+   * further driver call (a call already running may finish; its result is
+   * dropped) and rejects with a {@link LookupAbortedError} whose `cause` is
+   * `signal.reason`. It covers every driver call the lookup makes: the
+   * selector queries, the text / attribute / visibility reads of the
+   * text, attribute and visible getters, the attach waits, the fallback
+   * chain and the sleeps between polls, which wake at once.
+   *
+   * The signal belongs to the lookup call only: an element the lookup
+   * returns does not carry it, so a kept element keeps working after the
+   * signal fires. An abort wins over not-found: a non-strict getter
+   * rejects rather than returning `null`. Repository and argument errors
+   * (an unknown page or element, a missing `index`) are thrown before the
+   * signal is looked at; a fatal driver error seen before the abort is
+   * thrown as is.
+   *
+   * For a hard time limit pass `AbortSignal.timeout(ms)`, or
+   * `AbortSignal.any([signal, AbortSignal.timeout(ms)])` to combine it with
+   * your own. On web, Playwright's waits cannot be cancelled: the lookup
+   * rejects at once, and the abandoned wait ends on its own timeout in the
+   * background.
+   */
+  signal?: AbortSignal;
+  /**
+   * Text lookups only: the platform `TEXT` strategy and `getByText` (other
+   * getters ignore it). When `true`, a miss of the narrowed text queries is
+   * always confirmed by one full pass over every match, so a
+   * `TextNotFoundError` always has `missBasis: 'full-pass'` and a
+   * non-strict `getByText` returns `null` only after a full pass. Without
+   * it, a narrowed miss over a snapshot confirmed complete is final
+   * (`missBasis: 'narrowed'`). Defaults to `false`.
+   *
+   * A full pass is not proof of absence by itself: on iOS, and for an
+   * Android XPath, it runs on the same snapshot, cut off at
+   * `snapshotMaxDepth`. After the full pass misses, the depth check still
+   * runs (once), and the error's `snapshotTruncated` is `true` when a match
+   * below the cut-off could have been missed. Proven absence is
+   * `cleanMiss && snapshotTruncated !== true`.
+   */
+  requireFullPass?: boolean;
+}
+
+/**
+ * Configuration options for resolving an element. Takes the lookup's
+ * `signal` too (see {@link LookupOptions}).
+ */
+export interface ElementResolutionOptions extends LookupOptions {
   /** The selection strategy to use. Defaults to FIRST to prevent strict mode errors. */
   strategy?: SelectionStrategy;
   /** The specific text or attribute value to match. */

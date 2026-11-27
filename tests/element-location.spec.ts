@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test';
 import { ElementRepository } from '../src/repo/ElementRepository';
 import { WebElement, PlatformElement } from '../src/types';
 import { SelectionStrategy } from '../src/enum/Options';
+import { wasQueried } from './support/narrowedQueries';
 
 // ---------------------------------------------------------------------------
 // Mock data covering all selector strategies
@@ -283,7 +284,8 @@ test.describe('Android element location — getByText()', () => {
     const repo = new ElementRepository(driver, androidMockData);
     const el = await repo.getByText('byXpath', 'LoginPage', 'Submit');
 
-    expect(calls.$$).toContain('//android.widget.Button');
+    // The selector itself, or the narrowed text query composed on it.
+    expect(wasQueried(calls.$$, '//android.widget.Button')).toBe(true);
     expect(el).toBeInstanceOf(PlatformElement);
   });
 });

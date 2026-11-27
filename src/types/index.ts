@@ -1,4 +1,9 @@
-export { Element, ElementType, ElementActionOptions, ScrollIntoViewOptions, SwipeDirection, SwipeOptions, isWeb, isPlatform } from './Element';
+export {
+  Element, ElementType, ElementActionOptions, ClickOptions, ScrollIntoViewOptions, SwipeDirection, SwipeOptions,
+  LongPressOptions, TapOffset, TapAtOptions, PinchOptions, ZoomOptions, isWeb, isPlatform,
+} from './Element';
 export { WebElement } from './WebElement';
-export { PlatformElement } from './PlatformElement';
+export { PlatformElement, PlatformElementOptions } from './PlatformElement';
 export { ElementChain } from './ElementChain';
+export { TextNotFoundError, LookupAbortedError, ElementNotFoundError } from './errors';
+export type { TextNotFoundErrorInit, LookupAbortedErrorInit, ElementNotFoundErrorInit } from './errors';

@@ -1,4 +1,7 @@
-import { Element } from './Element';
+import {
+  Element, ClickOptions, LongPressOptions, TapOffset, TapAtOptions, PinchOptions, ZoomOptions,
+  ScrollIntoViewOptions, SwipeDirection, SwipeOptions,
+} from './Element';
 
 /**
  * Thenable fluent builder for performing sequenced actions on an {@link Element}.
@@ -29,7 +32,8 @@ export class ElementChain implements PromiseLike<Element> {
 
   /**
    * @param element - The element to act on.
-   * @param timeout - Optional timeout in ms applied to all wait/action calls in this chain.
+   * @param timeout - Optional timeout in ms applied to all wait/action calls in this chain,
+   *                  except `scrollIntoView`, which uses only its own `options.timeout`.
    */
   constructor(private element: Element, private timeout?: number) {}
 
@@ -45,12 +49,18 @@ export class ElementChain implements PromiseLike<Element> {
 
   // ── Interactions ─────────────────────────────────────────────
 
-  /** Wait for visible, then click. Use `{ withoutScrolling: true }` to dispatch a native click event. */
+  /**
+   * Wait for visible, then click.
+   *
+   * `{ withoutScrolling: true }` waits only for attached, then clicks with
+   * the same option; what that means per backend is defined by
+   * {@link ClickOptions.withoutScrolling}.
+   */
   click(options?: { withoutScrolling?: boolean }): this {
     this.queue.push(async () => {
       if (options?.withoutScrolling) {
         await this.element.waitFor({ state: 'attached', timeout: this.timeout });
-        await this.element.dispatchEvent('click');
+        await this.element.click({ timeout: this.timeout, withoutScrolling: true });
       } else {
         await this.element.waitFor({ state: 'visible', timeout: this.timeout });
         await this.element.click({ timeout: this.timeout });
@@ -59,15 +69,16 @@ export class ElementChain implements PromiseLike<Element> {
     return this;
   }
 
-  /** Click only if the element is visible. Skips silently otherwise. */
+  /**
+   * Click only if the element is visible. Skips silently otherwise.
+   * `withoutScrolling` is passed to the click (see
+   * {@link ClickOptions.withoutScrolling}).
+   */
   clickIfPresent(options?: { withoutScrolling?: boolean }): this {
     this.queue.push(async () => {
       if (await this.element.isVisible()) {
-        if (options?.withoutScrolling) {
-          await this.element.dispatchEvent('click');
-        } else {
-          await this.element.click({ timeout: this.timeout });
-        }
+        const withoutScrolling = options?.withoutScrolling ? { withoutScrolling: true } : {};
+        await this.element.click({ timeout: this.timeout, ...withoutScrolling });
       }
     });
     return this;
@@ -127,11 +138,29 @@ export class ElementChain implements PromiseLike<Element> {
     return this;
   }
 
-  /** Wait for attached, then scroll into view. */
-  scrollIntoView(): this {
+  /**
+   * Scroll the element into view. Same options as
+   * {@link Element.scrollIntoView}, which does its own waiting. The options
+   * are passed on as given: the chain timeout is not applied, so a platform
+   * sweep is bounded by its swipe limit (`options.maxSwipes`) unless
+   * `options.timeout` is given here, and a web element falls back to its
+   * own default timeout.
+   */
+  scrollIntoView(options?: ScrollIntoViewOptions): this {
     this.queue.push(async () => {
-      await this.element.waitFor({ state: 'attached', timeout: this.timeout });
-      await this.element.scrollIntoView({ timeout: this.timeout });
+      await this.element.scrollIntoView(options);
+    });
+    return this;
+  }
+
+  /**
+   * Swipe from the element centre. Same arguments as {@link Element.swipe},
+   * which does its own waiting; an explicit `options.timeout` overrides the
+   * chain timeout.
+   */
+  swipe(direction: SwipeDirection, options?: SwipeOptions): this {
+    this.queue.push(async () => {
+      await this.element.swipe(direction, { ...options, timeout: options?.timeout ?? this.timeout });
     });
     return this;
   }
@@ -141,6 +170,58 @@ export class ElementChain implements PromiseLike<Element> {
     this.queue.push(async () => {
       await this.element.waitFor({ state: 'visible', timeout: this.timeout });
       await this.element.pressSequentially(text, delay, { timeout: this.timeout });
+    });
+    return this;
+  }
+
+  /**
+   * Wait for visible, then press and hold on the element centre.
+   * An explicit `options.timeout` overrides the chain timeout.
+   */
+  longPress(options?: LongPressOptions): this {
+    this.queue.push(async () => {
+      const opts = { ...options, timeout: options?.timeout ?? this.timeout };
+      await this.element.waitFor({ state: 'visible', timeout: opts.timeout });
+      await this.element.longPress(opts);
+    });
+    return this;
+  }
+
+  /**
+   * Wait for visible, then tap at an offset from the element's top-left corner.
+   * An explicit `options.timeout` overrides the chain timeout.
+   */
+  tapAt(offset: TapOffset, options?: TapAtOptions): this {
+    this.queue.push(async () => {
+      const opts = { ...options, timeout: options?.timeout ?? this.timeout };
+      await this.element.waitFor({ state: 'visible', timeout: opts.timeout });
+      await this.element.tapAt(offset, opts);
+    });
+    return this;
+  }
+
+  /**
+   * Wait for visible, then pinch (fingers together) on the element.
+   * An explicit `options.timeout` overrides the chain timeout.
+   */
+  pinch(options?: PinchOptions): this {
+    this.queue.push(async () => {
+      const opts = { ...options, timeout: options?.timeout ?? this.timeout };
+      await this.element.waitFor({ state: 'visible', timeout: opts.timeout });
+      await this.element.pinch(opts);
+    });
+    return this;
+  }
+
+  /**
+   * Wait for visible, then zoom (fingers apart) on the element.
+   * An explicit `options.timeout` overrides the chain timeout.
+   */
+  zoom(options?: ZoomOptions): this {
+    this.queue.push(async () => {
+      const opts = { ...options, timeout: options?.timeout ?? this.timeout };
+      await this.element.waitFor({ state: 'visible', timeout: opts.timeout });
+      await this.element.zoom(opts);
     });
     return this;
   }

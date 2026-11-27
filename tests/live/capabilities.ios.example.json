@@ -1,0 +1,8 @@
+{
+  "platformName": "iOS",
+  "appium:automationName": "XCUITest",
+  "appium:udid": "<device-udid>",
+  "appium:bundleId": "com.apple.Preferences",
+  "appium:noReset": true,
+  "appium:newCommandTimeout": 300
+}

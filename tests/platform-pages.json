@@ -1,0 +1,40 @@
+{
+  "pages": [
+    {
+      "name": "LoginPage",
+      "platform": "web",
+      "frame": { "css": "iframe#login" },
+      "frameIndex": "first",
+      "elements": [
+        { "elementName": "submit", "selector": { "css": "button[type=submit]" } },
+        {
+          "elementName": "help",
+          "selector": { "css": "[data-qa='help']", "fallback": { "role": "link", "name": { "regex": "help", "flags": "i" } } },
+          "provisional": true
+        }
+      ]
+    },
+    {
+      "name": "LoginPage",
+      "platform": "android",
+      "elements": [
+        { "elementName": "submit", "selector": { "accessibility id": "login-submit" } },
+        { "elementName": "help", "selector": { "id": "com.example:id/help" }, "provisional": true }
+      ]
+    },
+    {
+      "name": "LoginPage",
+      "platform": "ios",
+      "elements": [
+        { "elementName": "submit", "selector": { "accessibility id": "login-submit" }, "provisional": false },
+        { "elementName": "rows", "selector": { "class name": "XCUIElementTypeCell" }, "list": true }
+      ]
+    },
+    {
+      "name": "HomePage",
+      "elements": [
+        { "elementName": "logo", "selector": { "css": "img.logo" }, "provisional": true }
+      ]
+    }
+  ]
+}

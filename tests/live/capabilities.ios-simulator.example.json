@@ -1,0 +1,12 @@
+{
+  "platformName": "iOS",
+  "appium:automationName": "XCUITest",
+  "appium:deviceName": "<simulator-device-name>",
+  "appium:platformVersion": "<simulator-ios-version>",
+  "appium:app": "<path-to-ios-test-app>/dist/TestApp.app.zip",
+  "appium:bundleId": "com.civitas-cerebrum.test-app",
+  "appium:noReset": true,
+  "appium:newCommandTimeout": 300,
+  "appium:autoAcceptAlerts": false,
+  "appium:autoDismissAlerts": false
+}
