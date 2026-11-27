@@ -1029,13 +1029,57 @@ export class PlatformElement implements Element {
   /** WebdriverIO's error for a command on a lazy element that never appeared. */
   private static readonly WDIO_NOT_FOUND = /^Can't call \w+ on .*wasn't found$/;
 
+  /**
+   * True for an answer that no element matches: an internal
+   * {@link NoMatchError}, the W3C `no such element` error (by name or
+   * message) or WebdriverIO's "Can't call ... because element wasn't found".
+   */
+  private static isNoMatch(err: unknown): boolean {
+    if (err instanceof NoMatchError) return true;
+    if (!err || typeof err !== 'object') return false;
+    const { name, message } = err as { name?: unknown; message?: unknown };
+    if (name === 'no such element' || name === 'NoSuchElementError') return true;
+    return typeof message === 'string'
+      && (/no such element|could not be located on the page/i.test(message) || PlatformElement.WDIO_NOT_FOUND.test(message));
+  }
+
+  /** True for the W3C `stale element reference` error (by name or message): the match left the tree. */
+  private static isStale(err: unknown): boolean {
+    if (!err || typeof err !== 'object') return false;
+    const { name, message } = err as { name?: unknown; message?: unknown };
+    return (typeof name === 'string' && /stale element|StaleElementReference/i.test(name))
+      || (typeof message === 'string' && /stale element/i.test(message));
+  }
+
+  /**
+   * {@inheritDoc Element.isVisible}
+   *
+   * Platform: a polled element (an index other than the first match, a
+   * child made by {@link locateChild}, or an element that matches nothing)
+   * is looked up now, without waiting. A real no-match (no element at the
+   * index, a missing parent, a driver answer `no such element` or
+   * WebdriverIO's "wasn't found") is `false`. A `stale element reference`
+   * (the match left the tree between the lookup and the read) is looked up
+   * and read once more. Any other driver error is thrown, so a caller that
+   * polls `isVisible()` retries it instead of reading it as "not visible":
+   * on a polled element `isVisible()` may therefore throw on a transient
+   * driver error (an `unknown error`, a second stale reference in a row).
+   * A fatal driver error ({@link isFatalDriverError}) is always thrown.
+   * Any other element reads WebdriverIO `isDisplayed()` and passes its
+   * errors through unchanged.
+   */
   async isVisible(): Promise<boolean> {
-    if (this.polled) {
-      // Like Playwright, a missing match is simply not visible.
+    if (!this.polled) return (await this.findOne()).isDisplayed();
+    for (let attempt = 0; ; attempt++) {
       try { return await (await this.resolveNow()).isDisplayed(); }
-      catch (err) { if (isFatalDriverError(err)) throw err; return false; }
+      catch (err) {
+        if (isFatalDriverError(err)) throw err;
+        // Like Playwright, a missing match is simply not visible.
+        if (PlatformElement.isNoMatch(err)) return false;
+        if (attempt === 0 && PlatformElement.isStale(err)) continue;
+        throw err;
+      }
     }
-    return (await this.findOne()).isDisplayed();
   }
   async isEnabled(): Promise<boolean> { return this.read('isEnabled', el => el.isEnabled()); }
   /**

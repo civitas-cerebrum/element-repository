@@ -395,7 +395,13 @@ export interface Element {
 
   // ── State ────────────────────────────────────────────────────
 
-  /** Returns `true` if the element is visible in the viewport. */
+  /**
+   * Returns `true` if the element is visible in the viewport. A missing
+   * element is `false`. On a platform element that is polled (an index
+   * other than the first match, or a child made by `locateChild`) a
+   * transient driver error is thrown rather than read as `false`, so a
+   * polling caller retries it.
+   */
   isVisible(): Promise<boolean>;
 
   /** Returns `true` if the element is enabled (not disabled). */
