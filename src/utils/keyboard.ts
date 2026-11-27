@@ -68,6 +68,39 @@ export interface DismissKeyboardOptions {
    * ignores it.
    */
   tapElement?: Element;
+  /**
+   * When `true`, "cannot tell whether a keyboard is shown" is an error
+   * instead of `false`: a driver without `isKeyboardShown`, or a first check
+   * answered with any error that is not fatal (an unsupported answer such as
+   * `unknown command` / `unknown method` / "not implemented", or anything
+   * else) throws a {@link KeyboardStateUnknownError} before anything is
+   * sent. Default `false`. A value that is not a boolean throws.
+   */
+  strict?: boolean;
+}
+
+/**
+ * The "cannot tell whether a keyboard is shown" outcome of
+ * {@link dismissKeyboard} with `strict: true`.
+ *
+ * Message: `dismissKeyboard: cannot tell whether a keyboard is shown: <reason>`,
+ * where `reason` is `the driver has no isKeyboardShown()` or
+ * `isKeyboardShown() failed: <first line of the error message>`; `cause` is
+ * that error (unset when the driver has no `isKeyboardShown`).
+ */
+export class KeyboardStateUnknownError extends Error {
+  /** Why the keyboard state is unknown. */
+  readonly reason: string;
+  /**
+   * @param reason Why the keyboard state is unknown.
+   * @param cause The error of the first check, if there was one.
+   */
+  constructor(reason: string, cause?: unknown) {
+    super(`dismissKeyboard: cannot tell whether a keyboard is shown: ${reason}`, cause === undefined ? undefined : { cause });
+    this.name = 'KeyboardStateUnknownError';
+    this.reason = reason;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
 }
 
 /** The "still shown" outcome of {@link dismissKeyboard}. */
@@ -233,9 +266,10 @@ function stepsFor(
  *    whose answer is any error that is not fatal (`unknown command`,
  *    `unknown method`, `unsupported operation`, "not (yet) implemented" or
  *    anything else: it cannot tell), also returns `false` without sending
- *    anything. A fatal error of that first check ({@link isFatalDriverError}:
- *    dead session, lost connection, ..., but not the unsupported answers
- *    above) is thrown.
+ *    anything; with `options.strict` it throws a
+ *    {@link KeyboardStateUnknownError} instead. A fatal error of that first
+ *    check ({@link isFatalDriverError}: dead session, lost connection, ...,
+ *    but not the unsupported answers above) is thrown.
  * 2. Otherwise it runs the steps below in order. After each step it waits
  *    {@link KEYBOARD_SETTLE_MS} and asks `isKeyboardShown()` again, and
  *    returns `true` as soon as the keyboard is gone. A step whose command
@@ -306,11 +340,11 @@ function stepsFor(
  * @param platform The platform; by default read from the driver's
  *   `platformName` capability, else WebdriverIO's `isIOS` / `isAndroid`.
  *   Only `'ios'` selects the iOS steps.
- * @param options `{ timeout?, tapElement? }`, see {@link DismissKeyboardOptions}.
- *   A `tapElement` that is not a platform element throws before anything
- *   is sent.
+ * @param options `{ timeout?, tapElement?, strict? }`, see {@link DismissKeyboardOptions}.
+ *   A `tapElement` that is not a platform element, or a `strict` that is
+ *   not a boolean, throws before anything is sent.
  * @returns `true` when a keyboard was shown and is now gone, `false` when
- *   none was shown or the driver cannot tell.
+ *   none was shown or (without `strict`) the driver cannot tell.
  */
 export async function dismissKeyboard(driver: any, platform?: Platform, options?: DismissKeyboardOptions): Promise<boolean> {
   const timeout = options?.timeout;
@@ -321,13 +355,21 @@ export async function dismissKeyboard(driver: any, platform?: Platform, options?
   if (tapElement !== undefined && !(tapElement && typeof tapElement === 'object' && isPlatform(tapElement))) {
     throw new Error('dismissKeyboard: options.tapElement must be a platform element');
   }
+  const strict = options?.strict;
+  if (strict !== undefined && typeof strict !== 'boolean') {
+    throw new Error(`dismissKeyboard: options.strict must be a boolean, got ${String(strict)}`);
+  }
   const started = Date.now();
-  if (typeof driver?.isKeyboardShown !== 'function') return false;
+  if (typeof driver?.isKeyboardShown !== 'function') {
+    if (strict) throw new KeyboardStateUnknownError('the driver has no isKeyboardShown()');
+    return false;
+  }
   try {
     if (!(await driver.isKeyboardShown())) return false;
   } catch (err) {
     // Only a fatal error is thrown; anything else means "cannot tell".
     if (!isUnsupported(err) && isFatalDriverError(err)) throw err;
+    if (strict) throw new KeyboardStateUnknownError(`isKeyboardShown() failed: ${messageOf(err)}`, err);
     return false;
   }
 

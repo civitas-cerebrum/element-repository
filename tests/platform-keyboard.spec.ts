@@ -1,5 +1,8 @@
 import { test, expect } from '@playwright/test';
-import { dismissKeyboard, KeyboardStillShownError, KEYBOARD_SETTLE_MS, IOS_DISMISS_KEYS, TAP_ELEMENT_WAIT_MS } from '../src';
+import {
+  dismissKeyboard, KeyboardStillShownError, KeyboardStateUnknownError, KEYBOARD_SETTLE_MS, IOS_DISMISS_KEYS, TAP_ELEMENT_WAIT_MS,
+} from '../src';
+import * as root from '../src';
 import { PlatformElement } from '../src/types';
 
 // ---------------------------------------------------------------------------
@@ -585,5 +588,71 @@ test.describe('PlatformElement.scrollIntoView dismisses the keyboard first', () 
     const { driver, swipes } = sweepDriver({ bare: dead });
     await expect(target(driver).scrollIntoView({ maxSwipes: 2 })).rejects.toThrow(/terminated or not started/);
     expect(swipes).toEqual([]);
+  });
+});
+
+test.describe('dismissKeyboard: strict', () => {
+  test('a driver without isKeyboardShown throws KeyboardStateUnknownError, nothing sent', async () => {
+    const { driver, calls, executes } = fakeDriver({ omit: ['isKeyboardShown'] });
+    const err = await dismissKeyboard(driver, 'ios', { strict: true }).then(() => null, (e: unknown) => e);
+    expect(err).toBeInstanceOf(KeyboardStateUnknownError);
+    expect(err).toBeInstanceOf(Error);
+    const e = err as KeyboardStateUnknownError;
+    expect(e.name).toBe('KeyboardStateUnknownError');
+    expect(e.message).toBe('dismissKeyboard: cannot tell whether a keyboard is shown: the driver has no isKeyboardShown()');
+    expect(e.reason).toBe('the driver has no isKeyboardShown()');
+    expect(e.cause).toBeUndefined();
+    expect(calls).toEqual([]);
+    expect(executes).toEqual([]);
+  });
+
+  test('an unsupported or other non-fatal answer of the first check throws, with the error as cause', async () => {
+    for (const cause of [
+      driverError('The requested resource could not be found', 'unknown command'),
+      driverError('Method has not yet been implemented'),
+      driverError('Unknown mobile command "mobile: isKeyboardShown"', 'unknown method'),
+      driverError('Operation not supported', 'unsupported operation'),
+      driverError('something odd\nsecond line'),
+    ]) {
+      const { driver, executes, pauses } = fakeDriver({ isKeyboardShown: async () => { throw cause; } });
+      const err = await dismissKeyboard(driver, 'android', { strict: true }).then(() => null, (e: unknown) => e);
+      expect(err).toBeInstanceOf(KeyboardStateUnknownError);
+      const e = err as KeyboardStateUnknownError;
+      const first = cause.message.split('\n')[0];
+      expect(e.message).toBe(`dismissKeyboard: cannot tell whether a keyboard is shown: isKeyboardShown() failed: ${first}`);
+      expect(e.cause).toBe(cause);
+      expect(executes).toEqual([]);
+      expect(pauses).toEqual([]);
+    }
+  });
+
+  test('a fatal error of the first check is still thrown as it is', async () => {
+    const dead = driverError('A session is either terminated or not started', 'invalid session id');
+    const { driver } = fakeDriver({ isKeyboardShown: async () => { throw dead; } });
+    await expect(dismissKeyboard(driver, 'ios', { strict: true })).rejects.toBe(dead);
+  });
+
+  test('no keyboard shown is still false, and a shown keyboard is still dismissed', async () => {
+    const none = fakeDriver({ shown: false });
+    expect(await dismissKeyboard(none.driver, 'ios', { strict: true })).toBe(false);
+    const shown = fakeDriver({ outcomes: { hideKeyboard: 'dismiss' } });
+    expect(await dismissKeyboard(shown.driver, 'android', { strict: true })).toBe(true);
+  });
+
+  test('strict: false (the default) keeps "cannot tell" as false', async () => {
+    const { driver } = fakeDriver({ omit: ['isKeyboardShown'] });
+    expect(await dismissKeyboard(driver, 'ios', { strict: false })).toBe(false);
+  });
+
+  test('a strict that is not a boolean throws before anything is sent', async () => {
+    const { driver, calls } = fakeDriver({});
+    await expect(dismissKeyboard(driver, 'ios', { strict: 'yes' as any }))
+      .rejects.toThrow('dismissKeyboard: options.strict must be a boolean, got yes');
+    expect(calls).toEqual([]);
+  });
+
+  test('is exported from the package root', () => {
+    expect(typeof root.KeyboardStateUnknownError).toBe('function');
+    expect(root.KeyboardStateUnknownError).toBe(KeyboardStateUnknownError);
   });
 });

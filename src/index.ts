@@ -18,7 +18,7 @@ export * from './enum/Options';
 export * from './utils/math';
 export { isFatalDriverError } from './utils/driverErrors';
 // The soft keyboard dismissal the platform element runs before a scrollIntoView sweep.
-export { dismissKeyboard, KeyboardStillShownError, KEYBOARD_SETTLE_MS, IOS_DISMISS_KEYS, TAP_ELEMENT_WAIT_MS } from './utils/keyboard';
+export { dismissKeyboard, KeyboardStillShownError, KeyboardStateUnknownError, KEYBOARD_SETTLE_MS, IOS_DISMISS_KEYS, TAP_ELEMENT_WAIT_MS } from './utils/keyboard';
 export type { DismissKeyboardOptions } from './utils/keyboard';
 // The W3C touch swipe used by platform gestures, so a screen-level swipe can send the same sequence.
 export {
