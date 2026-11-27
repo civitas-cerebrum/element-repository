@@ -75,7 +75,8 @@ export interface ElementNotFoundErrorInit {
  * `false` when the final poll hit one; `lastDriverError` may be set while
  * `cleanMiss` is `true`, when only an earlier poll failed. A fatal driver
  * error (`isFatalDriverError`) is never wrapped in this error: it is thrown
- * as it is.
+ * as it is. On web, no error of the wait other than Playwright's timeout is
+ * wrapped either (a web miss is always clean).
  *
  * `TextNotFoundError` (the `TEXT` strategy, `getByText`) is a separate class
  * and does not extend this one.

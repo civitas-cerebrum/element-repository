@@ -306,6 +306,19 @@ test.describe('the other paths: a fatal driver error is never a miss', () => {
     expect(out.error).toBe(err);
     expect(calls.some(c => c.endsWith('~b'))).toBe(false);
   });
+
+  test('a fallback chain: a lost session in the fallback walk is thrown, not the primary miss', async () => {
+    const d: any = {
+      capabilities: { platformName: 'Android' },
+      $$: async (sel: string) => { if (sel.endsWith('~b')) throw err; return []; },
+      $: async (sel: string) => {
+        if (sel.endsWith('~b')) throw err;
+        return { selector: sel, waitForExist: async () => { throw new Error('still not existing'); } };
+      },
+    };
+    const out = await settle(repo(d, 300).get('chain', 'List', random));
+    expect(out.error).toBe(err);
+  });
 });
 
 // ── Web paths ────────────────────────────────────────────────────────
@@ -352,24 +365,45 @@ for (const [label, options] of [['RANDOM', webRandom], ['ATTRIBUTE', webAttribut
       expect(out.ms).toBeLessThan(1_000);
     });
 
-    test('a transient error of the wait is retried within the timeout', async () => {
-      let n = 0;
-      const { page, waits } = webPage(async () => { if (n++ === 0) throw transient(); });
-      const out = await settle(new ElementRepository(page, webPages, 5_000).get('btn', 'Web', options));
-      expect(out.error).toBeUndefined();
-      expect(waits).toHaveLength(2);
-      expect(waits[0].timeout).toBe(5_000);
-      expect(waits[1].timeout).toBeLessThanOrEqual(5_000);
+    // Playwright's waitFor retries inside itself; what escapes it other than
+    // its timeout is permanent (closed page, unparsable selector, ...).
+    for (const message of [
+      'locator.waitFor: Target page, context or browser has been closed',
+      'locator.waitFor: Unexpected token "[" while parsing css selector "button[[[". Did you mean to CSS.escape it?',
+      'locator.waitFor: Unknown engine "nope" while parsing selector nope=x',
+      `locator.waitFor: SyntaxError: Failed to execute 'evaluate' on 'Document': The string '//[' is not a valid XPath expression.`,
+      'boom',
+    ]) {
+      test(`a non-timeout error of the wait is thrown as is, at once, after one wait: ${message.slice(0, 48)}`, async () => {
+        const e = new Error(message);
+        const { page, waits } = webPage(async () => { throw e; });
+        const out = await settle(new ElementRepository(page, webPages, 5_000).get('btn', 'Web', options));
+        expect(out.error).toBe(e);
+        expect(out.ms).toBeLessThan(1_000);
+        expect(waits).toHaveLength(1);
+        expect(waits[0].timeout).toBe(5_000);
+      });
+    }
+
+    test('every wait gets a timeout above 0, whatever the wait threw', async () => {
+      for (const thrown of [transient(), fatal(), Object.assign(new Error('Timeout 1ms exceeded.'), { name: 'TimeoutError' })]) {
+        const { page, waits } = webPage(async () => { throw thrown; });
+        await settle(new ElementRepository(page, webPages, 300).get('btn', 'Web', options));
+        expect(waits.length).toBeGreaterThan(0);
+        for (const w of waits) expect(w.timeout).toBeGreaterThan(0);
+      }
     });
 
-    test('a transient error to the deadline is a typed miss naming it', async () => {
-      const { page } = webPage(async () => { throw transient(); });
-      const out = await settle(new ElementRepository(page, webPages, 400).get('btn', 'Web', options));
-      const err = out.error as ElementNotFoundError;
-      expect(err).toBeInstanceOf(ElementNotFoundError);
-      expect(err.cleanMiss).toBe(false);
-      expect(err.message).toBe(`No elements found for 'btn' on 'Web' (last driver error: unknown error: boom)`);
-      expect(out.ms).toBeGreaterThanOrEqual(350);
+    test('a real closed page: the Playwright error is thrown as is, at once', async ({ browser }) => {
+      const context = await browser.newContext();
+      const page = await context.newPage();
+      await page.setContent('<button data-id="id1">b</button>');
+      await page.close();
+      const out = await settle(new ElementRepository(page, webPages, 5_000).get('btn', 'Web', options));
+      await context.close();
+      expect(out.error).not.toBeInstanceOf(ElementNotFoundError);
+      expect((out.error as Error).message).toContain('Target page, context or browser has been closed');
+      expect(out.ms).toBeLessThan(1_000);
     });
   });
 }

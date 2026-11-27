@@ -43,7 +43,7 @@ const HANDLED_STRATEGIES = [
   SelectionStrategy.ALL,
 ].join(', ');
 
-/** Poll interval of the RANDOM / ATTRIBUTE wait between attempts that hit a driver error, or between platform polls. */
+/** Poll interval of the platform RANDOM / ATTRIBUTE wait. */
 const MATCH_POLL_INTERVAL_MS = 250;
 
 /**
@@ -640,22 +640,24 @@ export class StrategyResolver {
    * waits up to the caller's full `timeout` for the first match of `base` to
    * reach `state` and returns every match.
    *
-   * Driver errors (see {@link isFatalDriverError}): an abort and a fatal
-   * error (dead session, invalid selector, ...) are thrown as they are, at
-   * once. Any other error is not a miss: the wait goes on until the
-   * deadline. When the deadline passes with no match, an
-   * {@link ElementNotFoundError} is thrown whose `lastDriverError` (also its
-   * `cause` and the message suffix ` (last driver error: ...)`) is the last
-   * such error of any poll, and whose `cleanMiss` is `false` when the final
-   * poll hit one.
-   *
-   * - Platform: polls `all()` (one `$$`) every 250 ms; for `visible`, the
-   *   first match's `isDisplayed()` is read too. No match, or a first match
-   *   not shown, is a clean poll.
-   * - Web: Playwright's `waitFor` on the first match (Playwright retries
-   *   inside it); its timeout is the clean miss; any other non-fatal error
-   *   is retried after 250 ms with the time left. On success the matches
-   *   are read with `all()`, whose errors are thrown as they are.
+   * - Platform: polls `all()` (one `$$`) every 250 ms itself (WebdriverIO's
+   *   `waitforInterval` does not apply); for `visible`, the first match's
+   *   `isVisible()` is read too (WebdriverIO `isDisplayed()` on the resolved
+   *   element). No match, or a first match not shown, is a clean poll.
+   *   Driver errors (see {@link isFatalDriverError}): an abort and a fatal
+   *   error (dead session, invalid selector, ...) are thrown as they are, at
+   *   once. Any other error is not a miss: the polling goes on until the
+   *   deadline. When the deadline passes with no match, an
+   *   {@link ElementNotFoundError} is thrown whose `lastDriverError` (also
+   *   its `cause` and the message suffix ` (last driver error: ...)`) is the
+   *   last such error of any poll, and whose `cleanMiss` is `false` when the
+   *   final poll hit one.
+   * - Web: one Playwright `waitFor` on the first match, with the full
+   *   `timeout` (Playwright retries inside it). Its timeout is the clean
+   *   miss; an abort is thrown as a `LookupAbortedError`; any other error
+   *   (closed page, unparsable selector, dead browser, ...) is permanent and
+   *   thrown as it is, at once. On success the matches are read with
+   *   `all()`, whose errors are thrown as they are.
    */
   private static async awaitMatches(
     base: Element,
@@ -683,22 +685,18 @@ export class StrategyResolver {
     if (isWeb(base)) {
       // Use .first() to avoid Playwright strict-mode violations on locators
       // that match multiple elements (e.g. a list of size labels).
-      for (let attempt = 0; ; attempt++) {
-        const remaining = attempt === 0 ? timeout : deadline - Date.now();
-        try {
-          await base.first().waitFor({ state, timeout: remaining });
-        } catch (err) {
-          rethrowAbort(err);
-          if (isFatalDriverError(err)) throw err;
-          if (isWaitTimeout(err)) { finalFailed = false; throw miss(); }
-          remember(err);
-          const left = deadline - Date.now();
-          if (left <= 0) throw miss();
-          await abortableSleep(Math.min(MATCH_POLL_INTERVAL_MS, left), signal, ctx);
-          continue;
-        }
-        return base.all();
+      // One wait: Playwright retries inside it, so whatever escapes it other
+      // than its timeout (closed page, unparsable selector, ...) is
+      // permanent and thrown as it is. No retry, so no second wait whose
+      // time left could reach 0 (Playwright's "no timeout").
+      try {
+        await base.first().waitFor({ state, timeout });
+      } catch (err) {
+        rethrowAbort(err);
+        if (isWaitTimeout(err)) throw miss();
+        throw err;
       }
+      return base.all();
     }
 
     for (;;) {

@@ -328,6 +328,8 @@ export class ElementRepository {
         return await this.resolveWithFallback(pageObj, elementName, fallback, pageName, options);
       } catch (fallbackError) {
         rethrowAbort(fallbackError);
+        // As on the probe path: a lost session is the error, not the primary's miss.
+        if (isSessionLostError(fallbackError)) throw fallbackError;
         throw primaryError;
       }
     }
