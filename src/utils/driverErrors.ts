@@ -2,6 +2,7 @@
  * Classification of WebDriver / WebdriverIO errors for polling lookups,
  * shared by the repository's strategy resolver and `PlatformElement`.
  */
+import { LookupAbortedError } from '../types/errors';
 
 /**
  * Error names that say the session is gone. WebdriverIO sets `error.name`
@@ -64,7 +65,8 @@ function matches(err: unknown, names: ReadonlySet<string>, messages: RegExp[]): 
  * not started session, no such window, UiAutomator2 instrumentation not
  * running, connection refused / reset / host not found / broken pipe).
  * Fatal errors are rethrown at
- * once. Every other error — `no such element`, `stale element reference`
+ * once. A `LookupAbortedError` (a cancelled lookup) is never fatal.
+ * Every other error — `no such element`, `stale element reference`
  * and anything unrecognised — is treated as a transient missing/stale
  * element and polled through until the deadline.
  *
@@ -73,6 +75,8 @@ function matches(err: unknown, names: ReadonlySet<string>, messages: RegExp[]): 
  * element: `getAttribute` reads it as a missing attribute (`null`) first.
  */
 export function isFatalDriverError(err: unknown): boolean {
+  // A cancelled lookup is not a driver failure, whatever its reason says.
+  if (err instanceof LookupAbortedError) return false;
   return matches(err, FATAL_DRIVER_ERROR_NAMES, FATAL_DRIVER_ERROR_MESSAGES);
 }
 
@@ -91,5 +95,6 @@ const SESSION_LOST_NAME_SET = new Set(SESSION_LOST_ERROR_NAMES);
  * composed query, and the lookup reads the full match list instead.
  */
 export function isSessionLostError(err: unknown): boolean {
+  if (err instanceof LookupAbortedError) return false;
   return matches(err, SESSION_LOST_NAME_SET, SESSION_LOST_ERROR_MESSAGES);
 }

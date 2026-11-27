@@ -97,3 +97,64 @@ export class TextNotFoundError extends Error {
     Object.setPrototypeOf(this, new.target.prototype);
   }
 }
+
+/** What a {@link LookupAbortedError} reports. */
+export interface LookupAbortedErrorInit {
+  /** The element name of the repository entry, for a repository lookup. */
+  elementName?: string;
+  /** The page name of the repository entry, for a repository lookup. */
+  pageName?: string;
+  /**
+   * What was aborted when it is not a repository lookup, as the message
+   * names it, e.g. `waitFor on "~row"`.
+   */
+  operation?: string;
+  /** Why it was aborted: the signal's `reason`. Becomes the error's `cause`. */
+  reason: unknown;
+}
+
+/**
+ * Thrown when a lookup's `signal` (see `LookupOptions`) or the `signal` of
+ * `Element.waitFor` is aborted. Its `name` is `'AbortError'`, like the
+ * platform's own abort errors, and its `cause` is the signal's `reason`.
+ *
+ * Messages:
+ * - a repository lookup: `Lookup of '<elementName>' on '<pageName>' aborted.`
+ * - `waitFor`: `waitFor on <element> aborted.` (`<element>` as the
+ *   element's errors name it, e.g. `"~row"` or `nth(2) of "~row"`)
+ *
+ * followed by ` (reason: <name>: <message>)` when a reason was given.
+ *
+ * It is never a fatal driver error (`isFatalDriverError` is `false` for it,
+ * whatever its reason says), never kept as a `lastDriverError` and never
+ * retried.
+ *
+ * This is the single definition of the class; other packages re-export it so
+ * that `instanceof` checks work across package boundaries.
+ */
+export class LookupAbortedError extends Error {
+  /** The element name of the repository entry, for a repository lookup. */
+  readonly elementName?: string;
+  /** The page name of the repository entry, for a repository lookup. */
+  readonly pageName?: string;
+  /** What was aborted when it is not a repository lookup. */
+  readonly operation?: string;
+  /** The signal's `reason` (also the `cause`). */
+  readonly reason: unknown;
+
+  /** @param init What was aborted, and why. */
+  constructor(init: LookupAbortedErrorInit) {
+    const { elementName, pageName, operation, reason } = init;
+    const what = elementName !== undefined || pageName !== undefined
+      ? `Lookup of '${elementName ?? ''}' on '${pageName ?? ''}'`
+      : operation ?? 'Lookup';
+    const suffix = reason === undefined ? '' : ` (reason: ${describeDriverError(reason)})`;
+    super(`${what} aborted.${suffix}`, { cause: reason });
+    this.name = 'AbortError';
+    if (elementName !== undefined) this.elementName = elementName;
+    if (pageName !== undefined) this.pageName = pageName;
+    if (operation !== undefined) this.operation = operation;
+    this.reason = reason;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}

@@ -362,6 +362,29 @@ test('Search and select random product', async ({ page }) => {
 });
 ```
 
+### Cancelling a lookup (`signal`)
+
+Every getter takes an `AbortSignal` in its trailing options (`LookupOptions`): `get(name, page, { signal })`, `getAll(name, page, { signal })`, `getRandom(name, page, strict, { signal })`, `getByText(name, page, text, strict, { signal })`, `getByIndex(name, page, index, strict, { signal })`, `getVisible(name, page, strict, { signal })`, `getByRole(name, page, role, strict, { signal })` and `getByAttribute(name, page, attribute, value, { exact, strict, signal })`. Once the signal is aborted the lookup starts no further driver call and rejects with a [`LookupAbortedError`](#lookupabortederror) whose `cause` is `signal.reason`:
+
+```typescript
+const controller = new AbortController();
+setTimeout(() => controller.abort(), 2000);
+const row = await repo.get('row', 'Settings', {
+  strategy: SelectionStrategy.TEXT, value: 'Wi-Fi', timeout: 60_000, signal: controller.signal,
+});
+
+// A hard time limit, alone or combined with your own signal:
+await repo.getByText('row', 'Settings', 'Wi-Fi', true, { signal: AbortSignal.timeout(5000) });
+await repo.getAll('row', 'Settings', { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(5000)]) });
+```
+
+- **Scope: the lookup call only.** Every driver call the lookup makes checks the signal first: the selector queries, the narrowed text queries, the text / attribute / visibility reads of `TEXT`, `ATTRIBUTE`, `getByText`, `getByAttribute`, `getByRole` and `getVisible`, the attach waits, every node of a `fallback` chain, and the sleeps between polls, which wake at once. A driver call already running when the signal fires is not interrupted (WebDriver has no way to cancel it): it may finish, and its result is dropped. Reads issued together (the descendant reads of a container row) are all waited for before the lookup rejects, so none is left running. An abort never walks on to the next fallback node.
+- **Returned elements do not carry the signal.** An element the lookup hands back works as before after the signal fires, so a kept element does not fail once an `AbortSignal.timeout` expires. To bound a later wait on it, pass a signal to that call: `element.waitFor({ state, timeout, signal })` (see [State, Extraction, Querying, and Waiting](#state-extraction-querying-and-waiting)). Other element methods take no signal.
+- **Non-strict getters reject.** An abort wins over not-found: `getByText`, `getByIndex`, `getVisible`, `getRandom`, `getByAttribute` and `getByRole` reject with `LookupAbortedError` instead of returning `null`, also when the miss was found after the abort.
+- **What comes first.** Repository and argument errors (an unknown page or element, a missing `index` / `value` / `attribute` for the strategy) are thrown before the signal is looked at, also with a signal that is already aborted. A fatal driver error (`isFatalDriverError`) seen before the abort is thrown as is. An already aborted signal rejects before any driver call.
+- **Web caveat.** Playwright's waits (the attach probe, `RANDOM`'s visible wait, `textContent()` / `getAttribute()` on a missing element) cannot be cancelled. On web the lookup checks the signal before each call and races these waits against it: it rejects at once, while the abandoned wait runs on in the browser until its own timeout and its result is dropped.
+- **Without a signal nothing changes.**
+
 ### Fluent Action Chains
 
 Every `Element` exposes an `action(timeout?)` method that returns a thenable `ElementChain` builder. Queue multiple actions and execute them all with a single `await`:
@@ -446,6 +469,21 @@ The active platform given in the constructor options (`Platform`), or `undefined
 Returns a single `Element`. Defaults to the first match. Pass `ElementResolutionOptions` to control selection:
 
 ```typescript
+interface LookupOptions {
+  signal?: AbortSignal;   // cancels the lookup (see Cancelling a lookup)
+}
+
+interface ElementResolutionOptions extends LookupOptions {
+  strategy?: SelectionStrategy;  // INDEX, TEXT, ATTRIBUTE, RANDOM, ALL; omitted = first match
+  value?: string;                // TEXT / ATTRIBUTE value
+  attribute?: string;            // ATTRIBUTE name
+  index?: number;                // INDEX position
+  timeout?: number;              // attach / fallback-probe wait in ms (default: the repository timeout)
+}
+```
+
+
+```typescript
 import { SelectionStrategy } from '@civitas-cerebrum/element-repository';
 
 await repo.get('button', 'Page')                                                    // first (default)
@@ -460,35 +498,35 @@ await repo.get('button', 'Page', { strategy: SelectionStrategy.ALL })           
 > An unhandled strategy value throws a descriptive error — resolution never
 > silently falls back to the first matching element when a strategy was requested.
 
-#### `getAll(elementName, pageName)`
+#### `getAll(elementName, pageName, options?)`
 
-Returns an array of all matching `Element` objects.
+Returns an array of all matching `Element` objects. `options`: `LookupOptions` (`{ signal? }`).
 
-#### `getRandom(elementName, pageName, strict?)`
+#### `getRandom(elementName, pageName, strict?, options?)`
 
-Randomly selects one element from all matches.
+Randomly selects one element from all matches. `options`: `LookupOptions` (`{ signal? }`).
 
-#### `getByText(elementName, pageName, desiredText, strict?)`
+#### `getByText(elementName, pageName, desiredText, strict?, options?)`
 
-Returns the first element containing the specified text. Tries exact match first, falls back to contains. On iOS and Android pages the elements compared are narrowed first, as for the `TEXT` strategy (see [Selection strategies on platform pages](#selection-strategies-on-platform-pages)), with this method's own comparison (exact, then case-sensitive contains) applied to the hits; it compares every match when the lookup cannot be narrowed.
+Returns the first element containing the specified text. Tries exact match first, falls back to contains. On iOS and Android pages the elements compared are narrowed first, as for the `TEXT` strategy (see [Selection strategies on platform pages](#selection-strategies-on-platform-pages)), with this method's own comparison (exact, then case-sensitive contains) applied to the hits; it compares every match when the lookup cannot be narrowed. `options`: `LookupOptions` (`{ signal? }`).
 
 #### `getByAttribute(elementName, pageName, attribute, value, options?)`
 
 Returns the first element whose HTML attribute matches the given value.
 
-**Options:** `exact` (boolean), `strict` (boolean)
+**Options:** `exact` (boolean), `strict` (boolean), `signal` (`AbortSignal`, see [Cancelling a lookup](#cancelling-a-lookup-signal))
 
-#### `getByIndex(elementName, pageName, index, strict?)`
+#### `getByIndex(elementName, pageName, index, strict?, options?)`
 
-Returns the element at the specified zero-based index.
+Returns the element at the specified zero-based index. `options`: `LookupOptions` (`{ signal? }`).
 
-#### `getVisible(elementName, pageName, strict?)`
+#### `getVisible(elementName, pageName, strict?, options?)`
 
-Returns the first visible element, filtering out hidden duplicates.
+Returns the first visible element, filtering out hidden duplicates. `options`: `LookupOptions` (`{ signal? }`).
 
-#### `getByRole(elementName, pageName, role, strict?)`
+#### `getByRole(elementName, pageName, role, strict?, options?)`
 
-Filters elements by their `role` HTML attribute.
+Filters elements by their `role` HTML attribute. `options`: `LookupOptions` (`{ signal? }`).
 
 #### `getSelector(elementName, pageName)`
 
@@ -547,6 +585,8 @@ All `get*` methods that return `Element | null` accept an optional `strict` para
 
 - **`strict: false`** (default) — returns `null` when no match is found.
 - **`strict: true`** — throws an `Error` when no match is found.
+
+With a `signal` that is aborted, both modes reject with `LookupAbortedError` (see [Cancelling a lookup](#cancelling-a-lookup-signal)).
 
 ### Element Interface
 
@@ -630,7 +670,7 @@ On platform elements, gestures and swipes use **native-context viewport coordina
 | `nth(index)` | Returns the element at the index; negative counts from the end (platform: see above). |
 | `filter({ hasText })` | Filters by text content (web; platform throws `PlatformNotSupportedError`). |
 | `locateChild(selector)` | Locates a descendant inside this element's match (platform: honours the parent's index). |
-| `waitFor(options?)` | Waits for state: `"visible"`, `"hidden"`, `"attached"`, `"detached"`. |
+| `waitFor(options?)` | Waits for state: `"visible"`, `"hidden"`, `"attached"`, `"detached"`. `options`: `{ state?, timeout?, signal? }`. With `signal`, the wait rejects with `LookupAbortedError` (`waitFor on <element> aborted.`) once it is aborted, and an already aborted signal rejects before any driver call. Platform: the wait is the element's own poll (`$$`, then `isDisplayed()` for `visible` / `hidden`), checking the signal before every driver call; at the timeout it fails with `<element> did not become <state> within N ms`. Web: the signal is checked, then Playwright's `locator.waitFor` is raced against it (the abandoned wait runs on to its own timeout). The signal applies to that call only. |
 | `action(timeout?)` | Returns a fluent `ElementChain` builder. |
 
 ### Platform Vocabulary
@@ -693,6 +733,31 @@ try {
 ```
 
 `cleanMiss` is `false` when the final pass hit a non-fatal driver error (a stale element, an unknown server error), so the miss may be transient rather than a real absence; `lastDriverError` is then that error. `lastDriverError` can be set while `cleanMiss` is `true`, when only an earlier pass failed. `getByText` does not catch text-read errors, so its strict miss is always clean (`cleanMiss` true, no `lastDriverError`). A fatal driver error (`isFatalDriverError`) is still thrown as it is, never wrapped. On a fallback chain the error of the primary node is the one thrown. The class has one definition; consumer packages re-export it, so `instanceof` works across packages.
+
+### `LookupAbortedError`
+
+Thrown when a lookup's `signal` (see [Cancelling a lookup](#cancelling-a-lookup-signal)) or the `signal` of `Element.waitFor` is aborted. Its `name` is `'AbortError'` and its `cause` is the signal's `reason`.
+
+- A repository lookup: `Lookup of '<elementName>' on '<pageName>' aborted.`
+- `waitFor`: `waitFor on <element> aborted.` (the element named as its errors name it: `"~row"`, `nth(2) of "~row"`)
+
+followed by ` (reason: <name>: <message>)` when the signal has a reason (an `AbortController.abort()` without one gives `AbortError: This operation was aborted`).
+
+```typescript
+import { LookupAbortedError } from '@civitas-cerebrum/element-repository';
+
+try {
+  await repo.getByText('row', 'Settings', 'Wi-Fi', false, { signal: AbortSignal.timeout(3000) });
+} catch (e) {
+  if (e instanceof LookupAbortedError) {
+    e.elementName; // 'row'
+    e.pageName;    // 'Settings'
+    e.reason;      // the signal's reason (also e.cause), e.g. a TimeoutError DOMException
+  }
+}
+```
+
+The constructor takes `LookupAbortedErrorInit`: `{ elementName?, pageName?, operation?, reason }` (`operation` names a non-lookup operation, e.g. `waitFor on "~row"`). It is never a fatal driver error: `isFatalDriverError` returns `false` for it whatever its reason says (`ECONNRESET` included), it is never kept as a `lastDriverError` and never retried. The class has one definition; consumer packages re-export it, so `instanceof` works across packages.
 
 ### Helpers for consumer packages
 

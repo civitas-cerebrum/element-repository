@@ -11,10 +11,12 @@ import {
   SelectorFormatter,
   WEB_FORMATTERS, APPIUM_FORMATTERS, ANDROID_FORMATTERS, IOS_FORMATTERS,
 } from './formatters';
-import { ElementResolutionOptions, SelectionStrategy } from '../enum/Options';
+import { ElementResolutionOptions, LookupOptions, SelectionStrategy } from '../enum/Options';
 import { EnhancedResolver } from './EnhancedResolver';
 import { StrategyResolver } from './StrategyResolver';
 import { TextNotFoundError } from '../types/errors';
+import { argumentError, rethrowAbort, throwIfAborted } from '../utils/abort';
+import { bindLookupSignal, releaseLookupSignal, runLookup } from '../utils/lookupSignal';
 
 /** Default element wait timeout in milliseconds. */
 const DEFAULT_TIMEOUT = 15000;
@@ -246,7 +248,7 @@ export class ElementRepository {
     const pageObj = this.requirePage(pageName);
 
     const elementDef = pageObj.elements.find((e) => e.elementName === elementName);
-    if (!elementDef) throw new Error(`ElementRepository: Element '${elementName}' not found on page '${pageName}'.`);
+    if (!elementDef) throw argumentError(`ElementRepository: Element '${elementName}' not found on page '${pageName}'.`);
 
     // Walk the fallback chain: resolve from the primary selector entry; if it
     // matches zero elements within the probe timeout, walk into
@@ -280,6 +282,11 @@ export class ElementRepository {
    * to `N × defaultTimeout` before returning the terminal element. In
    * practice fallbacks are defined to cover real DOM variants, so the
    * first or second level matches on pages where the primary doesn't.
+   *
+   * With a lookup signal (`options.signal`), it is checked before each
+   * fallback node (the primary's own driver calls check it), the attach
+   * probe honours it, and an abort is thrown as is: it never walks on to
+   * the next node and is never replaced by the primary's error.
    */
   private async resolveWithFallback(
     pageObj: PageObject,
@@ -300,13 +307,17 @@ export class ElementRepository {
     // instead of returning a lazy element for the probe below. Treat such a
     // throw like a failed probe and walk the fallback; if the rest of the
     // chain fails too, surface the primary's error.
+    const signal = options?.signal;
     let element: Element;
     try {
       element = await this.resolveFromSingleSelector(pageObj, elementName, selector, pageName, options);
     } catch (primaryError) {
+      rethrowAbort(primaryError);
+      throwIfAborted(signal);
       try {
         return await this.resolveWithFallback(pageObj, elementName, fallback, pageName, options);
-      } catch {
+      } catch (fallbackError) {
+        rethrowAbort(fallbackError);
         throw primaryError;
       }
     }
@@ -325,9 +336,12 @@ export class ElementRepository {
     // primary onto its fallback. The full match set is still returned.
     const attachTimeout = options?.timeout ?? this.defaultTimeout;
     try {
-      await element.first().waitFor({ state: 'attached', timeout: attachTimeout });
-      return element;
-    } catch {
+      await bindLookupSignal(element, signal).first().waitFor({ state: 'attached', timeout: attachTimeout });
+      return releaseLookupSignal(element);
+    } catch (err) {
+      releaseLookupSignal(element);
+      rethrowAbort(err);
+      throwIfAborted(signal);
       return this.resolveWithFallback(pageObj, elementName, fallback, pageName, options);
     }
   }
@@ -410,22 +424,32 @@ export class ElementRepository {
    * Retrieves a single Element based on the externalized JSON mapping.
    * @param elementName The specific element name to look up.
    * @param pageName The name of the page block in the JSON repository.
-   * @param options Optional element resolution options.
+   * @param options Optional element resolution options, including the
+   * lookup's `signal` (see {@link LookupOptions}).
    * @returns A promise that resolves to an Element.
+   * @throws LookupAbortedError when `options.signal` is aborted.
    */
   public async get(elementName: string, pageName: string, options?: ElementResolutionOptions): Promise<Element> {
-    return this.resolveElement(elementName, pageName, options);
+    return runLookup(options?.signal, { elementName, pageName }, () => this.resolveElement(elementName, pageName, options));
   }
 
   /**
    * Retrieves an array of Elements matching the mapped selector.
    * @param elementName The specific element name to look up.
    * @param pageName The name of the page block in the JSON repository.
+   * @param options Optional `signal` that cancels the lookup (see {@link LookupOptions}).
    * @returns A promise that resolves to an array of Elements.
+   * @throws LookupAbortedError when `options.signal` is aborted.
    */
-  public async getAll(elementName: string, pageName: string): Promise<Element[]> {
-    const el = await this.resolveElement(elementName, pageName, { strategy: SelectionStrategy.ALL });
-    return el.all();
+  public async getAll(elementName: string, pageName: string, options?: LookupOptions): Promise<Element[]> {
+    const signal = options?.signal;
+    return runLookup(signal, { elementName, pageName }, () => this.allMatches(elementName, pageName, signal));
+  }
+
+  /** Every match of the entry; with a signal, the elements carry it (the caller releases them). */
+  private async allMatches(elementName: string, pageName: string, signal: AbortSignal | undefined): Promise<Element[]> {
+    const el = await this.resolveElement(elementName, pageName, { strategy: SelectionStrategy.ALL, signal });
+    return bindLookupSignal(el, signal).all();
   }
 
   /**
@@ -433,12 +457,26 @@ export class ElementRepository {
    * @param elementName The specific element name to look up.
    * @param pageName The name of the page block in the JSON repository.
    * @param strict If true, throws an error if no elements are found. Defaults to false.
+   * @param options Optional `signal` that cancels the lookup (see {@link LookupOptions}).
    * @returns A promise that resolves to a randomly selected Element, or null if none are found.
+   * @throws LookupAbortedError when `options.signal` is aborted, also when `strict` is false.
    */
-  public async getRandom(elementName: string, pageName: string, strict: boolean = false): Promise<Element | null> {
+  public async getRandom(
+    elementName: string, pageName: string, strict: boolean = false, options?: LookupOptions,
+  ): Promise<Element | null> {
+    const signal = options?.signal;
+    return runLookup(signal, { elementName, pageName }, () => this.randomMatch(elementName, pageName, strict, signal));
+  }
+
+  /** Body of {@link getRandom}. */
+  private async randomMatch(
+    elementName: string, pageName: string, strict: boolean, signal: AbortSignal | undefined,
+  ): Promise<Element | null> {
     try {
-      return await this.resolveElement(elementName, pageName, { strategy: SelectionStrategy.RANDOM });
-    } catch {
+      return await this.resolveElement(elementName, pageName, { strategy: SelectionStrategy.RANDOM, signal });
+    } catch (err) {
+      rethrowAbort(err);
+      throwIfAborted(signal);
       const msg = `No elements found for '${elementName}' on '${pageName}'`;
       if (strict) throw new Error(msg);
       console.warn(msg);
@@ -469,12 +507,27 @@ export class ElementRepository {
    * @param pageName The name of the page block in the JSON repository.
    * @param desiredText The string of text to search for within the elements.
    * @param strict If true, throws a {@link TextNotFoundError} (`cleanMiss` true) if the element is not found. Defaults to false.
+   * @param options Optional `signal` that cancels the lookup, including its
+   * narrowed queries and text reads (see {@link LookupOptions}).
    * @returns A promise that resolves to the matched Element, or null if not found.
+   * @throws LookupAbortedError when `options.signal` is aborted, also when `strict` is false.
    */
-  public async getByText(elementName: string, pageName: string, desiredText: string, strict: boolean = false): Promise<Element | null> {
-    const base = await this.resolveElement(elementName, pageName, { strategy: SelectionStrategy.ALL });
+  public async getByText(
+    elementName: string, pageName: string, desiredText: string, strict: boolean = false, options?: LookupOptions,
+  ): Promise<Element | null> {
+    const signal = options?.signal;
+    return runLookup(signal, { elementName, pageName }, () => this.textMatch(elementName, pageName, desiredText, strict, signal));
+  }
 
-    const narrowed = await this.narrowedGetByText(base, pageName, desiredText);
+  /** Body of {@link getByText}. */
+  private async textMatch(
+    elementName: string, pageName: string, desiredText: string, strict: boolean, signal: AbortSignal | undefined,
+  ): Promise<Element | null> {
+    const base = bindLookupSignal(
+      await this.resolveElement(elementName, pageName, { strategy: SelectionStrategy.ALL, signal }), signal,
+    );
+
+    const narrowed = await this.narrowedGetByText(base, pageName, desiredText, signal);
     if (narrowed) return narrowed;
     if (narrowed === undefined) {
       const allElements = await base.all();
@@ -493,6 +546,7 @@ export class ElementRepository {
     }
 
     // A text read that fails is not caught here, so a miss is always clean.
+    throwIfAborted(signal);
     const notFound = new TextNotFoundError({ elementName, pageName, text: desiredText, cleanMiss: true });
     if (strict) throw notFound;
     console.warn(notFound.message);
@@ -508,19 +562,24 @@ export class ElementRepository {
    * selector kind or text that cannot be narrowed, a composed query the
    * driver could not run, or winning hits from two iOS queries whose
    * relative order is unknown): the caller then compares every match.
+   * With `signal`, the queries and the hits' reads check it.
    */
-  private async narrowedGetByText(base: Element, pageName: string, desiredText: string): Promise<Element | null | undefined> {
+  private async narrowedGetByText(
+    base: Element, pageName: string, desiredText: string, signal?: AbortSignal,
+  ): Promise<Element | null | undefined> {
     if (!(base instanceof PlatformElement)) return undefined;
     const pagePlatform = this.requirePage(pageName).platform;
     const platform = pagePlatform ?? detectDriverPlatform(base.driver);
     const token = pickTextToken(desiredText, platform);
     const queries = token === undefined ? null : narrowedTextQueries(base.selector, platform, token);
     if (!queries) return undefined;
-    const hits = await runNarrowedQueries(base.driver, queries);
+    const hits = await runNarrowedQueries(base.driver, queries, signal);
     if ('error' in hits) return undefined;
 
     // The same element `getAll()` would hand out for this match.
-    const wrap = (raw: any) => new PlatformElement(base.driver, base.selector, raw, this.defaultTimeout, { platform: pagePlatform });
+    const wrap = (raw: any) => bindLookupSignal(
+      new PlatformElement(base.driver, base.selector, raw, this.defaultTimeout, { platform: pagePlatform }), signal,
+    );
     const picked = await pickFromHits(hits.lists, async raw => {
       const text = (await wrap(raw).textContent())?.trim();
       if (text === desiredText) return 'exact';
@@ -544,22 +603,36 @@ export class ElementRepository {
    * @param options Optional configuration.
    * @param options.exact If true, requires an exact attribute match. If false, matches when the attribute contains the value. If omitted, tries exact first then falls back to contains.
    * @param options.strict If true, throws an error when no matching element is found. Defaults to false.
+   * @param options.signal Cancels the lookup, including its attribute reads (see {@link LookupOptions}).
    * @returns A promise that resolves to the matched Element, or null if not found.
+   * @throws LookupAbortedError when `options.signal` is aborted, also when `strict` is false.
    */
   public async getByAttribute(
     elementName: string,
     pageName: string,
     attribute: string,
     value: string,
-    options: { exact?: boolean; strict?: boolean } = {}
+    options: { exact?: boolean; strict?: boolean } & LookupOptions = {}
   ): Promise<Element | null> {
-    const { exact, strict = false } = options;
-    const allElements = await this.getAll(elementName, pageName);
+    return runLookup(options.signal, { elementName, pageName }, () => this.attributeMatch(elementName, pageName, attribute, value, options));
+  }
+
+  /** Body of {@link getByAttribute}. */
+  private async attributeMatch(
+    elementName: string,
+    pageName: string,
+    attribute: string,
+    value: string,
+    options: { exact?: boolean; strict?: boolean } & LookupOptions,
+  ): Promise<Element | null> {
+    const { exact, strict = false, signal } = options;
+    const allElements = await this.allMatches(elementName, pageName, signal);
 
     // Shared with the ATTRIBUTE selection strategy — one filtering
     // implementation, two entry points (see StrategyResolver.filterByAttribute).
-    const match = await StrategyResolver.filterByAttribute(allElements, attribute, value, exact);
+    const match = await StrategyResolver.filterByAttribute(allElements, attribute, value, exact, signal);
     if (match) return match;
+    throwIfAborted(signal);
 
     const matchType = exact === true ? 'equal to' : exact === false ? 'containing' : 'matching';
     const msg = `Element '${elementName}' on '${pageName}' with attribute [${attribute}] ${matchType} "${value}" not found.`;
@@ -574,11 +647,26 @@ export class ElementRepository {
    * @param pageName The name of the page block in the JSON repository.
    * @param index The zero-based index of the element to retrieve.
    * @param strict If true, throws an error if the index is out of bounds. Defaults to false.
+   * @param options Optional `signal` that cancels the lookup (see {@link LookupOptions}).
    * @returns A promise that resolves to the Element at the given index, or null if out of bounds.
+   * @throws LookupAbortedError when `options.signal` is aborted, also when `strict` is false.
    */
-  public async getByIndex(elementName: string, pageName: string, index: number, strict: boolean = false): Promise<Element | null> {
-    const allElements = await this.getAll(elementName, pageName);
+  public async getByIndex(
+    elementName: string, pageName: string, index: number, strict: boolean = false, options?: LookupOptions,
+  ): Promise<Element | null> {
+    const signal = options?.signal;
+    return runLookup(signal, { elementName, pageName }, async () => {
+      const allElements = await this.allMatches(elementName, pageName, signal);
+      return this.pickIndex(allElements, elementName, pageName, index, strict, signal);
+    });
+  }
+
+  /** The out-of-bounds handling of {@link getByIndex}. */
+  private pickIndex(
+    allElements: Element[], elementName: string, pageName: string, index: number, strict: boolean, signal: AbortSignal | undefined,
+  ): Element | null {
     if (index < 0 || index >= allElements.length) {
+      throwIfAborted(signal);
       const msg = `Index ${index} out of bounds for '${elementName}' on '${pageName}' (found ${allElements.length} elements).`;
       if (strict) throw new Error(msg);
       console.warn(msg);
@@ -592,13 +680,27 @@ export class ElementRepository {
    * @param elementName The specific element name to look up.
    * @param pageName The name of the page block in the JSON repository.
    * @param strict If true, throws an error if no visible element is found. Defaults to false.
+   * @param options Optional `signal` that cancels the lookup, including its
+   * visibility reads (see {@link LookupOptions}).
    * @returns A promise that resolves to a visible Element, or null if none are visible.
+   * @throws LookupAbortedError when `options.signal` is aborted, also when `strict` is false.
    */
-  public async getVisible(elementName: string, pageName: string, strict: boolean = false): Promise<Element | null> {
-    const allElements = await this.getAll(elementName, pageName);
+  public async getVisible(
+    elementName: string, pageName: string, strict: boolean = false, options?: LookupOptions,
+  ): Promise<Element | null> {
+    const signal = options?.signal;
+    return runLookup(signal, { elementName, pageName }, () => this.visibleMatch(elementName, pageName, strict, signal));
+  }
+
+  /** Body of {@link getVisible}. */
+  private async visibleMatch(
+    elementName: string, pageName: string, strict: boolean, signal: AbortSignal | undefined,
+  ): Promise<Element | null> {
+    const allElements = await this.allMatches(elementName, pageName, signal);
     for (const element of allElements) {
       if (await element.isVisible()) return element;
     }
+    throwIfAborted(signal);
     const msg = `No visible elements found for '${elementName}' on '${pageName}'.`;
     if (strict) throw new Error(msg);
     console.warn(msg);
@@ -611,10 +713,14 @@ export class ElementRepository {
    * @param pageName The name of the page block in the JSON repository.
    * @param role The ARIA role value to filter by (e.g., 'button', 'link', 'tab').
    * @param strict If true, throws an error if no matching element is found. Defaults to false.
+   * @param options Optional `signal` that cancels the lookup (see {@link LookupOptions}).
    * @returns A promise that resolves to the matched Element, or null if not found.
+   * @throws LookupAbortedError when `options.signal` is aborted, also when `strict` is false.
    */
-  public async getByRole(elementName: string, pageName: string, role: string, strict: boolean = false): Promise<Element | null> {
-    return this.getByAttribute(elementName, pageName, 'role', role, { exact: true, strict });
+  public async getByRole(
+    elementName: string, pageName: string, role: string, strict: boolean = false, options?: LookupOptions,
+  ): Promise<Element | null> {
+    return this.getByAttribute(elementName, pageName, 'role', role, { exact: true, strict, signal: options?.signal });
   }
 
   // ══════════════════════════════════════════════════════════════
@@ -753,7 +859,7 @@ export class ElementRepository {
     const page = this.findPage(pageName);
     if (page) return page;
     if (this._platform === undefined) {
-      throw new Error(`ElementRepository: Page '${pageName}' not found.`);
+      throw argumentError(`ElementRepository: Page '${pageName}' not found.`);
     }
     const available: string[] = [];
     for (const p of this.pageData.pages) {
@@ -761,7 +867,7 @@ export class ElementRepository {
       const platform = p.platform ?? 'web';
       if (!available.includes(platform)) available.push(platform);
     }
-    throw new Error(
+    throw argumentError(
       `ElementRepository: page '${pageName}' has no entry for platform '${this._platform}'. Available: ${available.length ? available.join(', ') : 'none'}.`,
     );
   }

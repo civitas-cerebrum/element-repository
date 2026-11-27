@@ -8,8 +8,8 @@ export type { PageRepository, PageRepositoryInput } from './schema/repository';
 
 // Export the platform vocabulary and the shared platform error
 export * from './enum/Platform';
-export { PlatformNotSupportedError, TextNotFoundError } from './types/errors';
-export type { TextNotFoundErrorInit } from './types/errors';
+export { PlatformNotSupportedError, TextNotFoundError, LookupAbortedError } from './types/errors';
+export type { TextNotFoundErrorInit, LookupAbortedErrorInit } from './types/errors';
 
 // Export enums and options
 export * from './enum/Options';

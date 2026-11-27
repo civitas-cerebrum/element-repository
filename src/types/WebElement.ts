@@ -6,6 +6,7 @@ import {
 import { ElementChain } from './ElementChain';
 import { PlatformNotSupportedError } from './errors';
 import { checkLongPressDuration, checkMaxSwipes, checkTapOffset } from '../utils/gestureChecks';
+import { raceAbort, relabelAbort, throwIfAborted } from '../utils/abort';
 
 /**
  * Playwright-backed {@link Element} implementation.
@@ -35,6 +36,41 @@ export class WebElement implements Element {
     public readonly selector?: string,
     private readonly defaultTimeout?: number,
   ) {}
+
+  /**
+   * The signal of the lookup that built this element for its own use (see
+   * `utils/lookupSignal`): the reads a lookup makes check it, and the
+   * auto-waiting ones are raced against it. Never set on an element handed
+   * to the caller. Inherited by derived elements.
+   */
+  private lookupSignal?: AbortSignal;
+
+  /** A new element on `locator`, keeping this element's timeout and lookup signal. */
+  private derive(locator: Locator, selector: string | undefined = this.selector): WebElement {
+    const el = new WebElement(locator, selector, this.defaultTimeout);
+    if (this.lookupSignal) el.lookupSignal = this.lookupSignal;
+    return el;
+  }
+
+  /** How abort errors name this element: `"<selector>"`, else the locator. */
+  private describe(): string {
+    return `"${this.selector ?? String(this.locator)}"`;
+  }
+
+  /**
+   * `run()` under the lookup signal, if any: checked before; an
+   * auto-waiting Playwright call (`race`) is raced against it, a quick one
+   * is checked again after (its result dropped on an abort).
+   */
+  private async underLookup<T>(run: () => Promise<T>, race: boolean): Promise<T> {
+    const signal = this.lookupSignal;
+    if (!signal) return run();
+    throwIfAborted(signal);
+    if (race) return raceAbort(run(), signal);
+    const result = await run();
+    throwIfAborted(signal);
+    return result;
+  }
 
   /** {@inheritDoc Element.action} */
   action(timeout?: number): ElementChain {
@@ -277,7 +313,7 @@ export class WebElement implements Element {
   // ── State ────────────────────────────────────────────────────
 
   /** {@inheritDoc Element.isVisible} */
-  async isVisible(): Promise<boolean> { return this.locator.isVisible(); }
+  async isVisible(): Promise<boolean> { return this.underLookup(() => this.locator.isVisible(), false); }
 
   /** {@inheritDoc Element.isEnabled} */
   async isEnabled(): Promise<boolean> { return this.locator.isEnabled(); }
@@ -291,13 +327,15 @@ export class WebElement implements Element {
   async raw(): Promise<string | null> { return this.selector ?? this.locator.toString(); }
 
   /** {@inheritDoc Element.textContent} */
-  async textContent(): Promise<string | null> { return this.locator.textContent(); }
+  async textContent(): Promise<string | null> { return this.underLookup(() => this.locator.textContent(), true); }
 
   /** {@inheritDoc Element.rawText} */
   async rawText(): Promise<string | null> { return this.locator.textContent(); }
 
   /** {@inheritDoc Element.getAttribute} */
-  async getAttribute(name: string): Promise<string | null> { return this.locator.getAttribute(name); }
+  async getAttribute(name: string): Promise<string | null> {
+    return this.underLookup(() => this.locator.getAttribute(name), true);
+  }
 
   /** {@inheritDoc Element.inputValue} */
   async inputValue(): Promise<string> { return this.locator.inputValue(); }
@@ -377,27 +415,48 @@ export class WebElement implements Element {
   // ── Querying ─────────────────────────────────────────────────
 
   /** {@inheritDoc Element.locateChild} */
-  locateChild(childSelector: string): Element { return new WebElement(this.locator.locator(childSelector), childSelector, this.defaultTimeout); }
+  locateChild(childSelector: string): Element { return this.derive(this.locator.locator(childSelector), childSelector); }
 
   /** {@inheritDoc Element.count} */
-  async count(): Promise<number> { return this.locator.count(); }
+  async count(): Promise<number> { return this.underLookup(() => this.locator.count(), false); }
 
   /** {@inheritDoc Element.all} */
-  async all(): Promise<Element[]> { return (await this.locator.all()).map(l => new WebElement(l, this.selector, this.defaultTimeout)); }
+  async all(): Promise<Element[]> {
+    return (await this.underLookup(() => this.locator.all(), false)).map(l => this.derive(l));
+  }
 
   /** {@inheritDoc Element.first} */
-  first(): Element { return new WebElement(this.locator.first(), this.selector, this.defaultTimeout); }
+  first(): Element { return this.derive(this.locator.first()); }
 
   /** {@inheritDoc Element.nth} */
-  nth(index: number): Element { return new WebElement(this.locator.nth(index), this.selector, this.defaultTimeout); }
+  nth(index: number): Element { return this.derive(this.locator.nth(index)); }
 
   /** {@inheritDoc Element.filter} */
-  filter(options: { hasText?: string | RegExp }): Element { return new WebElement(this.locator.filter(options), this.selector, this.defaultTimeout); }
+  filter(options: { hasText?: string | RegExp }): Element { return this.derive(this.locator.filter(options)); }
 
   // ── Waiting ──────────────────────────────────────────────────
 
-  /** {@inheritDoc Element.waitFor} */
-  async waitFor(options?: { state?: string; timeout?: number }): Promise<void> {
-    await this.locator.waitFor({ state: options?.state as any, timeout: options?.timeout });
+  /**
+   * {@inheritDoc Element.waitFor}
+   *
+   * Web: with `signal`, the signal is checked first (an aborted one rejects
+   * without calling Playwright), then Playwright's `locator.waitFor` is
+   * raced against it: the call rejects as soon as the signal is aborted,
+   * while the abandoned wait runs on to its own timeout in the browser.
+   */
+  async waitFor(options?: { state?: string; timeout?: number; signal?: AbortSignal }): Promise<void> {
+    const signal = options?.signal ?? this.lookupSignal;
+    const wait = () => this.locator.waitFor({ state: options?.state as any, timeout: options?.timeout });
+    if (!signal) {
+      await wait();
+      return;
+    }
+    const ctx = { operation: `waitFor on ${this.describe()}` };
+    try {
+      throwIfAborted(signal, ctx);
+      await raceAbort(wait(), signal, ctx);
+    } catch (err) {
+      throw relabelAbort(err, ctx);
+    }
   }
 }

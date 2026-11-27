@@ -21,6 +21,7 @@
 import type { Platform } from '../enum/Platform';
 import { escapeDoubleQuoted } from './escape';
 import { isSessionLostError } from './driverErrors';
+import { rethrowAbort, throwIfAborted } from './abort';
 
 /**
  * The text lookup's normaliser: whitespace runs (JavaScript `\s`, so NBSP
@@ -370,13 +371,20 @@ export async function pickFromHits(lists: any[][], judge: (raw: any) => Promise<
  * The hits of each query, in query order (`lists`), or the `error` a query
  * failed with when it is anything but a lost session
  * ({@link isSessionLostError}, rethrown): the caller then reads the full
- * match list instead.
+ * match list instead. With `signal`, it is checked before each query and
+ * an abort (`LookupAbortedError`) is thrown, never returned as `error`.
  */
-export async function runNarrowedQueries(driver: any, queries: string[]): Promise<{ lists: any[][] } | { error: unknown }> {
+export async function runNarrowedQueries(
+  driver: any, queries: string[], signal?: AbortSignal,
+): Promise<{ lists: any[][] } | { error: unknown }> {
   const lists: any[][] = [];
   try {
-    for (const query of queries) lists.push(Array.from((await driver.$$(query)) ?? []));
+    for (const query of queries) {
+      throwIfAborted(signal);
+      lists.push(Array.from((await driver.$$(query)) ?? []));
+    }
   } catch (err) {
+    rethrowAbort(err);
     if (isSessionLostError(err)) throw err;
     return { error: err };
   }

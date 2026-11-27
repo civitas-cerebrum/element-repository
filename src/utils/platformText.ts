@@ -1,6 +1,7 @@
 import type { Platform } from '../enum/Platform';
 import { readElementClass } from './platformClass';
 import { readPlatformAttribute } from './platformAttr';
+import { settleAll, throwIfAborted } from './abort';
 
 /**
  * The platform an Appium driver runs, from its `platformName` capability,
@@ -116,33 +117,44 @@ function hasText(s: unknown): s is string {
  * The iOS attributes are read with `readPlatformAttribute` (a name the
  * driver does not know reads as missing). Other driver errors are not caught.
  *
+ * With `signal`, the signal is checked before every driver call and a
+ * `LookupAbortedError` is thrown once it is aborted; the reads issued
+ * together are all waited for, then the signal is checked, then the first
+ * failure among them is thrown, so no read is left running.
+ *
  * @param el - A raw WebdriverIO element.
  * @param platform - The element's platform, if known.
+ * @param signal - The lookup's signal, if any.
  */
-export async function readPlatformText(el: any, platform: Platform | undefined): Promise<string | null> {
+export async function readPlatformText(el: any, platform: Platform | undefined, signal?: AbortSignal): Promise<string | null> {
+  // With a signal, every driver call is preceded by a check, and the reads
+  // issued together are all waited for before the first failure is thrown.
+  const call = (run: () => Promise<any>): Promise<any> => { throwIfAborted(signal); return run(); };
   if (platform === 'android') {
-    const own = (await el.getText()) ?? null;
+    const own = (await call(() => el.getText())) ?? null;
     if (hasText(own)) return own;
-    const descendants = Array.from((await el.$$(ANDROID_DESCENDANT_TEXT_XPATH)) ?? []);
-    const texts = await Promise.all(descendants.map((d: any) => d.getText()));
+    const descendants = Array.from((await call(() => el.$$(ANDROID_DESCENDANT_TEXT_XPATH))) ?? []);
+    const texts: unknown[] = await settleAll(descendants.map((d: any) => () => d.getText()), signal);
     const joined = texts.filter(hasText).map(t => t.trim()).join(' ');
     return joined !== '' ? joined : own;
   }
-  if (platform !== 'ios') return (await el.getText()) ?? null;
-  const [type, label] = await Promise.all([readElementClass(el, platform), readPlatformAttribute(el, 'label', platform)]);
+  if (platform !== 'ios') return (await call(() => el.getText())) ?? null;
+  const [type, label] = await settleAll<string | null>(
+    [() => readElementClass(el, platform), () => readPlatformAttribute(el, 'label', platform)], signal,
+  ) as [string, string | null];
   const isInput = IOS_TEXT_INPUT_TYPES.has(type);
   if (!isInput && hasText(label)) return label;
-  const value = await readPlatformAttribute(el, 'value', platform);
+  const value = await call(() => readPlatformAttribute(el, 'value', platform));
   const order = isInput ? [value, label] : [label, value];
   const withText = order.find(hasText);
   if (withText !== undefined) return withText;
   const own = order.find(s => typeof s === 'string') ?? null;
   if (isInput || IOS_LEAF_TEXT_TYPES.has(type)) return own;
-  const descendants = Array.from((await el.$$(IOS_DESCENDANT_TEXT_SELECTOR)) ?? []);
-  const texts = await Promise.all(descendants.map(async (d: any) => {
+  const descendants = Array.from((await call(() => el.$$(IOS_DESCENDANT_TEXT_SELECTOR))) ?? []);
+  const texts = await settleAll(descendants.map((d: any) => async () => {
     const descendantLabel = await readPlatformAttribute(d, 'label', platform);
-    return hasText(descendantLabel) ? descendantLabel : readPlatformAttribute(d, 'value', platform);
-  }));
+    return hasText(descendantLabel) ? descendantLabel : call(() => readPlatformAttribute(d, 'value', platform));
+  }), signal);
   const joined = texts.filter(hasText).map(t => t.trim()).join(' ');
   return joined !== '' ? joined : own;
 }

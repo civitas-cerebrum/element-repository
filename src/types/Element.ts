@@ -516,9 +516,17 @@ export interface Element {
 
   /**
    * Waits for the element to reach the specified state.
-   * @param options - Optional state (`"visible"`, `"hidden"`, `"attached"`, `"detached"`) and timeout in ms.
+   *
+   * With `signal`, the wait stops once the signal is aborted and rejects
+   * with a `LookupAbortedError` (`waitFor on <element> aborted.`, its
+   * `cause` the signal's `reason`); an already aborted signal rejects
+   * before any driver call. The signal applies to this call only. Platform:
+   * no driver call starts after the abort (one already running may
+   * finish). Web: Playwright's wait cannot be cancelled, so the call
+   * rejects at once and the abandoned wait ends on its own timeout.
+   * @param options - Optional state (`"visible"`, `"hidden"`, `"attached"`, `"detached"`), timeout in ms and abort signal.
    */
-  waitFor(options?: { state?: string; timeout?: number }): Promise<void>;
+  waitFor(options?: { state?: string; timeout?: number; signal?: AbortSignal }): Promise<void>;
 }
 
 /**

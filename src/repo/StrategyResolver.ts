@@ -1,5 +1,5 @@
 import { PageObject } from '../schema/repository';
-import { Element, WebElement, PlatformElement } from '../types';
+import { Element, WebElement, PlatformElement, isWeb } from '../types';
 import { ElementResolutionOptions, SelectionStrategy } from '../enum/Options';
 import { pickRandomIndex } from '../utils/math';
 import { EnhancedResolver } from './EnhancedResolver';
@@ -7,6 +7,10 @@ import { isFatalDriverError } from '../utils/driverErrors';
 import { TextNotFoundError } from '../types/errors';
 import type { Platform } from '../enum/Platform';
 import { detectDriverPlatform, readPlatformText } from '../utils/platformText';
+import {
+  abortableSleep, argumentError, ignoreUnlessAborted, raceAbort, rethrowAbort, throwIfAborted, type AbortContext,
+} from '../utils/abort';
+import { bindLookupSignal, runLookup } from '../utils/lookupSignal';
 import {
   normaliseText, pickTextToken, narrowedTextQueries, runNarrowedQueries, pickFromHits,
   type TextVerdict, type NarrowedPick,
@@ -40,7 +44,7 @@ const HANDLED_STRATEGIES = [
 ].join(', ');
 
 function unhandledStrategyError(strategy: string, elementName: string, pageName: string, handled: string = HANDLED_STRATEGIES): Error {
-  return new Error(
+  return argumentError(
     `Unhandled selection strategy '${strategy}' for '${elementName}' on '${pageName}'. ` +
     `Handled strategies: ${handled}. ` +
     `Refusing to silently fall back to the first matching element — ` +
@@ -61,7 +65,8 @@ export class StrategyResolver {
    * @param elementName The element name (used for error messages).
    * @param pageName The page name (used for error messages).
    * @param timeout The wait timeout in milliseconds.
-   * @param options Optional element resolution options (strategy, index, value).
+   * @param options Optional element resolution options (strategy, index,
+   * value, and the lookup's `signal`; see `LookupOptions`).
    * @returns A promise that resolves to the located Element.
    */
   static async fromLocator(
@@ -71,15 +76,29 @@ export class StrategyResolver {
     timeout: number,
     options?: ElementResolutionOptions,
   ): Promise<Element> {
+    const signal = options?.signal;
+    return runLookup(signal, { elementName, pageName }, () => StrategyResolver.locatorLookup(locator, elementName, pageName, timeout, options));
+  }
+
+  /** Body of {@link fromLocator}; the elements it builds carry the lookup signal. */
+  private static async locatorLookup(
+    locator: any,
+    elementName: string,
+    pageName: string,
+    timeout: number,
+    options?: ElementResolutionOptions,
+  ): Promise<Element> {
     const desc = `enhanced:${elementName}@${pageName}`;
+    const signal = options?.signal;
+    const web = (l: any) => bindLookupSignal(new WebElement(l, desc, timeout), signal);
 
     if (options?.strategy) {
       switch (options.strategy) {
         case SelectionStrategy.INDEX: {
           if (options.index === undefined || options.index === null) {
-            throw new Error('options.index is required when using SelectionStrategy.INDEX');
+            throw argumentError('options.index is required when using SelectionStrategy.INDEX');
           }
-          const base = new WebElement(locator, desc, timeout);
+          const base = web(locator);
           const all = await base.all();
           if (options.index < 0 || options.index >= all.length) {
             throw new Error(`Index ${options.index} out of bounds for '${elementName}' on '${pageName}' (found ${all.length} elements).`);
@@ -87,7 +106,7 @@ export class StrategyResolver {
           return all[options.index];
         }
         case SelectionStrategy.RANDOM: {
-          const base = new WebElement(locator, desc, timeout);
+          const base = web(locator);
           // Wait for at least one element to be visible before sampling so that
           // `clickRandom` / `getRandom` compose with Playwright's standard
           // auto-wait semantics instead of throwing immediately on 0 matches.
@@ -99,7 +118,8 @@ export class StrategyResolver {
           // that match multiple elements (e.g. a list of size labels).
           try {
             await base.first().waitFor({ state: 'visible', timeout });
-          } catch {
+          } catch (err) {
+            rethrowAbort(err);
             throw new Error(`No elements found for '${elementName}' on '${pageName}'`);
           }
           const all = await base.all();
@@ -109,21 +129,21 @@ export class StrategyResolver {
           return all[pickRandomIndex(all.length)];
         }
         case SelectionStrategy.ALL: {
-          const element = new WebElement(locator, desc, timeout);
-          await element.waitFor({ state: 'attached', timeout: Math.min(timeout, ATTACH_PROBE_TIMEOUT_MS) }).catch(() => {});
+          const element = web(locator);
+          await element.waitFor({ state: 'attached', timeout: Math.min(timeout, ATTACH_PROBE_TIMEOUT_MS) }).catch(ignoreUnlessAborted);
           return element;
         }
         case SelectionStrategy.TEXT: {
           if (!options.value?.trim()) {
-            throw new Error('options.value is required when using SelectionStrategy.TEXT');
+            throw argumentError('options.value is required when using SelectionStrategy.TEXT');
           }
           const filtered = locator.filter({ hasText: options.value });
-          const element = new WebElement(filtered.first(), desc, timeout);
-          await element.waitFor({ state: 'attached', timeout: Math.min(timeout, ATTACH_PROBE_TIMEOUT_MS) }).catch(() => {});
+          const element = web(filtered.first());
+          await element.waitFor({ state: 'attached', timeout: Math.min(timeout, ATTACH_PROBE_TIMEOUT_MS) }).catch(ignoreUnlessAborted);
           return element;
         }
         case SelectionStrategy.ATTRIBUTE: {
-          const base = new WebElement(locator, desc, timeout);
+          const base = web(locator);
           return StrategyResolver.resolveByAttribute(base, elementName, pageName, timeout, options);
         }
         default:
@@ -131,8 +151,8 @@ export class StrategyResolver {
       }
     }
 
-    const element = new WebElement(locator.first(), desc, timeout);
-    await element.waitFor({ state: 'attached', timeout: Math.min(timeout, ATTACH_PROBE_TIMEOUT_MS) }).catch(() => {});
+    const element = web(locator.first());
+    await element.waitFor({ state: 'attached', timeout: Math.min(timeout, ATTACH_PROBE_TIMEOUT_MS) }).catch(ignoreUnlessAborted);
     return element;
   }
 
@@ -149,7 +169,8 @@ export class StrategyResolver {
    * @param elementName The element name (used for error messages).
    * @param pageName The page name (used for error messages).
    * @param timeout The wait timeout in milliseconds.
-   * @param options Optional element resolution options (strategy, index, value).
+   * @param options Optional element resolution options (strategy, index,
+   * value, and the lookup's `signal`; see `LookupOptions`).
    * @returns A promise that resolves to the located Element.
    */
   static async fromSelector(
@@ -161,19 +182,41 @@ export class StrategyResolver {
     timeout: number,
     options?: ElementResolutionOptions,
   ): Promise<Element> {
+    return runLookup(
+      options?.signal, { elementName, pageName },
+      () => StrategyResolver.selectorLookup(driver, selector, pageObj, elementName, pageName, timeout, options),
+    );
+  }
+
+  /** Body of {@link fromSelector}; the elements it builds carry the lookup signal. */
+  private static async selectorLookup(
+    driver: any,
+    selector: string,
+    pageObj: PageObject,
+    elementName: string,
+    pageName: string,
+    timeout: number,
+    options?: ElementResolutionOptions,
+  ): Promise<Element> {
     const isWeb = EnhancedResolver.isWebPlatform(pageObj);
     // The page's platform, so platform elements name it in their errors.
     const platform = pageObj.platform;
+    const signal = options?.signal;
+    // The un-filtered base element for `selector`, carrying the lookup signal.
+    const make = (): Element => bindLookupSignal(
+      isWeb
+        ? new WebElement(driver.locator(selector), selector, timeout)
+        : new PlatformElement(driver, selector, undefined, timeout, { platform }),
+      signal,
+    );
 
     if (options?.strategy) {
       switch (options.strategy) {
         case SelectionStrategy.INDEX: {
           if (options.index === undefined || options.index === null) {
-            throw new Error('options.index is required when using SelectionStrategy.INDEX');
+            throw argumentError('options.index is required when using SelectionStrategy.INDEX');
           }
-          const base = isWeb
-            ? new WebElement(driver.locator(selector), selector, timeout)
-            : new PlatformElement(driver, selector, undefined, timeout, { platform });
+          const base = make();
           const all = await base.all();
           if (options.index < 0 || options.index >= all.length) {
             throw new Error(`Index ${options.index} out of bounds for '${elementName}' on '${pageName}' (found ${all.length} elements).`);
@@ -181,10 +224,8 @@ export class StrategyResolver {
           return all[options.index];
         }
         case SelectionStrategy.RANDOM: {
-          const base = isWeb
-            ? new WebElement(driver.locator(selector), selector, timeout)
-            : new PlatformElement(driver, selector, undefined, timeout, { platform });
-          
+          const base = make();
+
           // Wait for at least one element to be visible before sampling. Full
           // `timeout` is intentional — see the matching block in `fromLocator`
           // for the rationale (RANDOM is load-bearing, not a swallowed probe).
@@ -192,7 +233,8 @@ export class StrategyResolver {
           // that match multiple elements (e.g. a list of size labels).
           try {
             await base.first().waitFor({ state: 'visible', timeout });
-          } catch {
+          } catch (err) {
+            rethrowAbort(err);
             throw new Error(`No elements found for '${elementName}' on '${pageName}'`);
           }
           const all = await base.all();
@@ -203,27 +245,25 @@ export class StrategyResolver {
         }
         case SelectionStrategy.TEXT: {
           if (!options.value?.trim()) {
-            throw new Error('options.value is required when using SelectionStrategy.TEXT');
+            throw argumentError('options.value is required when using SelectionStrategy.TEXT');
           }
           if (!isWeb) {
-            return StrategyResolver.resolvePlatformByText(driver, selector, elementName, pageName, timeout, options.value, platform);
+            return StrategyResolver.resolvePlatformByText(
+              driver, selector, elementName, pageName, timeout, options.value, platform, signal,
+            );
           }
           const filtered = driver.locator(selector).filter({ hasText: options.value });
-          const element = new WebElement(filtered.first(), selector, timeout);
-          await element.waitFor({ state: 'attached', timeout: Math.min(timeout, ATTACH_PROBE_TIMEOUT_MS) }).catch(() => {});
+          const element = bindLookupSignal(new WebElement(filtered.first(), selector, timeout), signal);
+          await element.waitFor({ state: 'attached', timeout: Math.min(timeout, ATTACH_PROBE_TIMEOUT_MS) }).catch(ignoreUnlessAborted);
           return element;
         }
         case SelectionStrategy.ALL: {
-          const element = isWeb
-            ? new WebElement(driver.locator(selector), selector, timeout)
-            : new PlatformElement(driver, selector, undefined, timeout, { platform });
-          await element.waitFor({ state: 'attached', timeout: Math.min(timeout, ATTACH_PROBE_TIMEOUT_MS) }).catch(() => {});
+          const element = make();
+          await element.waitFor({ state: 'attached', timeout: Math.min(timeout, ATTACH_PROBE_TIMEOUT_MS) }).catch(ignoreUnlessAborted);
           return element;
         }
         case SelectionStrategy.ATTRIBUTE: {
-          const base = isWeb
-            ? new WebElement(driver.locator(selector), selector, timeout)
-            : new PlatformElement(driver, selector, undefined, timeout, { platform });
+          const base = make();
           return StrategyResolver.resolveByAttribute(base, elementName, pageName, timeout, options);
         }
         default:
@@ -231,11 +271,8 @@ export class StrategyResolver {
       }
     }
 
-    const base = isWeb
-      ? new WebElement(driver.locator(selector), selector, timeout)
-      : new PlatformElement(driver, selector, undefined, timeout, { platform });
-    const element = base.first();
-    await element.waitFor({ state: 'attached', timeout: Math.min(timeout, ATTACH_PROBE_TIMEOUT_MS) }).catch(() => {});
+    const element = make().first();
+    await element.waitFor({ state: 'attached', timeout: Math.min(timeout, ATTACH_PROBE_TIMEOUT_MS) }).catch(ignoreUnlessAborted);
     return element;
   }
 
@@ -246,7 +283,8 @@ export class StrategyResolver {
    * @param driver The WebDriverIO `Browser`/`Driver` instance.
    * @param selector The platform-native selector string (e.g. `android=new UiSelector()...`).
    * @param timeout The wait timeout in milliseconds.
-   * @param options Optional element resolution options (only ALL strategy is supported).
+   * @param options Optional element resolution options (only ALL strategy
+   * is supported; the lookup's `signal`, see `LookupOptions`).
    * @param platform The page's platform, named by the element's errors
    * (read from the driver when omitted).
    * @returns A promise that resolves to the located Element.
@@ -258,10 +296,21 @@ export class StrategyResolver {
     options?: ElementResolutionOptions,
     platform?: Platform,
   ): Promise<Element> {
-    const base = new PlatformElement(driver, selector, undefined, timeout, { platform });
+    return runLookup(options?.signal, {}, () => StrategyResolver.mobileLookup(driver, selector, timeout, options, platform));
+  }
+
+  /** Body of {@link fromMobileSelector}; the elements it builds carry the lookup signal. */
+  private static async mobileLookup(
+    driver: any,
+    selector: string,
+    timeout: number,
+    options?: ElementResolutionOptions,
+    platform?: Platform,
+  ): Promise<Element> {
+    const base = bindLookupSignal(new PlatformElement(driver, selector, undefined, timeout, { platform }), options?.signal);
 
     if (options?.strategy === SelectionStrategy.ALL) {
-      await base.waitFor({ state: 'attached', timeout }).catch(() => {});
+      await base.waitFor({ state: 'attached', timeout }).catch(ignoreUnlessAborted);
       return base;
     }
 
@@ -273,7 +322,7 @@ export class StrategyResolver {
     }
 
     const element = base.first();
-    await element.waitFor({ state: 'attached', timeout }).catch(() => {});
+    await element.waitFor({ state: 'attached', timeout }).catch(ignoreUnlessAborted);
     return element;
   }
 
@@ -358,6 +407,11 @@ export class StrategyResolver {
    * polling, and the last such error is appended to the final not-found
    * message as `(last driver error: <name>: <message>)` and kept in
    * `lastDriverError`; `cleanMiss` is `false` when the final pass hit one.
+   *
+   * With `signal` (see `LookupOptions`), the signal is checked at the top of
+   * every pass, before each query and before each text read; an abort is
+   * thrown at once (never kept as `lastDriverError`, never polled through),
+   * and the sleep between passes wakes on it.
    */
   private static async resolvePlatformByText(
     driver: any,
@@ -367,7 +421,10 @@ export class StrategyResolver {
     timeout: number,
     value: string,
     platform?: Platform,
+    signal?: AbortSignal,
   ): Promise<Element> {
+    const ctx: AbortContext = { elementName, pageName };
+    const check = () => throwIfAborted(signal, ctx);
     const wanted = value.trim();
     const wantedNorm = normaliseText(value);
     const deadline = Date.now() + timeout;
@@ -379,6 +436,7 @@ export class StrategyResolver {
     let lastErrorPass = 0;
 
     const remember = (err: unknown) => {
+      rethrowAbort(err);
       if (isFatalDriverError(err)) throw err;
       lastError = err;
       lastErrorPass = pass;
@@ -386,7 +444,8 @@ export class StrategyResolver {
 
     /** A match's text under the rule, trimmed, or `null` when the read failed (non-fatally). */
     const readText = async (raw: any): Promise<string | null> => {
-      try { return ((await readPlatformText(raw, textPlatform)) ?? '').trim(); } catch (err) { remember(err); return null; }
+      check();
+      try { return ((await readPlatformText(raw, textPlatform, signal)) ?? '').trim(); } catch (err) { remember(err); return null; }
     };
 
     // The full pass: every match of the selector. A started pass reads
@@ -395,6 +454,7 @@ export class StrategyResolver {
     // are kept for the "contains" fallback.
     const fullPass = async (): Promise<any> => {
       let raws: any[] = [];
+      check();
       try { raws = Array.from((await driver.$$(selector)) ?? []); } catch (err) { remember(err); raws = []; }
       const texts: Array<string | null> = [];
       let index = -1;
@@ -421,10 +481,11 @@ export class StrategyResolver {
     };
 
     for (;;) {
+      check();
       pass++;
       let picked: NarrowedPick | undefined;
       if (queries) {
-        const hits = await runNarrowedQueries(driver, queries);
+        const hits = await runNarrowedQueries(driver, queries, signal);
         if ('error' in hits) {
           // The driver could not run a narrowed query: this poll and every
           // later one read the full match list. The error belongs to a
@@ -442,9 +503,10 @@ export class StrategyResolver {
 
       const remaining = deadline - Date.now();
       if (remaining <= 0) break;
-      await new Promise(resolve => setTimeout(resolve, Math.min(TEXT_POLL_INTERVAL_MS, remaining)));
+      await abortableSleep(Math.min(TEXT_POLL_INTERVAL_MS, remaining), signal, ctx);
     }
 
+    check();
     throw new TextNotFoundError({
       elementName, pageName, text: value, lastDriverError: lastError, cleanMiss: lastErrorPass !== pass,
     });
@@ -476,10 +538,10 @@ export class StrategyResolver {
     options: ElementResolutionOptions,
   ): Promise<Element> {
     if (!options.attribute) {
-      throw new Error('options.attribute is required when using SelectionStrategy.ATTRIBUTE');
+      throw argumentError('options.attribute is required when using SelectionStrategy.ATTRIBUTE');
     }
     if (options.value === undefined || options.value === null) {
-      throw new Error('options.value is required when using SelectionStrategy.ATTRIBUTE');
+      throw argumentError('options.value is required when using SelectionStrategy.ATTRIBUTE');
     }
 
     // Use .first() to avoid Playwright strict-mode violations on locators
@@ -487,12 +549,13 @@ export class StrategyResolver {
     // attribute filters legitimately target non-visible elements.
     try {
       await base.first().waitFor({ state: 'attached', timeout });
-    } catch {
+    } catch (err) {
+      rethrowAbort(err);
       throw new Error(`No elements found for '${elementName}' on '${pageName}'`);
     }
 
     const all = await base.all();
-    const match = await StrategyResolver.filterByAttribute(all, options.attribute, options.value);
+    const match = await StrategyResolver.filterByAttribute(all, options.attribute, options.value, undefined, options.signal);
     if (!match) {
       throw new Error(
         `Element '${elementName}' on '${pageName}' with attribute [${options.attribute}] matching "${options.value}" not found.`,
@@ -515,6 +578,9 @@ export class StrategyResolver {
    * @param attribute The HTML attribute name to filter by.
    * @param value The attribute value to match against.
    * @param exact If true, requires an exact match; if false, a contains match; if omitted, exact-then-contains.
+   * @param signal Optional abort signal: checked before every read (a web
+   * read, which auto-waits, is raced against it); once aborted, a
+   * `LookupAbortedError` is thrown.
    * @returns A promise that resolves to the first matched Element, or null when nothing matches.
    */
   static async filterByAttribute(
@@ -522,11 +588,17 @@ export class StrategyResolver {
     attribute: string,
     value: string,
     exact?: boolean,
+    signal?: AbortSignal,
   ): Promise<Element | null> {
+    const read = (element: Element): Promise<string | null> => {
+      throwIfAborted(signal);
+      const pending = element.getAttribute(attribute);
+      return isWeb(element) ? raceAbort(pending, signal) : pending;
+    };
     // When exact is explicitly set, use only that matching mode
     if (exact !== undefined) {
       for (const element of elements) {
-        const attrValue = await element.getAttribute(attribute);
+        const attrValue = await read(element);
         if (attrValue === null) continue;
         if (exact ? attrValue === value : attrValue.includes(value)) return element;
       }
@@ -535,11 +607,11 @@ export class StrategyResolver {
 
     // Default: try exact match first, then fall back to contains
     for (const element of elements) {
-      const attrValue = await element.getAttribute(attribute);
+      const attrValue = await read(element);
       if (attrValue === value) return element;
     }
     for (const element of elements) {
-      const attrValue = await element.getAttribute(attribute);
+      const attrValue = await read(element);
       if (attrValue !== null && attrValue.includes(value)) return element;
     }
     return null;

@@ -16,6 +16,7 @@ import { readPlatformChecked } from '../utils/platformChecked';
 import { readElementClass } from '../utils/platformClass';
 import { readPlatformAttribute } from '../utils/platformAttr';
 import { dismissKeyboard, KeyboardStillShownError } from '../utils/keyboard';
+import { abortableSleep, relabelAbort, rethrowAbort, throwIfAborted } from '../utils/abort';
 
 /** Extra construction options for {@link PlatformElement}. */
 export interface PlatformElementOptions {
@@ -83,6 +84,12 @@ export class PlatformElement implements Element {
    * already a single match: like Playwright, such an element matches nothing.
    */
   private matchesNothing = false;
+  /**
+   * The signal of the lookup that built this element for its own use (see
+   * `utils/lookupSignal`): its driver calls check it. Never set on an
+   * element handed to the caller. Inherited by derived elements.
+   */
+  private lookupSignal?: AbortSignal;
 
   /**
    * @param driver          - The WebDriverIO browser/driver instance.
@@ -125,6 +132,7 @@ export class PlatformElement implements Element {
     );
     el.parent = options.parent ?? this.parent;
     el.matchesNothing = options.matchesNothing ?? false;
+    if (this.lookupSignal) el.lookupSignal = this.lookupSignal;
     return el;
   }
 
@@ -148,9 +156,9 @@ export class PlatformElement implements Element {
    * `$` / `$$` on WebdriverIO's lazy element for a missing parent would wait
    * `waitforTimeout` and then throw WebdriverIO's own error.
    */
-  private async searchContext(): Promise<any> {
+  private async searchContext(signal = this.lookupSignal): Promise<any> {
     if (!this.parent) return this.driver;
-    const parent = await this.parent.findOne();
+    const parent = await this.parent.findOne(signal);
     if (!parent?.elementId) throw new NoMatchError(`parent ${this.parent.describe()} not found`);
     return parent;
   }
@@ -162,13 +170,15 @@ export class PlatformElement implements Element {
    * from `$$` now (throwing when there is none); otherwise `$` is queried
    * on the driver, or on the parent's match for a child.
    */
-  private async findOne(): Promise<any> {
+  private async findOne(signal = this.lookupSignal): Promise<any> {
     if (this.resolvedElement) return this.resolvedElement;
-    if (this.polled) return this.resolveNow();
+    if (this.polled) return this.resolveNow(signal);
     // WebdriverIO's `$` is strict by default and throws when the selector
     // matches more than once; this element means "the first match", so opt
     // out.
-    return (await this.searchContext()).$(this.selector, { strict: false });
+    const context = await this.searchContext(signal);
+    throwIfAborted(signal);
+    return context.$(this.selector, { strict: false });
   }
 
   /**
@@ -194,13 +204,13 @@ export class PlatformElement implements Element {
    * Picks this element's match from `$$` now (index 0 when unindexed), or
    * throws a {@link NoMatchError} naming the index and the matches found.
    */
-  private async resolveNow(): Promise<any> {
+  private async resolveNow(signal = this.lookupSignal): Promise<any> {
     if (this.matchesNothing) {
       throw new NoMatchError(
         `nth(${this.index}): "${this.selector}" is already a single match, so this index matches nothing`, true,
       );
     }
-    const raws = await this.queryAll();
+    const raws = await this.queryAll(signal);
     const index = this.index ?? 0;
     const i = index < 0 ? raws.length + index : index;
     if (i >= 0 && i < raws.length) return raws[i];
@@ -209,8 +219,10 @@ export class PlatformElement implements Element {
   }
 
   /** All matches of the selector (under the parent's match for a child), as a plain array. */
-  private async queryAll(): Promise<any[]> {
-    return Array.from((await (await this.searchContext()).$$(this.selector)) ?? []);
+  private async queryAll(signal = this.lookupSignal): Promise<any[]> {
+    const context = await this.searchContext(signal);
+    throwIfAborted(signal);
+    return Array.from((await context.$$(this.selector)) ?? []);
   }
 
   /**
@@ -225,7 +237,7 @@ export class PlatformElement implements Element {
       catch (err) { if (err instanceof NoMatchError) return []; throw err; }
     }
     try { return [await this.resolveNow()]; }
-    catch (err) { if (isFatalDriverError(err)) throw err; return []; }
+    catch (err) { rethrowAbort(err); if (isFatalDriverError(err)) throw err; return []; }
   }
 
   /**
@@ -234,21 +246,27 @@ export class PlatformElement implements Element {
    * error (see `isFatalDriverError`, shared with the repository's strategy
    * resolver) or a final {@link NoMatchError} is rethrown at once. A
    * {@link NoMatchError} leaves as a plain `Error` (see {@link toPublicError}).
+   * With `signal`, it is checked before every check, an abort is rethrown
+   * at once, and the sleep between checks wakes on the abort.
    */
-  private async pollUntil(check: () => Promise<boolean>, timeout: number, onTimeout: () => Error): Promise<void> {
+  private async pollUntil(
+    check: () => Promise<boolean>, timeout: number, onTimeout: () => Error, signal = this.lookupSignal,
+  ): Promise<void> {
     const deadline = Date.now() + timeout;
     let lastError: unknown;
     for (;;) {
+      throwIfAborted(signal);
       try {
         if (await check()) return;
         lastError = undefined;
       } catch (err) {
+        rethrowAbort(err);
         if (isFatalDriverError(err) || (err instanceof NoMatchError && err.final)) throw toPublicError(err);
         lastError = err;
       }
       const remaining = deadline - Date.now();
       if (remaining <= 0) break;
-      await new Promise(resolve => setTimeout(resolve, Math.min(PlatformElement.INDEX_POLL_MS, remaining)));
+      await abortableSleep(Math.min(PlatformElement.INDEX_POLL_MS, remaining), signal);
     }
     throw toPublicError(lastError instanceof Error ? lastError : onTimeout());
   }
@@ -289,8 +307,12 @@ export class PlatformElement implements Element {
    * appears fails with `<method>: <element> not found within N ms: <reason>`;
    * an element that matches nothing (see {@link nth}) fails at once with
    * `<method>: <element> not found: <reason>`, as no wait could find it.
+   *
+   * With a lookup signal (see {@link lookupSignal}), the wait is this
+   * element's own `$$` poll instead of WebdriverIO's `waitForExist`, so it
+   * can stop between driver calls.
    */
-  private async ensureAttached(timeout?: number, method?: string): Promise<any> {
+  private async ensureAttached(timeout?: number, method?: string, signal = this.lookupSignal): Promise<any> {
     if (this.polled) {
       // No lazy WebdriverIO element exists for "the i-th match" or a child:
       // poll `$$` until it is there, and fail with the not-found error otherwise.
@@ -298,11 +320,13 @@ export class PlatformElement implements Element {
       let el: any;
       try {
         await this.pollUntil(
-          async () => { el = await this.resolveNow(); return true; },
+          async () => { el = await this.resolveNow(signal); return true; },
           ms,
           () => new NoMatchError(`${this.describe()}: no matching element`),
+          signal,
         );
       } catch (err) {
+        rethrowAbort(err);
         const notFound = err instanceof NoMatchError || (err as { cause?: unknown })?.cause instanceof NoMatchError;
         if (method && notFound) {
           const within = this.matchesNothing ? '' : ` within ${ms} ms`;
@@ -311,6 +335,19 @@ export class PlatformElement implements Element {
         throw toPublicError(err);
       }
       return el;
+    }
+    if (signal) {
+      // A match found by the lookup is there; otherwise poll `$$` for one.
+      // As below, a timeout is swallowed; an abort is not.
+      if (!this.resolvedElement) {
+        await this.pollUntil(
+          async () => (await this.queryAll(signal)).length > 0,
+          timeout ?? this.defaultTimeout ?? 30000,
+          () => new Error(`${this.describe()}: no matching element`),
+          signal,
+        ).catch(rethrowAbort);
+      }
+      return this.findOne(signal);
     }
     const el = await this.findOne();
     try { await el.waitForExist({ timeout: timeout ?? this.defaultTimeout ?? 30000 }); }
@@ -1016,6 +1053,7 @@ export class PlatformElement implements Element {
    */
   private async read<T>(method: string, fn: (el: any) => Promise<T>): Promise<T> {
     const el = await this.readTarget(method);
+    throwIfAborted(this.lookupSignal);
     try {
       return await fn(el);
     } catch (err) {
@@ -1093,10 +1131,19 @@ export class PlatformElement implements Element {
    * errors through unchanged.
    */
   async isVisible(): Promise<boolean> {
-    if (!this.polled) return (await this.findOne()).isDisplayed();
+    const signal = this.lookupSignal;
+    if (!this.polled) {
+      const el = await this.findOne(signal);
+      throwIfAborted(signal);
+      return el.isDisplayed();
+    }
     for (let attempt = 0; ; attempt++) {
-      try { return await (await this.resolveNow()).isDisplayed(); }
-      catch (err) {
+      try {
+        const el = await this.resolveNow(signal);
+        throwIfAborted(signal);
+        return await el.isDisplayed();
+      } catch (err) {
+        rethrowAbort(err);
         const kind = PlatformElement.classifyReadError(err);
         // Like Playwright, a missing match is simply not visible.
         if (kind === 'no-match') return false;
@@ -1123,12 +1170,12 @@ export class PlatformElement implements Element {
 
   /** {@inheritDoc Element.textContent} */
   async textContent(): Promise<string | null> {
-    return (await this.read('textContent', el => readPlatformText(el, this.resolvePlatform())))?.trim() ?? null;
+    return (await this.read('textContent', el => readPlatformText(el, this.resolvePlatform(), this.lookupSignal)))?.trim() ?? null;
   }
 
   /** {@inheritDoc Element.rawText} */
   async rawText(): Promise<string | null> {
-    return this.read('rawText', el => readPlatformText(el, this.resolvePlatform()));
+    return this.read('rawText', el => readPlatformText(el, this.resolvePlatform(), this.lookupSignal));
   }
 
   /**
@@ -1328,8 +1375,31 @@ export class PlatformElement implements Element {
 
   // ── Waiting ──────────────────────────────────────────────────
 
-  async waitFor(options?: { state?: string; timeout?: number }): Promise<void> {
+  /**
+   * {@inheritDoc Element.waitFor}
+   *
+   * Platform: with `signal`, the wait is this element's own poll (`$$`
+   * for the match, then `isDisplayed()` for `visible` / `hidden`; for a
+   * match resolved from `all()`, `isExisting()` / `isDisplayed()` on it),
+   * the signal is checked before every driver call and the sleep between
+   * polls wakes on the abort, which rejects with a `LookupAbortedError`:
+   * `waitFor on <element> aborted.`. At the timeout it fails with
+   * `<element> did not become <state> within N ms`. Without a signal,
+   * WebdriverIO's `waitForDisplayed` / `waitForExist` wait, as before.
+   */
+  async waitFor(options?: { state?: string; timeout?: number; signal?: AbortSignal }): Promise<void> {
     const timeout = options?.timeout ?? 30000;
+    const signal = options?.signal ?? this.lookupSignal;
+    if (signal) {
+      try {
+        throwIfAborted(signal);
+        const state = options?.state ?? 'visible';
+        if (this.resolvedElement) return await this.waitForResolved(state, timeout, signal);
+        return await this.waitForPolled(state, timeout, signal);
+      } catch (err) {
+        throw relabelAbort(err, { operation: `waitFor on ${this.describe()}` });
+      }
+    }
     if (this.polled) return this.waitForPolled(options?.state ?? 'visible', timeout);
     const el = await this.findOne();
     switch (options?.state) {
@@ -1349,8 +1419,11 @@ export class PlatformElement implements Element {
     }
   }
 
-  /** {@link waitFor} for a polled element (see {@link polled}): polls `$$`. */
-  private async waitForPolled(state: string, timeout: number): Promise<void> {
+  /**
+   * {@link waitFor} for a polled element (see {@link polled}), or any
+   * unresolved element with a signal: polls `$$`.
+   */
+  private async waitForPolled(state: string, timeout: number, signal = this.lookupSignal): Promise<void> {
     // Only a real no-match counts as absent / not shown. A stale reference or
     // any other non-fatal driver error leaves the answer undecided: it is
     // rethrown, so pollUntil keeps trying until its timeout instead of
@@ -1358,30 +1431,58 @@ export class PlatformElement implements Element {
     // error (dead session, invalid selector) is thrown by pollUntil at once.
     // At the timeout pollUntil throws the last poll's driver error when that
     // poll failed, else "<element> did not become <state> within N ms".
+    const displayed = async () => {
+      const el = await this.resolveNow(signal);
+      throwIfAborted(signal);
+      return !!(await el.isDisplayed());
+    };
     const present = async () => {
-      try { await this.resolveNow(); return true; }
-      catch (err) { if (PlatformElement.classifyReadError(err) === 'no-match') return false; throw err; }
+      try { await this.resolveNow(signal); return true; }
+      catch (err) { rethrowAbort(err); if (PlatformElement.classifyReadError(err) === 'no-match') return false; throw err; }
     };
     const shown = async () => {
-      try { return !!(await (await this.resolveNow()).isDisplayed()); }
-      catch (err) { if (PlatformElement.classifyReadError(err) === 'no-match') return false; throw err; }
+      try { return await displayed(); }
+      catch (err) { rethrowAbort(err); if (PlatformElement.classifyReadError(err) === 'no-match') return false; throw err; }
     };
     const timedOut = (what: string) => () =>
       new Error(`${this.describe()} did not become ${what} within ${timeout} ms`);
     switch (state) {
       case 'attached':
-        return this.pollUntil(async () => { await this.resolveNow(); return true; }, timeout, timedOut('attached'));
+        return this.pollUntil(async () => { await this.resolveNow(signal); return true; }, timeout, timedOut('attached'), signal);
       case 'detached':
-        return this.pollUntil(async () => !(await present()), timeout, timedOut('detached'));
+        return this.pollUntil(async () => !(await present()), timeout, timedOut('detached'), signal);
       case 'hidden':
-        return this.pollUntil(async () => !(await shown()), timeout, timedOut('hidden'));
+        return this.pollUntil(async () => !(await shown()), timeout, timedOut('hidden'), signal);
       case 'visible':
       default:
-        return this.pollUntil(
-          async () => { const el = await this.resolveNow(); return !!(await el.isDisplayed()); },
-          timeout,
-          timedOut('visible'),
-        );
+        return this.pollUntil(displayed, timeout, timedOut('visible'), signal);
+    }
+  }
+
+  /**
+   * {@link waitFor} with a signal for a match resolved from `all()`: polls
+   * its `isExisting()` (attached / detached; a raw element without one
+   * counts as attached) or `isDisplayed()` (visible / hidden). A no-match
+   * answer counts as gone; any other error is polled through, as in
+   * {@link waitForPolled}.
+   */
+  private async waitForResolved(state: string, timeout: number, signal: AbortSignal): Promise<void> {
+    const raw = this.resolvedElement;
+    const probe = (read: () => Promise<boolean>) => async (): Promise<boolean> => {
+      throwIfAborted(signal);
+      try { return !!(await read()); }
+      catch (err) { if (PlatformElement.classifyReadError(err) === 'no-match') return false; throw err; }
+    };
+    const exists = probe(async () => (typeof raw.isExisting === 'function' ? raw.isExisting() : true));
+    const shown = probe(() => raw.isDisplayed());
+    const timedOut = (what: string) => () =>
+      new Error(`${this.describe()} did not become ${what} within ${timeout} ms`);
+    switch (state) {
+      case 'attached': return this.pollUntil(exists, timeout, timedOut('attached'), signal);
+      case 'detached': return this.pollUntil(async () => !(await exists()), timeout, timedOut('detached'), signal);
+      case 'hidden': return this.pollUntil(async () => !(await shown()), timeout, timedOut('hidden'), signal);
+      case 'visible':
+      default: return this.pollUntil(shown, timeout, timedOut('visible'), signal);
     }
   }
 }
