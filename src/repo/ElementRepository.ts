@@ -6,7 +6,7 @@ import { Platform, PLATFORMS, isPlatformName } from '../enum/Platform';
 import { pickRandomIndex } from '../utils/math';
 import { Element, PlatformElement } from '../types';
 import { detectDriverPlatform } from '../utils/platformText';
-import { pickTextToken, narrowedTextQueries, runNarrowedQueries, pickFromHits } from '../utils/textNarrowing';
+import { pickTextTokens, narrowedTextQueries, runNarrowedQueries, pickFromHits } from '../utils/textNarrowing';
 import {
   SelectorFormatter,
   WEB_FORMATTERS, APPIUM_FORMATTERS, ANDROID_FORMATTERS, IOS_FORMATTERS,
@@ -500,8 +500,9 @@ export class ElementRepository {
    *
    * On iOS and Android pages the elements compared are narrowed first, as
    * for the platform `TEXT` strategy: the driver is asked only for the
-   * matches whose own or descendant text contains the longest safe word of
-   * `desiredText` (case-insensitively), and this method's own comparison
+   * matches whose own text, or whose descendants' text, contains every safe
+   * word of `desiredText` (the four longest, case-insensitively; an iOS
+   * container is asked for by the longest word only), and this method's own comparison
    * (exact, then case-sensitive contains, in document order) is applied to
    * those hits. It compares every match instead when the selector kind or
    * the text cannot be narrowed, when a narrowed query fails (a lost
@@ -578,8 +579,7 @@ export class ElementRepository {
     if (!(base instanceof PlatformElement)) return undefined;
     const pagePlatform = this.requirePage(pageName).platform;
     const platform = pagePlatform ?? detectDriverPlatform(base.driver);
-    const token = pickTextToken(desiredText, platform);
-    const queries = token === undefined ? null : narrowedTextQueries(base.selector, platform, token);
+    const queries = narrowedTextQueries(base.selector, platform, pickTextTokens(desiredText, platform));
     if (!queries) return undefined;
     const hits = await runNarrowedQueries(base.driver, queries, signal);
     if ('error' in hits) return undefined;

@@ -1,17 +1,25 @@
 /**
  * A model of how UiAutomator2 and WebDriverAgent answer the narrowed text
  * queries, for mock drivers. It parses a composed query back into its base
- * selector and word (decoding the XPath literal / NSPredicate string, so an
- * escaping mistake shows as a wrong answer), and filters the base's matches
- * the way the server evaluates the condition:
+ * selector and words (decoding the XPath literals / NSPredicate strings, so
+ * an escaping mistake shows as a wrong answer), and filters the base's
+ * matches the way the server evaluates the condition:
  *
- * - Android: `(<base>)[contains(translate(@text, A, B), 't') or
- *   .//*[not(@showing-hint='true') and contains(translate(@text, A, B), 't')]]`
- *   — XPath `translate()` maps each character of A to the one at the same
- *   place in B; `contains()` is a plain substring test.
- * - iOS: `CONTAINS[cd]` — case- and diacritic-insensitive (modelled as
- *   NFD, marks removed, lowercased, `ß` → `ss`); a missing attribute never
- *   contains anything.
+ * - Android: `(<base>)[(c1 and … and cn) or (.//*[nh and c1] and … and
+ *   .//*[nh and cn])]` (no parentheses for one word), `ck` =
+ *   `contains(translate(@text, A, B), 'tk')` or `contains(@text, 'tk')`,
+ *   `nh` = `not(@showing-hint='true')` — XPath `translate()` maps each
+ *   character of A to the one at the same place in B; `contains()` is a
+ *   plain substring test.
+ * - iOS: own `(label CONTAINS[cd] "t1" AND …) OR (value CONTAINS[cd] "t1"
+ *   AND …)` (`label CONTAINS[cd] "t" OR value CONTAINS[cd] "t"` for one
+ *   word), descendant `[`NOT (…t1…)`][$type == "XCUIElementTypeStaticText"
+ *   AND (…t1…)$]`. `CONTAINS[cd]` is case- and diacritic-insensitive
+ *   (modelled as NFD, marks removed, lowercased, `ß` → `ss`); a missing
+ *   attribute never contains anything.
+ *
+ * The parser splits on ` or `, ` and `, ` OR ` and ` AND `: a composed word
+ * never holds a space.
  *
  * Mock elements describe themselves with {@link MockFields} (read without
  * going through the element's own, possibly counted, methods).
@@ -54,17 +62,6 @@ export function decodePredicateString(s: string): string {
   return s.replace(/\\(.)/gs, '$1');
 }
 
-const ANDROID_QUERY = /^\((.*)\)\[contains\((translate\(@text, (.+?), (.+?)\)|@text), (.+?)\) or \.\/\/\*\[not\(@showing-hint='true'\) and contains\(\2, \5\)\]\]$/s;
-
-const STR = '"((?:[^"\\\\]|\\\\.)*)"';
-const OWN = `label CONTAINS\\[cd\\] ${STR} OR value CONTAINS\\[cd\\] "\\2"`;
-const OWN3 = `label CONTAINS\\[cd\\] ${STR} OR value CONTAINS\\[cd\\] "\\3"`;
-const IOS_OWN_CHAIN = new RegExp(`^-ios class chain:(.*)\\[\`${OWN}\`\\]$`, 's');
-const IOS_DESC_CHAIN = new RegExp(
-  `^-ios class chain:(.*)\\[\`NOT \\(${OWN}\\)\`\\]\\[\\$type == "XCUIElementTypeStaticText" AND \\(label CONTAINS\\[cd\\] "\\2" OR value CONTAINS\\[cd\\] "\\2"\\)\\$\\]$`, 's',
-);
-const IOS_OWN_PREDICATE = new RegExp(`^-ios predicate string:\\((.*)\\) AND \\((${OWN3})\\)$`, 's');
-
 export function fold(s: string): string {
   return s.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase().replace(/ß/g, 'ss');
 }
@@ -72,6 +69,85 @@ export function fold(s: string): string {
 function iosContains(attr: string | null | undefined, word: string): boolean {
   return typeof attr === 'string' && fold(attr).includes(fold(word));
 }
+
+// ---------------------------------------------------------------------------
+// Parsing
+// ---------------------------------------------------------------------------
+
+/** One Android `contains()` test: the `translate()` map and the word. */
+interface AndroidCondition { raw: string; from: string; to: string; word: string }
+
+type Parsed =
+  | { kind: 'android'; base: string; conditions: AndroidCondition[] }
+  | { kind: 'ios-own'; bases: string[]; words: string[] }
+  | { kind: 'ios-desc'; bases: string[]; word: string };
+
+const ANDROID_CONTAINS = /^contains\((?:translate\(@text, ('[^']*'|"[^"]*"), ('[^']*'|"[^"]*")\)|@text), (.+)\)$/s;
+const NOT_HINT = ".//*[not(@showing-hint='true') and ";
+
+/** The items of `part`: one item as it is, several in parentheses joined by `sep`. */
+function items(part: string, sep: string | RegExp): string[] | null {
+  const wrapped = part.startsWith('(') && part.endsWith(')');
+  const list = wrapped ? part.slice(1, -1).split(sep) : [part];
+  return wrapped === list.length > 1 ? list : null;
+}
+
+function parseAndroidContains(s: string): AndroidCondition | null {
+  const m = s.match(ANDROID_CONTAINS);
+  if (!m) return null;
+  const [, from, to, lit] = m;
+  return {
+    raw: s,
+    from: from === undefined ? '' : decodeXPathLiteral(from),
+    to: to === undefined ? '' : decodeXPathLiteral(to),
+    word: decodeXPathLiteral(lit),
+  };
+}
+
+/** `<own> or <descendants>`, both naming the same conditions in the same order. */
+function parseAndroidCondition(cond: string): AndroidCondition[] | null {
+  const halves = cond.split(' or ');
+  if (halves.length !== 2) return null;
+  const own = items(halves[0], ' and ');
+  const desc = items(halves[1], /(?<=\]) and (?=\.\/\/\*\[)/);
+  if (!own || !desc || own.length !== desc.length) return null;
+  const conditions: AndroidCondition[] = [];
+  for (let k = 0; k < own.length; k++) {
+    const c = parseAndroidContains(own[k]);
+    if (!c || desc[k] !== `${NOT_HINT}${c.raw}]`) return null;
+    conditions.push(c);
+  }
+  return conditions;
+}
+
+/** The words of an iOS own predicate, or `null` when it is not one. */
+function parseIosOwn(pred: string): string[] | null {
+  const sides = pred.split(' OR ');
+  if (sides.length !== 2) return null;
+  const words = sides.map((side, k) => {
+    const list = items(side, ' AND ');
+    if (!list) return null;
+    const re = new RegExp(`^${k === 0 ? 'label' : 'value'} CONTAINS\\[cd\\] "((?:[^"\\\\]|\\\\.)*)"$`, 's');
+    const out: string[] = [];
+    for (const item of list) {
+      const m = item.match(re);
+      if (!m) return null;
+      out.push(decodePredicateString(m[1]));
+    }
+    return out;
+  });
+  const [label, value] = words;
+  if (!label || !value || label.join('\u0000') !== value.join('\u0000')) return null;
+  return label;
+}
+
+const STR = '"((?:[^"\\\\]|\\\\.)*)"';
+const IOS_DESC_CHAIN = new RegExp(
+  `^-ios class chain:(.*)\\[\`NOT \\(label CONTAINS\\[cd\\] ${STR} OR value CONTAINS\\[cd\\] "\\2"\\)\`\\]` +
+  `\\[\\$type == "XCUIElementTypeStaticText" AND \\(label CONTAINS\\[cd\\] "\\2" OR value CONTAINS\\[cd\\] "\\2"\\)\\$\\]$`, 's',
+);
+const CHAIN = '-ios class chain:';
+const PREDICATE = '-ios predicate string:(';
 
 /** The base selector strings a class chain stands for, most specific first. */
 function chainBases(chain: string): string[] {
@@ -100,6 +176,35 @@ function androidBases(base: string): string[] {
   return out;
 }
 
+/** The composed query `selector` stands for, or `null` when it is not one. */
+function parseNarrowed(selector: string): Parsed | null {
+  if (selector.startsWith('(') && selector.endsWith(']')) {
+    for (let i = selector.indexOf(')['); i >= 0; i = selector.indexOf(')[', i + 1)) {
+      const conditions = parseAndroidCondition(selector.slice(i + 2, -1));
+      if (conditions) return { kind: 'android', base: selector.slice(1, i), conditions };
+    }
+  }
+  const desc = selector.match(IOS_DESC_CHAIN);
+  if (desc) return { kind: 'ios-desc', bases: chainBases(desc[1]), word: decodePredicateString(desc[2]) };
+  if (selector.startsWith(CHAIN) && selector.endsWith('`]')) {
+    // A composed word holds no backtick: the own predicate is the last one.
+    const i = selector.lastIndexOf('[`');
+    const words = i < 0 ? null : parseIosOwn(selector.slice(i + 2, -2));
+    if (words) return { kind: 'ios-own', bases: chainBases(selector.slice(CHAIN.length, i)), words };
+  }
+  if (selector.startsWith(PREDICATE) && selector.endsWith(')')) {
+    for (let j = selector.lastIndexOf(') AND ('); j >= PREDICATE.length; j = selector.lastIndexOf(') AND (', j - 1)) {
+      const words = parseIosOwn(selector.slice(j + 7, -1));
+      if (words) return { kind: 'ios-own', bases: [`-ios predicate string:${selector.slice(PREDICATE.length, j)}`], words };
+    }
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// Answering
+// ---------------------------------------------------------------------------
+
 /**
  * The server's answer to `selector` when it is a narrowed text query, or
  * `undefined` when it is not one. `baseMatches(base)` returns the base
@@ -110,49 +215,48 @@ export function answerNarrowed(
   baseMatches: (base: string) => any[] | undefined,
   fieldsOf: FieldsOf = fieldsOfMock,
 ): any[] | undefined {
+  const parsed = parseNarrowed(selector);
+  if (!parsed) return undefined;
   const lookup = (bases: string[]) => {
     for (const b of bases) { const m = baseMatches(b); if (m !== undefined) return m; }
     return [];
   };
 
-  const a = selector.match(ANDROID_QUERY);
-  if (a) {
-    const [, base, , from, to, lit] = a;
-    const src = from === undefined ? '' : decodeXPathLiteral(from);
-    const dst = to === undefined ? '' : decodeXPathLiteral(to);
-    const word = decodeXPathLiteral(lit);
-    const tr = (s: string) => Array.from(s).map(ch => { const i = src.indexOf(ch); return i >= 0 ? dst[i] : ch; }).join('');
-    const has = (raw: any) => tr(fieldsOf(raw).text ?? '').includes(word);
-    return lookup(androidBases(base)).filter(raw =>
-      has(raw) || descendants(raw, fieldsOf).some(d => !fieldsOf(d).showingHint && has(d)));
+  if (parsed.kind === 'android') {
+    const has = (raw: any, c: AndroidCondition) => {
+      const tr = (s: string) => Array.from(s).map(ch => { const i = c.from.indexOf(ch); return i >= 0 ? c.to[i] : ch; }).join('');
+      return tr(fieldsOf(raw).text ?? '').includes(c.word);
+    };
+    return lookup(androidBases(parsed.base)).filter(raw =>
+      parsed.conditions.every(c => has(raw, c))
+      || parsed.conditions.every(c => descendants(raw, fieldsOf).some(d => !fieldsOf(d).showingHint && has(d, c))));
   }
 
   const ownOf = (raw: any, word: string) => {
     const f = fieldsOf(raw);
     return iosContains(f.label, word) || iosContains(f.value, word);
   };
-  const own = selector.match(IOS_OWN_CHAIN);
-  if (own) {
-    const word = decodePredicateString(own[2]);
-    return lookup(chainBases(own[1])).filter(raw => ownOf(raw, word));
+  if (parsed.kind === 'ios-own') {
+    return lookup(parsed.bases).filter(raw => {
+      const f = fieldsOf(raw);
+      return parsed.words.every(w => iosContains(f.label, w)) || parsed.words.every(w => iosContains(f.value, w));
+    });
   }
-  const desc = selector.match(IOS_DESC_CHAIN);
-  if (desc) {
-    const word = decodePredicateString(desc[2]);
-    return lookup(chainBases(desc[1])).filter(raw => !ownOf(raw, word)
-      && descendants(raw, fieldsOf).some(d => fieldsOf(d).type === 'XCUIElementTypeStaticText' && ownOf(d, word)));
-  }
-  const ownPred = selector.match(IOS_OWN_PREDICATE);
-  if (ownPred) {
-    const word = decodePredicateString(ownPred[3]);
-    return lookup([`-ios predicate string:${ownPred[1]}`]).filter(raw => ownOf(raw, word));
-  }
-  return undefined;
+  return lookup(parsed.bases).filter(raw => !ownOf(raw, parsed.word)
+    && descendants(raw, fieldsOf).some(d => fieldsOf(d).type === 'XCUIElementTypeStaticText' && ownOf(d, parsed.word)));
 }
 
 /** True when `selector` is a narrowed text query (any platform). */
 export function isNarrowedQuery(selector: string): boolean {
-  return ANDROID_QUERY.test(selector) || IOS_OWN_CHAIN.test(selector) || IOS_DESC_CHAIN.test(selector) || IOS_OWN_PREDICATE.test(selector);
+  return parseNarrowed(selector) !== null;
+}
+
+/** The words a narrowed query asks for, in query order (`null` when it is not one). */
+export function narrowedWords(selector: string): string[] | null {
+  const parsed = parseNarrowed(selector);
+  if (!parsed) return null;
+  if (parsed.kind === 'android') return parsed.conditions.map(c => c.word);
+  return parsed.kind === 'ios-own' ? parsed.words : [parsed.word];
 }
 
 /**
@@ -160,13 +264,9 @@ export function isNarrowedQuery(selector: string): boolean {
  * narrowed query, every base selector string it may stand for.
  */
 export function queriedBases(selector: string): string[] {
-  const a = selector.match(ANDROID_QUERY);
-  if (a) return androidBases(a[1]);
-  const chain = selector.match(IOS_OWN_CHAIN) ?? selector.match(IOS_DESC_CHAIN);
-  if (chain) return chainBases(chain[1]);
-  const pred = selector.match(IOS_OWN_PREDICATE);
-  if (pred) return [`-ios predicate string:${pred[1]}`];
-  return [selector];
+  const parsed = parseNarrowed(selector);
+  if (!parsed) return [selector];
+  return parsed.kind === 'android' ? androidBases(parsed.base) : parsed.bases;
 }
 
 /** True when some query in `queried` was made against `base`. */

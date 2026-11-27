@@ -5,88 +5,115 @@ import { PlatformElement } from '../src/types';
 import { TextNotFoundError } from '../src/types/errors';
 import { readPlatformText, ANDROID_DESCENDANT_TEXT_XPATH, IOS_DESCENDANT_TEXT_SELECTOR } from '../src/utils/platformText';
 import {
-  pickTextToken, narrowedTextQueries, selectorKind, xpathLiteral, normaliseText,
+  pickTextTokens, MAX_TEXT_TOKENS, narrowedTextQueries, selectorKind, xpathLiteral, normaliseText,
 } from '../src/utils/textNarrowing';
 import { isSessionLostError, isFatalDriverError } from '../src/utils/driverErrors';
 import {
-  answerNarrowed, decodeXPathLiteral, decodePredicateString, isNarrowedQuery, wasQueried, fold,
+  answerNarrowed, decodeXPathLiteral, decodePredicateString, isNarrowedQuery, narrowedWords, wasQueried, fold,
 } from './support/narrowedQueries';
 
 // ===========================================================================
 // The word a narrowed lookup asks for
 // ===========================================================================
 
-test.describe('pickTextToken', () => {
+/** The longest word a lookup asks for (the first of pickTextTokens). */
+const longest = (needle: string, platform: Parameters<typeof pickTextTokens>[1]): string | undefined =>
+  pickTextTokens(needle, platform)[0];
+
+test.describe('pickTextTokens', () => {
+  test('every distinct safe word, longest first (the first of equal ones first)', () => {
+    expect(pickTextTokens('Item 9', 'ios')).toEqual(['item', '9']);
+    expect(pickTextTokens('Item 9', 'android')).toEqual(['item', '9']);
+    expect(pickTextTokens('Pie Pot of Apple', 'ios')).toEqual(['apple', 'pie', 'pot', 'of']);
+    expect(pickTextTokens('Apple apple APPLE pie', 'android')).toEqual(['apple', 'pie']);
+    expect(pickTextTokens('  Personal   Hotspot ', 'ios')).toEqual(['personal', 'hotspot']);
+  });
+
+  test(`at most ${MAX_TEXT_TOKENS} words: the longest ones are kept`, () => {
+    expect(MAX_TEXT_TOKENS).toBe(4);
+    expect(pickTextTokens('a bb ccc dddd eeeee ffffff', 'ios')).toEqual(['ffffff', 'eeeee', 'dddd', 'ccc']);
+    expect(pickTextTokens('one two three four five six', 'android')).toEqual(['three', 'four', 'five', 'one']);
+  });
+
+  test('an unsafe word is left out, the safe ones are kept', () => {
+    expect(pickTextTokens('a`very`long pie of $5', 'ios')).toEqual(['pie', 'of']);
+    expect(pickTextTokens('ΟΔΟΣ Airport', 'android')).toEqual(['airport']);
+    expect(pickTextTokens('İstanbul Airport 2', 'android')).toEqual(['airport', '2']);
+    expect(pickTextTokens('नमस्ते Hello World', 'ios')).toEqual(['hello', 'world']);
+    expect(pickTextTokens('`x` $y', 'ios')).toEqual([]);
+    expect(pickTextTokens('Apple', 'web')).toEqual([]);
+  });
+
   test('the longest word of the normalised needle; the first of equal ones', () => {
-    expect(pickTextToken('Apple Pie', 'android')).toBe('apple');
-    expect(pickTextToken('Pie Pot', 'ios')).toBe('pie');
-    expect(pickTextToken('  Personal   Hotspot ', 'ios')).toBe('personal');
-    expect(pickTextToken('Wi Fi', 'ios')).toBe('wi');
+    expect(longest('Apple Pie', 'android')).toBe('apple');
+    expect(longest('Pie Pot', 'ios')).toBe('pie');
+    expect(longest('  Personal   Hotspot ', 'ios')).toBe('personal');
+    expect(longest('Wi Fi', 'ios')).toBe('wi');
   });
 
   test('NBSP and newlines split words, as the rule\'s normaliser treats them as spaces', () => {
-    expect(pickTextToken('Blue\u00a0Chinos\nXL', 'android')).toBe('chinos');
+    expect(longest('Blue\u00a0Chinos\nXL', 'android')).toBe('chinos');
     expect(normaliseText('Blue\u00a0Chinos\nXL')).toBe('blue chinos xl');
   });
 
   test('a blank needle, or a platform other than android / ios: no word (not narrowed)', () => {
-    expect(pickTextToken('   ', 'android')).toBeUndefined();
-    expect(pickTextToken('', 'ios')).toBeUndefined();
-    expect(pickTextToken('Apple', 'web')).toBeUndefined();
-    expect(pickTextToken('Apple', 'macos')).toBeUndefined();
-    expect(pickTextToken('Apple', undefined)).toBeUndefined();
+    expect(longest('   ', 'android')).toBeUndefined();
+    expect(longest('', 'ios')).toBeUndefined();
+    expect(longest('Apple', 'web')).toBeUndefined();
+    expect(longest('Apple', 'macos')).toBeUndefined();
+    expect(longest('Apple', undefined)).toBeUndefined();
   });
 
   test('ios: a word with a backtick or $ is skipped for the next safe one; none safe = not narrowed', () => {
-    expect(pickTextToken('a`very`long pie', 'ios')).toBe('pie');
-    expect(pickTextToken('$100000 off', 'ios')).toBe('off');
-    expect(pickTextToken('`x` $y', 'ios')).toBeUndefined();
+    expect(longest('a`very`long pie', 'ios')).toBe('pie');
+    expect(longest('$100000 off', 'ios')).toBe('off');
+    expect(longest('`x` $y', 'ios')).toBeUndefined();
     // Android carries both in an XPath literal.
-    expect(pickTextToken('a`very`long pie', 'android')).toBe('a`very`long');
-    expect(pickTextToken('$100000 off', 'android')).toBe('$100000');
+    expect(longest('a`very`long pie', 'android')).toBe('a`very`long');
+    expect(longest('$100000 off', 'android')).toBe('$100000');
   });
 
   test('ios: only words of scripts without spacing or conjoining marks are narrowed on; else the next longest safe word', () => {
     // Safe: Latin, Greek, Cyrillic, Han, Hiragana / Katakana, Hangul syllables, digits, ASCII punctuation.
     for (const word of ['straße', 'οδος', 'привет', '東京', 'ひらがな', 'コーヒー', '안녕하세요', '12:30', 'a-b_c!']) {
-      expect(pickTextToken(word, 'ios')).toBe(word);
+      expect(longest(word, 'ios')).toBe(word);
     }
     // Unsafe scripts or characters: the next longest safe word is taken.
-    expect(pickTextToken('नमस्ते Hello', 'ios')).toBe('hello');
-    expect(pickTextToken('สวัสดีครับ hi', 'ios')).toBe('hi');
-    expect(pickTextToken('مرحبا ok', 'ios')).toBe('ok');
-    expect(pickTextToken('שלום ok', 'ios')).toBe('ok');
-    expect(pickTextToken('ﾃﾞｰﾀ ok', 'ios')).toBe('ok');
-    expect(pickTextToken('\u1112\u1161 ok', 'ios')).toBe('ok');
-    expect(pickTextToken('\u20ac100 ok', 'ios')).toBe('ok');
-    expect(pickTextToken('नमस्ते', 'ios')).toBeUndefined();
+    expect(longest('नमस्ते Hello', 'ios')).toBe('hello');
+    expect(longest('สวัสดีครับ hi', 'ios')).toBe('hi');
+    expect(longest('مرحبا ok', 'ios')).toBe('ok');
+    expect(longest('שלום ok', 'ios')).toBe('ok');
+    expect(longest('ﾃﾞｰﾀ ok', 'ios')).toBe('ok');
+    expect(longest('\u1112\u1161 ok', 'ios')).toBe('ok');
+    expect(longest('\u20ac100 ok', 'ios')).toBe('ok');
+    expect(longest('नमस्ते', 'ios')).toBeUndefined();
     // Android is not restricted this way.
-    expect(pickTextToken('नमस्ते Hello', 'android')).toBe('नमस्ते');
+    expect(longest('नमस्ते Hello', 'android')).toBe('नमस्ते');
   });
 
   test('ios: emoji, combining marks and joiners are not narrowed on (NSPredicate matches whole character sequences)', () => {
-    expect(pickTextToken('👍 Like', 'ios')).toBe('like');
-    expect(pickTextToken('👍', 'ios')).toBeUndefined();
-    expect(pickTextToken('cafe\u0301', 'ios')).toBeUndefined();
-    expect(pickTextToken('👍', 'android')).toBe('👍');
+    expect(longest('👍 Like', 'ios')).toBe('like');
+    expect(longest('👍', 'ios')).toBeUndefined();
+    expect(longest('cafe\u0301', 'ios')).toBeUndefined();
+    expect(longest('👍', 'android')).toBe('👍');
   });
 
   test('android: a sigma, and the dot of İ (its lowercase is i + U+0307), are not narrowed on', () => {
-    expect(pickTextToken('ΟΔΟΣ', 'android')).toBeUndefined();
-    expect(pickTextToken('İstanbul', 'android')).toBeUndefined();
+    expect(longest('ΟΔΟΣ', 'android')).toBeUndefined();
+    expect(longest('İstanbul', 'android')).toBeUndefined();
     expect(normaliseText('İstanbul')).toBe('i\u0307stanbul');
-    expect(pickTextToken('İstanbul Airport', 'android')).toBe('airport');
-    expect(pickTextToken('ΟΔΟΣ', 'ios')).toBe('οδος');
+    expect(longest('İstanbul Airport', 'android')).toBe('airport');
+    expect(longest('ΟΔΟΣ', 'ios')).toBe('οδος');
   });
 
   test('quotes, backslashes, % and ] are carried on both platforms; ß stays ß', () => {
     for (const p of ['android', 'ios'] as const) {
-      expect(pickTextToken('say "hello"', p)).toBe('"hello"');
-      expect(pickTextToken("it's", p)).toBe("it's");
-      expect(pickTextToken('C:\\dir', p)).toBe('c:\\dir');
-      expect(pickTextToken('100%', p)).toBe('100%');
-      expect(pickTextToken('a]b', p)).toBe('a]b');
-      expect(pickTextToken('Straße', p)).toBe('straße');
+      expect(longest('say "hello"', p)).toBe('"hello"');
+      expect(longest("it's", p)).toBe("it's");
+      expect(longest('C:\\dir', p)).toBe('c:\\dir');
+      expect(longest('100%', p)).toBe('100%');
+      expect(longest('a]b', p)).toBe('a]b');
+      expect(longest('Straße', p)).toBe('straße');
     }
   });
 });
@@ -160,29 +187,42 @@ test.describe('narrowedTextQueries — android: one XPath per base kind', () => 
   ];
   for (const [selector, query] of cases) {
     test(JSON.stringify(selector), () => {
-      expect(narrowedTextQueries(selector, 'android', 'apple')).toEqual(query === null ? null : [query]);
+      expect(narrowedTextQueries(selector, 'android', ['apple'])).toEqual(query === null ? null : [query]);
     });
   }
 
   test('the translate() covers every character that lowercases to a character of the word', () => {
     // K: K and the Kelvin sign; i: I and İ (whose lowercase starts with i).
-    expect(narrowedTextQueries('~r', 'android', 'kiwi')).toEqual([
+    expect(narrowedTextQueries('~r', 'android', ['kiwi'])).toEqual([
       androidQuery("//*[@content-desc='r']", "contains(translate(@text, 'K\u212aI\u0130W', 'kkiiw'), 'kiwi')"),
     ]);
     // å: Å and the Angstrom sign; ǆ: Ǆ and its titlecase ǅ.
-    expect(narrowedTextQueries('~r', 'android', 'åǆ')![0]).toContain("translate(@text, '\u00c5\u212b\u01c4\u01c5', 'ååǆǆ')");
+    expect(narrowedTextQueries('~r', 'android', ['åǆ'])![0]).toContain("translate(@text, '\u00c5\u212b\u01c4\u01c5', 'ååǆǆ')");
   });
 
   test('a word without cased characters is compared as it is', () => {
-    expect(narrowedTextQueries('~r', 'android', '100%')).toEqual([
+    expect(narrowedTextQueries('~r', 'android', ['100%'])).toEqual([
       androidQuery("//*[@content-desc='r']", "contains(@text, '100%')"),
     ]);
   });
 
   test('escaping: the word is an XPath literal (concat() for both quotes)', () => {
     const word = `it's"x"`;
-    const q = narrowedTextQueries('~r', 'android', word)![0];
+    const q = narrowedTextQueries('~r', 'android', [word])![0];
     expect(q).toContain(`, concat('it', "'", 's"x"'))`);
+  });
+
+  test('several words: every one in the own text, or every one in some descendant, each with its own lowercase map', () => {
+    expect(narrowedTextQueries('~row', 'android', pickTextTokens('Item 9', 'android'))).toEqual([
+      "(//*[@content-desc='row'])[(contains(translate(@text, 'IİTEM', 'iitem'), 'item') and contains(@text, '9'))" +
+      " or (.//*[not(@showing-hint='true') and contains(translate(@text, 'IİTEM', 'iitem'), 'item')]" +
+      " and .//*[not(@showing-hint='true') and contains(@text, '9')])]",
+    ]);
+  });
+
+  test('a word the query cannot carry: null (pickTextTokens never passes one)', () => {
+    expect(narrowedTextQueries('~r', 'android', ['apple', 'οδος'])).toBeNull();
+    expect(narrowedTextQueries('~r', 'android', [])).toBeNull();
   });
 });
 
@@ -243,18 +283,33 @@ test.describe('narrowedTextQueries — ios: two disjoint queries per base kind',
   ];
   for (const [selector, queries] of cases) {
     test(JSON.stringify(selector), () => {
-      expect(narrowedTextQueries(selector, 'ios', 'apple')).toEqual(queries);
+      expect(narrowedTextQueries(selector, 'ios', ['apple'])).toEqual(queries);
     });
   }
 
   test('escaping: \\ and " in the word are escaped for NSPredicate', () => {
-    const [own] = narrowedTextQueries('~r', 'ios', 'c:\\"dir"')!;
+    const [own] = narrowedTextQueries('~r', 'ios', ['c:\\"dir"'])!;
     expect(own).toContain('label CONTAINS[cd] "c:\\\\\\"dir\\"" OR value CONTAINS[cd] "c:\\\\\\"dir\\""');
   });
 
-  test('an unknown or web platform: null', () => {
-    expect(narrowedTextQueries('~row', undefined, 'apple')).toBeNull();
-    expect(narrowedTextQueries('~row', 'web', 'apple')).toBeNull();
+  test('an unknown or web platform, or no word: null', () => {
+    expect(narrowedTextQueries('~row', undefined, ['apple'])).toBeNull();
+    expect(narrowedTextQueries('~row', 'web', ['apple'])).toBeNull();
+    expect(narrowedTextQueries('~row', 'ios', [])).toBeNull();
+  });
+
+  test('several words: own = every word in the label, or every word in the value; descendant = the longest word only', () => {
+    const own = '(label CONTAINS[cd] "item" AND label CONTAINS[cd] "9") OR (value CONTAINS[cd] "item" AND value CONTAINS[cd] "9")';
+    const longestOnly = 'label CONTAINS[cd] "item" OR value CONTAINS[cd] "item"';
+    const desc = `[\`NOT (${longestOnly})\`][$type == "XCUIElementTypeStaticText" AND (${longestOnly})$]`;
+    expect(narrowedTextQueries('~row', 'ios', pickTextTokens('Item 9', 'ios'))).toEqual([
+      `-ios class chain:**/*[\`name == "row"\`][\`${own}\`]`,
+      `-ios class chain:**/*[\`name == "row"\`]${desc}`,
+    ]);
+    expect(narrowedTextQueries('-ios predicate string:type == "XCUIElementTypeCell"', 'ios', ['item', '9'])).toEqual([
+      `-ios predicate string:(type == "XCUIElementTypeCell") AND (${own})`,
+      `-ios class chain:**/*[\`type == "XCUIElementTypeCell"\`]${desc}`,
+    ]);
   });
 });
 
@@ -267,6 +322,8 @@ test.describe('narrowedTextQueries — ios: two disjoint queries per base kind',
 const ESCAPING_NEEDLES = [
   'say "hi"', "it's", `it's "both"`, `it's"x"`, 'C:\\dir\\', '100%', 'a`b', '$5 off', 'a]b', 'Blue\u00a0Chinos',
   'line1\nline2', '👍 Like', 'KI', 'Straße', 'KELVIN',
+  // Several words: split across children, case folding per word, an unsafe word left out.
+  'Item 9', 'Kiwi Pie', 'Item 9 of the list', 'ΟΔΟΣ Airport',
 ];
 
 /** Element texts each needle is checked against (case variants, the Kelvin sign, İ, ẞ). */
@@ -274,7 +331,14 @@ function textsFor(needle: string): string[] {
   return [
     needle, needle.toUpperCase(), `Prefix ${needle} suffix`, `${needle.toLowerCase()}!`,
     'unrelated', 'kelvin', '\u212aELVIN', 'STRASSE', 'STRAẞE', 'kİ', 'Kİ',
+    needle.replace(/k/gi, 'K'), 'Item 19', 'Item 90 - Lorem', 'Pie Kiwi', 'airport',
   ];
+}
+
+/** `t` cut in two at its first whitespace (`null` for one word): the two children of a split row. */
+function splitInTwo(t: string): [string, string] | null {
+  const m = t.match(/^(\S*)\s+(.*)$/s);
+  return m && m[1] !== '' && m[2].trim() !== '' ? [m[1], m[2]] : null;
 }
 
 test.describe('escaping fixtures — android, evaluated by a real XPath 1.0 engine', () => {
@@ -283,23 +347,28 @@ test.describe('escaping fixtures — android, evaluated by a real XPath 1.0 engi
 
   for (const needle of ESCAPING_NEEDLES) {
     test(JSON.stringify(needle), async ({ page }) => {
-      const token = pickTextToken(needle, 'android');
-      expect(token).toBeDefined();
-      const [query] = narrowedTextQueries('~row', 'android', token!)!;
+      const tokens = pickTextTokens(needle, 'android');
+      expect(tokens.length).toBeGreaterThan(0);
+      const [query] = narrowedTextQueries('~row', 'android', tokens)!;
+      expect(narrowedWords(query)).toEqual(tokens);
 
       // One own-text row and one container row (text in a child) per text,
-      // a hint field showing the text, and a row outside the base.
+      // a container whose text is split across two children, a hint field
+      // showing the text, and a row outside the base.
       const texts = textsFor(needle);
-      const nodes: Array<{ uid: string; own: string; child?: string; hint?: boolean; inBase: boolean }> = [];
+      const nodes: Array<{ uid: string; own: string; children?: string[]; hint?: boolean; inBase: boolean }> = [];
       texts.forEach((t, i) => {
         nodes.push({ uid: `own${i}`, own: t, inBase: true });
-        nodes.push({ uid: `box${i}`, own: '', child: t, inBase: true });
-        nodes.push({ uid: `hintbox${i}`, own: '', child: t, hint: true, inBase: true });
+        nodes.push({ uid: `box${i}`, own: '', children: [t], inBase: true });
+        const split = splitInTwo(t);
+        if (split) nodes.push({ uid: `split${i}`, own: '', children: split, inBase: true });
+        nodes.push({ uid: `hintbox${i}`, own: '', children: [t], hint: true, inBase: true });
         nodes.push({ uid: `other${i}`, own: t, inBase: false });
       });
       const xml = '<hierarchy><android.widget.FrameLayout uid="root" text="">' + nodes.map(n =>
         `<android.widget.LinearLayout uid="${n.uid}" text="${xmlAttr(n.own)}" content-desc="${n.inBase ? 'row' : 'other'}">` +
-        (n.child !== undefined ? `<android.widget.TextView uid="${n.uid}-c" text="${xmlAttr(n.child)}"${n.hint ? ' showing-hint="true"' : ''}/>` : '') +
+        (n.children ?? []).map((c, k) =>
+          `<android.widget.TextView uid="${n.uid}-c${k}" text="${xmlAttr(c)}"${n.hint ? ' showing-hint="true"' : ''}/>`).join('') +
         '</android.widget.LinearLayout>').join('') + '</android.widget.FrameLayout></hierarchy>';
 
       const found: string[] = await page.evaluate(([x, q]) => {
@@ -311,19 +380,26 @@ test.describe('escaping fixtures — android, evaluated by a real XPath 1.0 engi
         return out;
       }, [xml, query] as const);
 
-      // The rule's text of each base row: its own, else its (non-hint) child's.
-      const ruleText = (n: typeof nodes[number]) => n.own.trim() !== '' ? n.own : (n.hint ? '' : n.child ?? '');
+      // The rule's text of each base row: its own, else its (non-hint) children's, joined.
+      const ruleText = (n: typeof nodes[number]) => n.own.trim() !== ''
+        ? n.own
+        : (n.hint ? '' : (n.children ?? []).map(c => c.trim()).filter(c => c !== '').join(' '));
       const wanted = normaliseText(needle);
       const mustHit = nodes.filter(n => n.inBase && normaliseText(ruleText(n)).includes(wanted)).map(n => n.uid);
       expect(mustHit.length).toBeGreaterThan(0);
       for (const uid of mustHit) expect(found).toContain(uid);
+      if (splitInTwo(needle)) expect(found).toContain(`split${texts.indexOf(needle)}`);
       // Only base rows, in document order.
       const baseOrder = nodes.filter(n => n.inBase).map(n => n.uid);
       expect(found.every(uid => baseOrder.includes(uid))).toBe(true);
       expect([...found].sort((a, b) => baseOrder.indexOf(a) - baseOrder.indexOf(b))).toEqual(found);
-      // The hint child is never a reason for a hit.
-      for (const n of nodes.filter(n => n.hint)) {
-        expect(found.includes(n.uid)).toBe(normaliseText(n.own).includes(token!));
+      // The hint child is never a reason for a hit (the hint rows have no own text).
+      for (const n of nodes.filter(n => n.hint)) expect(found).not.toContain(n.uid);
+      // Every word is required: a row whose text lacks one is no hit.
+      const lc = (s: string) => s.replace(/K/g, 'k').replace(/İ/g, 'i').toLowerCase();
+      for (const n of nodes.filter(n => n.inBase && !n.hint)) {
+        const all = [n.own, ...(n.children ?? [])].map(lc).join(' ');
+        if (tokens.some(t => !all.includes(t))) expect(found).not.toContain(n.uid);
       }
     });
   }
@@ -332,32 +408,55 @@ test.describe('escaping fixtures — android, evaluated by a real XPath 1.0 engi
 test.describe('escaping fixtures — ios, decoded as NSPredicate and evaluated as CONTAINS[cd]', () => {
   for (const needle of ESCAPING_NEEDLES) {
     test(JSON.stringify(needle), async () => {
-      const token = pickTextToken(needle, 'ios');
-      if (needle === 'a`b') { expect(token).toBeUndefined(); return; }
-      expect(token).toBeDefined();
-      const queries = narrowedTextQueries('~row', 'ios', token!)!;
+      const tokens = pickTextTokens(needle, 'ios');
+      if (needle === 'a`b') { expect(tokens).toEqual([]); return; }
+      expect(tokens.length).toBeGreaterThan(0);
+      const queries = narrowedTextQueries('~row', 'ios', tokens)!;
       expect(queries).toHaveLength(2);
       for (const q of queries) {
         expect(isNarrowedQuery(q)).toBe(true);
         const literal = q.match(/label CONTAINS\[cd\] "((?:[^"\\]|\\.)*)"/)![1];
-        expect(decodePredicateString(literal)).toBe(token);
+        expect(decodePredicateString(literal)).toBe(tokens[0]);
       }
+      expect(narrowedWords(queries[0])).toEqual(tokens);
+      expect(narrowedWords(queries[1])).toEqual([tokens[0]]);
 
+      // Per text: a cell by label, a cell by value, a text input by value
+      // (its label holds the text too, or only its label does), a container
+      // with one StaticText, one with the text split across two, and a cell
+      // whose label holds the first word and value the rest.
       const texts = textsFor(needle);
-      const cells = texts.map((t, i) => iosRaw({ id: `cell${i}`, name: 'row', label: t }));
-      const boxes = texts.map((t, i) => iosRaw({
-        id: `box${i}`, name: 'row', label: null,
-        children: [{ id: `box${i}-t`, type: 'XCUIElementTypeStaticText', label: t }],
-      }));
-      const all = [...cells, ...boxes];
+      const st = (id: string, label: string) => ({ id, type: 'XCUIElementTypeStaticText', label });
+      const all = texts.flatMap((t, i) => {
+        const split = splitInTwo(t);
+        return [
+          iosRaw({ id: `cell${i}`, name: 'row', label: t }),
+          iosRaw({ id: `val${i}`, name: 'row', label: null, value: t }),
+          iosRaw({ id: `input${i}`, name: 'row', type: 'XCUIElementTypeTextField', label: 'Name', value: t }),
+          iosRaw({ id: `inputlabel${i}`, name: 'row', type: 'XCUIElementTypeTextField', label: t, value: 'typed' }),
+          iosRaw({ id: `box${i}`, name: 'row', label: null, children: [st(`box${i}-t`, t)] }),
+          ...(split ? [
+            iosRaw({ id: `split${i}`, name: 'row', label: null, children: [st(`split${i}-a`, split[0]), st(`split${i}-b`, split[1])] }),
+            iosRaw({ id: `lv${i}`, name: 'row', label: split[0], value: split[1] }),
+          ] : []),
+        ];
+      });
       const own = answerNarrowed(queries[0], b => (b === '~row' ? all : undefined))!;
       const desc = answerNarrowed(queries[1], b => (b === '~row' ? all : undefined))!;
       // Disjoint, and together they hold every element the rule could choose.
       expect(own.filter(r => desc.includes(r))).toEqual([]);
       const wanted = normaliseText(needle);
+      let chosen = 0;
       for (const raw of all) {
         const text = await readPlatformText(raw, 'ios');
-        if (normaliseText(text ?? '').includes(wanted)) expect([...own, ...desc]).toContain(raw);
+        if (normaliseText(text ?? '').includes(wanted)) { chosen++; expect([...own, ...desc]).toContain(raw); }
+      }
+      expect(chosen).toBeGreaterThan(0);
+      if (splitInTwo(needle)) expect(desc.map(r => r.elementId)).toContain('split0');
+      // Several words: the label / value split is no own hit (the rule reads the label only).
+      if (tokens.length > 1 && splitInTwo(needle)) {
+        expect(own.map(r => r.elementId)).not.toContain('lv0');
+        expect(own.map(r => r.elementId)).toContain('inputlabel0');
       }
     });
   }
@@ -531,6 +630,82 @@ test.describe('narrowed TEXT keeps the rule', () => {
     expect(exact.resolvedElement.elementId).toBe('field');
   });
 
+  test('android: the words split across two TextViews of a container, read only that row', async () => {
+    const server = new MockServer('android', [
+      { id: 'pie', name: 'row', text: 'Pie' },
+      { id: 'apple', name: 'row', text: '', children: [{ id: 'a1', text: 'Apple' }, { id: 'a2', text: 'Tart' }] },
+      { id: 'box', name: 'row', text: '', children: [{ id: 'b1', text: 'Kiwi' }, { id: 'b2', text: 'Pie' }] },
+    ]);
+    const el = await byText(repoOver(server, { 'accessibility id': 'row' }), 'kiwi pie') as PlatformElement;
+    expect(el.resolvedElement.elementId).toBe('box');
+    expect(server.log.filter(e => !e.startsWith('find ')).every(e => /^(box|b1|b2):/.test(e))).toBe(true);
+  });
+
+  test('ios: the words split across two StaticTexts of a container', async () => {
+    const st = (id: string, label: string): MockNode => ({ id, type: 'XCUIElementTypeStaticText', label });
+    const server = new MockServer('ios', [
+      { id: 'kiwi', name: 'row', label: 'Kiwi' },
+      { id: 'box', name: 'row', label: null, children: [st('b1', 'Kiwi'), st('b2', 'Pie')] },
+    ]);
+    const el = await byText(repoOver(server, { 'accessibility id': 'row' }), 'Kiwi Pie') as PlatformElement;
+    expect(el.resolvedElement.elementId).toBe('box');
+    expect(server.log.some(e => e.startsWith('kiwi:'))).toBe(false);
+  });
+
+  test('ios: a text input whose label holds the words but whose value does not is no match (the rule reads its value)', async () => {
+    const server = new MockServer('ios', [
+      { id: 'field', name: 'row', type: 'XCUIElementTypeTextField', label: 'Kiwi Pie', value: 'typed' },
+      { id: 'cell', name: 'row', label: 'Fresh Kiwi Pie' },
+    ]);
+    const el = await byText(repoOver(server, { 'accessibility id': 'row' }), 'Kiwi Pie') as PlatformElement;
+    expect(el.resolvedElement.elementId).toBe('cell');
+  });
+
+  test('ios: one word in the label and the other in the value is no own hit (the rule reads one attribute)', async () => {
+    const server = new MockServer('ios', [
+      { id: 'lv', name: 'row', label: 'Kiwi', value: 'Pie' },
+      { id: 'cell', name: 'row', label: 'Kiwi Pie' },
+    ]);
+    const el = await byText(repoOver(server, { 'accessibility id': 'row' }), 'Kiwi Pie') as PlatformElement;
+    expect(el.resolvedElement.elementId).toBe('cell');
+    expect(server.log.some(e => e.startsWith('lv:'))).toBe(false);
+  });
+
+  test('a word that folds case per word (the Kelvin sign, İ) is matched on both platforms; a sigma word is left out', async () => {
+    const android = new MockServer('android', [
+      { id: 'other', name: 'row', text: 'Kiwi Tart' },
+      { id: 'kelvin', name: 'row', text: 'KIWI PIE' },
+    ]);
+    const a = await byText(repoOver(android, { 'accessibility id': 'row' }), 'kiwi pie') as PlatformElement;
+    expect(a.resolvedElement.elementId).toBe('kelvin');
+    expect(android.log.some(e => e.startsWith('other:'))).toBe(false);
+    // ΟΔΟΣ is unsafe on android: only "airport" narrows, the rule still picks the row.
+    const sigma = new MockServer('android', [
+      { id: 'a', name: 'row', text: 'Airport' },
+      { id: 'b', name: 'row', text: 'ΟΔΟΣ Airport' },
+    ]);
+    const s = await byText(repoOver(sigma, { 'accessibility id': 'row' }), 'ΟΔΟΣ Airport') as PlatformElement;
+    expect(s.resolvedElement.elementId).toBe('b');
+    expect(narrowedWords(sigma.finds()[0])).toEqual(['airport']);
+    // İ lowercases to i + U+0307: its word is left out on both platforms, the others narrow.
+    for (const platform of ['android', 'ios'] as const) {
+      const node = (id: string, t: string): MockNode => (platform === 'android' ? { id, name: 'row', text: t } : { id, name: 'row', label: t });
+      const server = new MockServer(platform, [node('x', 'Ankara Airport'), node('y', 'İstanbul Airport'), node('z', 'İstanbul Tour')]);
+      const i = await byText(repoOver(server, { 'accessibility id': 'row' }), 'İstanbul Airport') as PlatformElement;
+      expect(i.resolvedElement.elementId).toBe('y');
+      expect(narrowedWords(server.finds()[0])).toEqual(['airport']);
+      expect(server.log.some(e => e.startsWith('z:'))).toBe(false);
+    }
+    // ios: CONTAINS[cd] folds case per word.
+    const ios = new MockServer('ios', [
+      { id: 'x', name: 'row', label: 'Kiwi Tart' },
+      { id: 'y', name: 'row', label: 'KIWI PIE' },
+    ]);
+    const k = await byText(repoOver(ios, { 'accessibility id': 'row' }), 'kiwi pie') as PlatformElement;
+    expect(k.resolvedElement.elementId).toBe('y');
+    expect(ios.log.some(e => e.startsWith('x:'))).toBe(false);
+  });
+
   for (const platform of ['android', 'ios'] as const) {
     test(`${platform}: document order with duplicates — the first exact match`, async () => {
       const node = (id: string, t: string): MockNode => (platform === 'android' ? { id, name: 'row', text: t } : { id, name: 'row', label: t });
@@ -618,6 +793,49 @@ test.describe('narrowed TEXT costs', () => {
     const full = new MockServer('ios', rows, LATENCY);
     await byText(repoOver(full, { xpath: '//XCUIElementTypeCell' }), 'Nectarine');
     expect(full.log).toHaveLength(1 + 2 * 16);
+  });
+
+  test('"Item 9" among "Item N - Lorem ipsum" rows: every word narrows, so only that row is read', async () => {
+    const ITEMS = Array.from({ length: 16 }, (_, i) => `Item ${i + 1} - Lorem ipsum dolor`);
+    // android: 1 query + 1 text read.
+    const android = new MockServer('android', ITEMS.map((t, i): MockNode => ({ id: `r${i}`, name: 'row', text: t })), LATENCY);
+    const a = await byText(repoOver(android, { 'accessibility id': 'row' }), 'Item 9') as PlatformElement;
+    expect(a.resolvedElement.elementId).toBe('r8');
+    expect(android.log).toEqual([expect.stringMatching(/^find \(/), 'r8:text']);
+    expect(narrowedWords(android.finds()[0])).toEqual(['item', '9']);
+
+    // ios: 2 queries + the one hit's type and label reads; the own list is that row only.
+    const iosRows = ITEMS.map((t, i): MockNode => ({ id: `r${i}`, name: 'row', label: t }));
+    const ios = new MockServer('ios', iosRows, LATENCY);
+    const b = await byText(repoOver(ios, { 'accessibility id': 'row' }), 'Item 9') as PlatformElement;
+    expect(b.resolvedElement.elementId).toBe('r8');
+    expect(ios.log).toEqual([
+      expect.stringMatching(/^find -ios class chain:/), expect.stringMatching(/^find -ios class chain:/),
+      expect.stringMatching(/^r8:(tag|label)$/), expect.stringMatching(/^r8:(tag|label)$/),
+    ]);
+    const [ownQuery] = narrowedTextQueries('~row', 'ios', pickTextTokens('Item 9', 'ios'))!;
+    const listed = new MockServer('ios', iosRows);
+    expect(answerNarrowed(ownQuery, base => (base === '~row' ? iosRows.map(n => listed.raw(n)) : undefined))!
+      .map(r => r.elementId)).toEqual(['r8']);
+    // The longest word alone would hold every row.
+    const [longestOnly] = narrowedTextQueries('~row', 'ios', ['item'])!;
+    expect(answerNarrowed(longestOnly, base => (base === '~row' ? iosRows.map(n => listed.raw(n)) : undefined))!)
+      .toHaveLength(16);
+
+    // getByText sends the same queries and reads only that row too.
+    const ios2 = new MockServer('ios', iosRows, LATENCY);
+    const c = await repoOver(ios2, { 'accessibility id': 'row' }).getByText('rows', 'List', 'Item 9') as PlatformElement;
+    expect(c.resolvedElement.elementId).toBe('r8');
+    expect(ios2.log.filter(e => !e.startsWith('find ')).every(e => e.startsWith('r8:'))).toBe(true);
+  });
+
+  test('a single-word needle every row contains still reads every row', async () => {
+    const ITEMS = Array.from({ length: 16 }, (_, i) => `Item ${i + 1}`);
+    const server = new MockServer('android', ITEMS.map((t, i): MockNode => ({ id: `r${i}`, name: 'row', text: t })));
+    const el = await byText(repoOver(server, { 'accessibility id': 'row' }), 'item') as PlatformElement;
+    expect(el.resolvedElement.elementId).toBe('r0');
+    // Contains matches only: every hit is read for an exact one.
+    expect(server.log.filter(e => e.endsWith(':text'))).toHaveLength(16);
   });
 
   test('a miss: each poll costs 1 query on android and 2 on ios, and polls until the deadline (clean miss)', async () => {

@@ -7,14 +7,18 @@
  * every match of the entry's selector. On iOS WebDriverAgent serialises
  * requests, so reading every match of a long list costs seconds. A narrowed
  * lookup first asks the driver for a SUPERSET of the elements whose text
- * could match: the matches of the selector whose own text, or the text of a
- * descendant, contains one word (token) of the wanted text. The rule is then
- * applied only to those hits, in the order the driver returned them.
+ * could match: the matches of the selector whose own text, or the text of
+ * their descendants, contains every one of up to four words (tokens) of the
+ * wanted text. The rule is then applied only to those hits, in the order the
+ * driver returned them.
  *
  * The superset holds every element the rule could choose: the rule's
  * "contains" compares lowercased, whitespace-normalised text, so any text
  * that contains the wanted text contains each of its words, in the same
- * case-insensitive sense the composed query tests. When a query cannot be
+ * case-insensitive sense the composed query tests. The rule's text is one
+ * attribute (iOS `label` or `value`, Android `text`), or the joined text of
+ * the descendants, where no word spans two of them (a word holds no space).
+ * When a query cannot be
  * composed exactly (an unknown selector kind, a word the query cannot
  * express safely), the lookup is not narrowed.
  */
@@ -143,21 +147,28 @@ function isSafeToken(token: string, platform: Platform): boolean {
   return false;
 }
 
+/** The most words a narrowed lookup asks for (the longest ones). */
+export const MAX_TEXT_TOKENS = 4;
+
 /**
- * The word of `needle` a narrowed lookup asks for: the needle is normalised
- * with {@link normaliseText} and split on whitespace, and the longest word
- * (in characters; the first of equal ones) the platform's query can carry
- * is taken. `undefined` when there is none (a blank needle, or every word
- * unsafe), or the platform is not `android` / `ios`: the lookup is then not
- * narrowed.
+ * The words of `needle` a narrowed lookup asks for: the needle is
+ * normalised with {@link normaliseText} and split on whitespace, and its
+ * distinct words the platform's query can carry are taken, longest first
+ * (in characters; the first of equal ones first), at most
+ * {@link MAX_TEXT_TOKENS}. Empty when there is none (a blank needle, or
+ * every word unsafe), or the platform is not `android` / `ios`: the lookup
+ * is then not narrowed. An unsafe word is left out: any subset of the
+ * needle's words keeps the superset property.
  */
-export function pickTextToken(needle: string, platform: Platform | undefined): string | undefined {
-  if (platform !== 'android' && platform !== 'ios') return undefined;
-  const words = normaliseText(needle).split(/\s+/).filter(w => w !== '');
-  const byLength = words
+export function pickTextTokens(needle: string, platform: Platform | undefined): string[] {
+  if (platform !== 'android' && platform !== 'ios') return [];
+  const words = [...new Set(normaliseText(needle).split(/\s+/).filter(w => w !== ''))];
+  return words
     .map((word, i) => ({ word, i, length: Array.from(word).length }))
-    .sort((a, b) => b.length - a.length || a.i - b.i);
-  return byLength.find(w => isSafeToken(w.word, platform))?.word;
+    .sort((a, b) => b.length - a.length || a.i - b.i)
+    .filter(w => isSafeToken(w.word, platform))
+    .slice(0, MAX_TEXT_TOKENS)
+    .map(w => w.word);
 }
 
 // ---------------------------------------------------------------------------
@@ -277,42 +288,63 @@ function iosBaseClassChain(kind: SelectorKind): string | null {
   }
 }
 
+/** `parts` joined with `op`, in parentheses when there is more than one. */
+function conjunction(parts: string[], op: string): string {
+  return parts.length === 1 ? parts[0] : `(${parts.join(` ${op} `)})`;
+}
+
 /**
- * The narrowed queries for `selector` and `token` on `platform`, as
+ * The narrowed queries for `selector` and `tokens` on `platform`, as
  * WebdriverIO selector strings, or `null` when the selector's kind cannot be
- * narrowed (see {@link selectorKind}) or `platform` is neither `android` nor
- * `ios`. `token` must come from {@link pickTextToken} for the same
- * platform.
+ * narrowed (see {@link selectorKind}), `tokens` is empty or `platform` is
+ * neither `android` nor `ios`. `tokens` must come from
+ * {@link pickTextTokens} for the same platform (longest first); `t1` below
+ * is the longest token, `ck` the test "contains token k".
  *
- * - `android`: ONE XPath, the base's matches whose `text`, or the `text` of
- *   a descendant not showing a hint, contains the token case-insensitively
- *   (`translate()` over every character that lowercases to a character of
- *   the token): `(<base>)[contains(LC(@text), 't') or
- *   .//*[not(@showing-hint='true') and contains(LC(@text), 't')]]`.
- * - `ios`: TWO disjoint queries. Own: the base's matches whose `label` or
- *   `value` contains the token (`CONTAINS[cd]`); descendant: the base's
- *   other matches with an `XCUIElementTypeStaticText` descendant whose
- *   `label` or `value` contains it. A class chain base gets the predicates
+ * - `android`: ONE XPath, the base's matches whose `text` contains every
+ *   token, or that have, for every token, a descendant not showing a hint
+ *   whose `text` contains it (each case-insensitively: `translate()` over
+ *   every character that lowercases to a character of that token):
+ *   `(<base>)[(c1 and … and cn) or (.//*[nh and c1] and … and .//*[nh and cn])]`,
+ *   `ck` = `contains(LCk(@text), 'tk')`, `nh` = `not(@showing-hint='true')`
+ *   (no parentheses for one token).
+ * - `ios`: TWO disjoint queries. Own: the base's matches whose `label`
+ *   contains every token, or whose `value` does (`CONTAINS[cd]`;
+ *   `(label CONTAINS[cd] "t1" AND …) OR (value CONTAINS[cd] "t1" AND …)`,
+ *   or `label CONTAINS[cd] "t1" OR value CONTAINS[cd] "t1"` for one token):
+ *   the rule's text is one attribute. Descendant: the base's matches whose
+ *   `label` and `value` do not contain `t1`, with an
+ *   `XCUIElementTypeStaticText` descendant whose `label` or `value`
+ *   contains `t1`. A hit of the own query has an attribute containing
+ *   `t1`, so the two are disjoint. A class chain base gets the predicates
  *   appended to its last segment (not narrowed when that segment ends in
- *   an index); a predicate string base gets an `AND` for
- *   the own query and becomes the class chain `**\/*[`<pred>`]` for the
- *   descendant query.
+ *   an index); a predicate string base gets an `AND` for the own query and
+ *   becomes the class chain `**\/*[`<pred>`]` for the descendant query.
  */
-export function narrowedTextQueries(selector: string, platform: Platform | undefined, token: string): string[] | null {
+export function narrowedTextQueries(selector: string, platform: Platform | undefined, tokens: string[]): string[] | null {
   const kind = selectorKind(selector);
-  if (!kind) return null;
+  if (!kind || tokens.length === 0) return null;
   if (platform === 'android') {
     const base = androidBaseXPath(kind);
-    const map = androidLowercaseMap(token);
-    if (base === null || map === null) return null;
-    const text = map.from === '' ? '@text' : `translate(@text, ${xpathLiteral(map.from)}, ${xpathLiteral(map.to)})`;
-    const contains = `contains(${text}, ${xpathLiteral(token)})`;
-    return [`(${base})[${contains} or .//*[not(@showing-hint='true') and ${contains}]]`];
+    if (base === null) return null;
+    const conditions: string[] = [];
+    for (const token of tokens) {
+      const map = androidLowercaseMap(token);
+      if (map === null) return null;
+      const text = map.from === '' ? '@text' : `translate(@text, ${xpathLiteral(map.from)}, ${xpathLiteral(map.to)})`;
+      conditions.push(`contains(${text}, ${xpathLiteral(token)})`);
+    }
+    const own = conjunction(conditions, 'and');
+    const descendants = conjunction(conditions.map(c => `.//*[not(@showing-hint='true') and ${c}]`), 'and');
+    return [`(${base})[${own} or ${descendants}]`];
   }
   if (platform === 'ios') {
-    const t = escapeDoubleQuoted(token);
-    const own = `label CONTAINS[cd] "${t}" OR value CONTAINS[cd] "${t}"`;
-    const descendant = `[\`NOT (${own})\`][$type == "XCUIElementTypeStaticText" AND (${own})$]`;
+    const literals = tokens.map(t => `"${escapeDoubleQuoted(t)}"`);
+    const longest = `label CONTAINS[cd] ${literals[0]} OR value CONTAINS[cd] ${literals[0]}`;
+    const own = tokens.length === 1
+      ? longest
+      : ['label', 'value'].map(attr => conjunction(literals.map(l => `${attr} CONTAINS[cd] ${l}`), 'AND')).join(' OR ');
+    const descendant = `[\`NOT (${longest})\`][$type == "XCUIElementTypeStaticText" AND (${longest})$]`;
     if (kind.using === '-ios predicate string') {
       if (CLASS_CHAIN_DELIMITERS.test(kind.value)) return null;
       return [

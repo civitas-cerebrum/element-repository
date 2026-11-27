@@ -12,7 +12,7 @@ import {
 } from '../utils/abort';
 import { bindLookupSignal, runLookup } from '../utils/lookupSignal';
 import {
-  normaliseText, pickTextToken, narrowedTextQueries, runNarrowedQueries, pickFromHits,
+  normaliseText, pickTextTokens, narrowedTextQueries, runNarrowedQueries, pickFromHits,
   type TextVerdict, type NarrowedPick,
 } from '../utils/textNarrowing';
 
@@ -365,14 +365,15 @@ export class StrategyResolver {
    * every match, not only the text-matching one.
    *
    * Narrowing: on iOS and Android, a poll first asks the driver only for
-   * the matches whose text could match (see `textNarrowing`): the longest
-   * word of the value (normalised as above) the query can carry is looked
-   * for, case-insensitively, in each match's own text and in its
-   * descendants' text. Android sends ONE XPath (`(<base>)[contains(...) or
-   * .//*[...contains(...)]]`), iOS TWO disjoint queries (a class chain or
-   * predicate string for own `label` / `value`, a class chain for a match
-   * with a StaticText descendant). The rule above is applied only to those
-   * hits, in the order the driver returned them; on Android that is exactly
+   * the matches whose text could match (see `textNarrowing`): the distinct
+   * words of the value (normalised as above) the query can carry, the
+   * longest four, are looked for, case-insensitively, all in each match's
+   * own text or all in its descendants' text. Android sends ONE XPath
+   * (`(<base>)[(contains(...) and ...) or (.//*[...contains(...)] and
+   * ...)]`), iOS TWO disjoint queries (a class chain or predicate string
+   * for own `label` or own `value` holding every word, a class chain for a
+   * match whose StaticText descendant holds the longest word). The rule
+   * above is applied only to those hits, in the order the driver returned them; on Android that is exactly
    * the full pass's answer. On iOS, when the winning hits (the exact ones,
    * else the contains ones) come from both queries, their relative order is
    * unknown, so that poll runs the full pass. No hit is a clean miss for
@@ -478,8 +479,7 @@ export class StrategyResolver {
     // the hits of queries that hold every match whose text could match.
     // `null` = not narrowed: the selector kind, the platform or every word
     // of the value is not narrowable, or a narrowed query failed before.
-    const token = pickTextToken(value, textPlatform);
-    let queries = token === undefined ? null : narrowedTextQueries(selector, textPlatform, token);
+    let queries = narrowedTextQueries(selector, textPlatform, pickTextTokens(value, textPlatform));
     const judge = async (raw: any): Promise<TextVerdict> => {
       const text = await readText(raw);
       if (text === null) return 'none';

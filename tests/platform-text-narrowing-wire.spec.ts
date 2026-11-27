@@ -95,8 +95,14 @@ function repo(driver: any, platform: 'ios' | 'android', selector: Record<string,
   } as any, { platform, timeout: 1000 });
 }
 
-const OWN = 'label CONTAINS[cd] "apple" OR value CONTAINS[cd] "apple"';
-const ANDROID_COND = "contains(translate(@text, 'APLE', 'aple'), 'apple')";
+// "Apple Pie": both words in the own query, the longest one in the descendant query.
+const OWN = '(label CONTAINS[cd] "apple" AND label CONTAINS[cd] "pie") OR (value CONTAINS[cd] "apple" AND value CONTAINS[cd] "pie")';
+const LONGEST = 'label CONTAINS[cd] "apple" OR value CONTAINS[cd] "apple"';
+const DESC = `[\`NOT (${LONGEST})\`][$type == "XCUIElementTypeStaticText" AND (${LONGEST})$]`;
+const C_APPLE = "contains(translate(@text, 'APLE', 'aple'), 'apple')";
+const C_PIE = "contains(translate(@text, 'PIİE', 'piie'), 'pie')";
+const NH = "not(@showing-hint='true')";
+const ANDROID_COND = `(${C_APPLE} and ${C_PIE}) or (.//*[${NH} and ${C_APPLE}] and .//*[${NH} and ${C_PIE}])`;
 
 test.describe('narrowed text queries on the wire (WebdriverIO 10)', () => {
   let server: FakeServer | undefined;
@@ -118,7 +124,7 @@ test.describe('narrowed text queries on the wire (WebdriverIO 10)', () => {
     expect(el.selector).toBe('~row');
     expect(finds(server)).toEqual([
       { using: '-ios class chain', value: `**/*[\`name == "row"\`][\`${OWN}\`]` },
-      { using: '-ios class chain', value: `**/*[\`name == "row"\`][\`NOT (${OWN})\`][$type == "XCUIElementTypeStaticText" AND (${OWN})$]` },
+      { using: '-ios class chain', value: `**/*[\`name == "row"\`]${DESC}` },
     ]);
     expect(server.requests.some(r => r.path.endsWith('/element/row-2/attribute/label'))).toBe(true);
     expect(server.requests.some(r => r.path.includes('/element/row-1/'))).toBe(false);
@@ -131,7 +137,7 @@ test.describe('narrowed text queries on the wire (WebdriverIO 10)', () => {
       .get('rows', 'List', { strategy: SelectionStrategy.TEXT, value: 'Apple Pie' });
     expect(finds(server)).toEqual([
       { using: '-ios predicate string', value: `(type == "XCUIElementTypeCell") AND (${OWN})` },
-      { using: '-ios class chain', value: `**/*[\`type == "XCUIElementTypeCell"\`][\`NOT (${OWN})\`][$type == "XCUIElementTypeStaticText" AND (${OWN})$]` },
+      { using: '-ios class chain', value: `**/*[\`type == "XCUIElementTypeCell"\`]${DESC}` },
     ]);
   });
 
@@ -142,7 +148,7 @@ test.describe('narrowed text queries on the wire (WebdriverIO 10)', () => {
       .get('rows', 'List', { strategy: SelectionStrategy.TEXT, value: 'Apple Pie' }) as PlatformElement;
     expect(el.resolvedElement.elementId).toBe('row-2');
     expect(finds(server)).toEqual([
-      { using: 'xpath', value: `(//*[@content-desc='row'])[${ANDROID_COND} or .//*[not(@showing-hint='true') and ${ANDROID_COND}]]` },
+      { using: 'xpath', value: `(//*[@content-desc='row'])[${ANDROID_COND}]` },
     ]);
     expect(server.requests.filter(r => /\/element\/[^/]+\/text$/.test(r.path)).map(r => r.path.split('/')[4])).toEqual(['row-2']);
   });
