@@ -8,6 +8,7 @@ import { Element, PlatformElement } from '../types';
 import { detectDriverPlatform } from '../utils/platformText';
 import {
   pickTextTokens, narrowedTextQueries, runNarrowedQueries, pickFromHits, snapshotConfirmedComplete,
+  fullPassTruncation, type SnapshotState,
 } from '../utils/textNarrowing';
 import {
   SelectorFormatter,
@@ -520,6 +521,11 @@ export class ElementRepository {
    * `'narrowed'` (narrowed queries over a snapshot confirmed complete). A
    * non-strict miss returns `null`; pass `options.requireFullPass: true`
    * for a `null` (or a strict miss) always backed by comparing every match.
+   * After a full comparison misses, the depth check runs once (unless it
+   * ran before) when the selector's find reads the snapshot (any iOS
+   * selector; an Android XPath), and the error's `snapshotTruncated` is
+   * `true` when the snapshot was cut off, so a match below
+   * `snapshotMaxDepth` could have been missed (see `TextNotFoundError`).
    *
    * @param elementName The specific element name to look up.
    * @param pageName The name of the page block in the JSON repository.
@@ -549,8 +555,9 @@ export class ElementRepository {
     );
 
     const narrowed = await this.narrowedGetByText(base, pageName, desiredText, signal, requireFullPass);
-    if (narrowed) return narrowed;
-    if (narrowed === undefined) {
+    if (narrowed.kind === 'hit') return narrowed.element;
+    let snapshotTruncated: boolean | undefined = false;
+    if (narrowed.kind === 'unsettled') {
       throwIfAborted(signal);
       const allElements = await base.all();
 
@@ -565,12 +572,19 @@ export class ElementRepository {
 
       const index = texts.findIndex(text => text?.includes(desiredText));
       if (index >= 0) return allElements[index];
+
+      // The full comparison missed: whether a cut-off snapshot could hide
+      // a match from its find (the depth check runs now unless it ran before).
+      snapshotTruncated = base instanceof PlatformElement
+        ? await fullPassTruncation(base.driver, base.selector, narrowed.platform, signal, narrowed.snapshot)
+        : undefined;
     }
 
     // A text read that fails is not caught here, so a miss is always clean.
     throwIfAborted(signal);
     const notFound = new TextNotFoundError({
-      elementName, pageName, text: desiredText, cleanMiss: true, missBasis: narrowed === null ? 'narrowed' : 'full-pass',
+      elementName, pageName, text: desiredText, cleanMiss: true,
+      missBasis: narrowed.kind === 'miss' ? 'narrowed' : 'full-pass', snapshotTruncated,
     });
     if (strict) throw notFound;
     console.warn(notFound.message);
@@ -581,25 +595,32 @@ export class ElementRepository {
    * `getByText` on a platform element, narrowed (see `textNarrowing`): the
    * composed queries' hits are compared with `getByText`'s own rule (the
    * trimmed `textContent()` equal to `desiredText`, else the first that
-   * includes it, case-sensitively). Returns the match, `null` for a miss
-   * over a snapshot confirmed complete (see `snapshotConfirmedComplete`),
-   * or `undefined` when the narrowed answer does not settle the lookup (a
-   * web element, a selector kind or text that cannot be narrowed, a
-   * composed query the driver could not run, winning hits from two iOS
-   * queries whose relative order is unknown, a miss not confirmed, or any
-   * miss with `requireFullPass`): the caller then compares every match.
-   * With `signal`, the queries, the confirmation and the hits' reads check it.
+   * includes it, case-sensitively). Returns the match (`hit`), `miss` for
+   * a miss over a snapshot confirmed complete (see
+   * `snapshotConfirmedComplete`), or `unsettled` when the narrowed answer
+   * does not settle the lookup (a web element, a selector kind or text that
+   * cannot be narrowed, a composed query the driver could not run, winning
+   * hits from two iOS queries whose relative order is unknown, a miss not
+   * confirmed, or any miss with `requireFullPass`): the caller then
+   * compares every match. `unsettled` carries the lookup's platform and the
+   * depth check's answer when one ran. With `signal`, the queries, the
+   * confirmation and the hits' reads check it.
    */
   private async narrowedGetByText(
     base: Element, pageName: string, desiredText: string, signal: AbortSignal | undefined, requireFullPass: boolean,
-  ): Promise<Element | null | undefined> {
-    if (!(base instanceof PlatformElement)) return undefined;
+  ): Promise<
+    | { kind: 'hit'; element: Element }
+    | { kind: 'miss' }
+    | { kind: 'unsettled'; platform?: Platform; snapshot?: SnapshotState }
+  > {
+    if (!(base instanceof PlatformElement)) return { kind: 'unsettled' };
     const pagePlatform = this.requirePage(pageName).platform;
     const platform = pagePlatform ?? detectDriverPlatform(base.driver);
+    const unsettled = (snapshot?: SnapshotState) => ({ kind: 'unsettled' as const, platform, snapshot });
     const queries = narrowedTextQueries(base.selector, platform, pickTextTokens(desiredText, platform));
-    if (!queries) return undefined;
+    if (!queries) return unsettled();
     const hits = await runNarrowedQueries(base.driver, queries, signal);
-    if ('error' in hits) return undefined;
+    if ('error' in hits) return unsettled();
 
     // The same element `getAll()` would hand out for this match.
     const wrap = (raw: any) => bindLookupSignal(
@@ -610,10 +631,11 @@ export class ElementRepository {
       if (text === desiredText) return 'exact';
       return text?.includes(desiredText) ? 'contains' : 'none';
     });
-    if (picked === 'ambiguous') return undefined;
-    if (picked) return wrap(picked.raw);
-    if (requireFullPass) return undefined;
-    return await snapshotConfirmedComplete(base.driver, platform, signal) ? null : undefined;
+    if (picked === 'ambiguous') return unsettled();
+    if (picked) return { kind: 'hit', element: wrap(picked.raw) };
+    if (requireFullPass) return unsettled();
+    const snapshot = await snapshotConfirmedComplete(base.driver, platform, signal);
+    return snapshot === 'complete' ? { kind: 'miss' } : unsettled(snapshot);
   }
 
   /**

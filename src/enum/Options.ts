@@ -45,6 +45,13 @@ export interface LookupOptions {
    * non-strict `getByText` returns `null` only after a full pass. Without
    * it, a narrowed miss over a snapshot confirmed complete is final
    * (`missBasis: 'narrowed'`). Defaults to `false`.
+   *
+   * A full pass is not proof of absence by itself: on iOS, and for an
+   * Android XPath, it runs on the same snapshot, cut off at
+   * `snapshotMaxDepth`. After the full pass misses, the depth check still
+   * runs (once), and the error's `snapshotTruncated` is `true` when a match
+   * below the cut-off could have been missed. Proven absence is
+   * `cleanMiss && snapshotTruncated !== true`.
    */
   requireFullPass?: boolean;
 }

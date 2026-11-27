@@ -1122,33 +1122,37 @@ const missOf = (p: Promise<unknown>) => p.then(() => null, (e: unknown) => e) as
 const fullFinds = (server: MockServer) => server.finds().filter(f => !isNarrowedQuery(f) && !isDepthSentinel(f));
 
 test.describe('a narrowed miss is confirmed against the snapshot depth cap', () => {
-  const ANDROID_SENTINEL_70 = '(//*[count(ancestor::*) >= 70])[1]';
-  const IOS_SENTINEL_50 = `-ios class chain:${Array(49).fill('*').join('/')}`;
+  const ANDROID_SENTINEL_70 = '(//*[count(ancestor::*) >= 69])[1]';
+  const IOS_SENTINEL_50 = `-ios class chain:${Array(49).fill('*').join('/')}[1]`;
 
-  test('the depth queries: android counts ancestors from the hierarchy root, ios has D - 1 child segments', () => {
+  test('the depth queries: android counts ancestors from the hierarchy root (>= D - 1), ios has D - 1 child segments, the last [1]', () => {
     expect(depthSentinelQuery('android', 70)).toBe(ANDROID_SENTINEL_70);
-    expect(depthSentinelQuery('android', 1)).toBe('(//*[count(ancestor::*) >= 1])[1]');
+    expect(depthSentinelQuery('android', 2)).toBe('(//*[count(ancestor::*) >= 1])[1]');
+    expect(depthSentinelQuery('android', 1)).toBe('(//*[count(ancestor::*) >= 0])[1]');
     expect(depthSentinelQuery('ios', 50)).toBe(IOS_SENTINEL_50);
-    expect(depthSentinelQuery('ios', 3)).toBe('-ios class chain:*/*');
-    expect(depthSentinelQuery('ios', 2)).toBe('-ios class chain:*');
+    expect(depthSentinelQuery('ios', 3)).toBe('-ios class chain:*/*[1]');
+    expect(depthSentinelQuery('ios', 2)).toBe('-ios class chain:*[1]');
     expect(depthSentinelQuery('ios', 1)).toBeNull();
     for (const bad of [0, -1, 2.5, NaN]) expect(depthSentinelQuery('android', bad)).toBeNull();
     expect(depthSentinelQuery('web', 70)).toBeNull();
     expect(DEFAULT_SNAPSHOT_MAX_DEPTH).toEqual({ android: 70, ios: 50 });
   });
 
-  test('the model: a node at the cut-off depth is held, and is what the depth query finds', () => {
+  test('the model: a node at the cut-off depth is held; the depth query finds it (android: one level shallower too)', () => {
     for (const platform of ['android', 'ios'] as const) {
       const cutOff = platform === 'android' ? 70 : 49;
+      // Android asks for >= D - 1 ancestors: an off-by-one in the model errs towards a full pass.
+      const found = platform === 'android' ? cutOff - 1 : cutOff;
       const server = new MockServer(platform, [nestAt(cutOff + 3, { id: 'leaf' }, 'w')]);
       const cap = server.cap();
       const all = ['w1', `w${cutOff}`, `w${cutOff + 1}`].map(id => ({ elementId: id }));
       expect(all.map(r => inSnapshot(r, cap))).toEqual([true, true, false]);
       const sentinel = depthSentinelQuery(platform, cap.maxDepth)!;
       const nodes = Array.from({ length: cutOff + 2 }, (_, i) => ({ elementId: `w${i + 1}` }));
-      expect(answerDepthSentinel(sentinel, nodes, cap)!.map(r => r.elementId)).toEqual([`w${cutOff}`]);
-      // One level shallower: nothing that deep.
-      expect(answerDepthSentinel(sentinel, nodes.slice(0, cutOff - 1), cap)).toEqual([]);
+      // At most one element (android `(...)[1]`, ios the last segment's `[1]`).
+      expect(answerDepthSentinel(sentinel, nodes, cap)!.map(r => r.elementId)).toEqual([`w${found}`]);
+      // One level shallower than what it finds: nothing that deep.
+      expect(answerDepthSentinel(sentinel, nodes.slice(0, found - 1), cap)).toEqual([]);
     }
   });
 
@@ -1173,7 +1177,27 @@ test.describe('a narrowed miss is confirmed against the snapshot depth cap', () 
     expect(miss).toBeInstanceOf(TextNotFoundError);
     expect(miss.missBasis).toBe('full-pass');
     expect(miss.cleanMiss).toBe(true);
+    // The full pass ran on the cut-off snapshot: the miss is not proven absence.
+    expect(miss.snapshotTruncated).toBe(true);
     expect(fullFinds(server)).toEqual(['//*[@content-desc="row"]']);
+    // One settings read and one depth query, before the confirming pass only.
+    expect(server.settingsReads()).toBe(1);
+    expect(server.sentinels()).toEqual([ANDROID_SENTINEL_70]);
+  });
+
+  test('android ~row: the snapshot cut off but the text absent: the confirming pass (not capped) proves the miss, snapshotTruncated false', async () => {
+    const server = new MockServer('android', [
+      { id: 'a', name: 'row', text: 'Apple' },
+      nestAt(75, { id: 'deep', name: 'row', text: 'Elderberry' }, 'w'),
+    ]);
+    const miss = await missOf(byText(repoOver(server, { 'accessibility id': 'row' }), 'Durian', 200));
+    expect(miss.missBasis).toBe('full-pass');
+    expect(miss.cleanMiss).toBe(true);
+    expect(miss.snapshotTruncated).toBe(false);
+    expect(server.sentinels()).toEqual([ANDROID_SENTINEL_70]);
+    // The `~row` find saw the deep row too.
+    expect(fullFinds(server)).toEqual(['~row']);
+    expect(server.log).toContain('deep:text');
   });
 
   for (const selector of [{ 'accessibility id': 'row' }, { xpath: '//*[@content-desc="row"]' }]) {
@@ -1204,7 +1228,9 @@ test.describe('a narrowed miss is confirmed against the snapshot depth cap', () 
     ]);
     const miss = await missOf(byText(repoOver(server, { 'accessibility id': 'row' }), 'Durian', 200));
     expect(miss.missBasis).toBe('full-pass');
+    expect(miss.snapshotTruncated).toBe(true);
     expect(fullFinds(server)).toEqual(['~row']);
+    expect(server.sentinels()).toEqual([IOS_SENTINEL_50]);
   });
 
   for (const platform of ['android', 'ios'] as const) {
@@ -1214,6 +1240,7 @@ test.describe('a narrowed miss is confirmed against the snapshot depth cap', () 
       expect(miss).toBeInstanceOf(TextNotFoundError);
       expect(miss.missBasis).toBe('narrowed');
       expect(miss.cleanMiss).toBe(true);
+      expect(miss.snapshotTruncated).toBe(false);
       expect(server.settingsReads()).toBe(1);
       expect(server.sentinels()).toEqual([platform === 'android' ? ANDROID_SENTINEL_70 : IOS_SENTINEL_50]);
       expect(fullFinds(server)).toEqual([]);
@@ -1237,6 +1264,22 @@ test.describe('a narrowed miss is confirmed against the snapshot depth cap', () 
     ['the depth query fails', s => { s.failSentinel = named('invalid selector', 'sentinel refused'); }, { settings: 1, sentinels: 1 }],
   ];
   for (const [why, arrange, counts] of confirmers) {
+    test(`ios: ${why} → one full pass; snapshotTruncated true when the depth query found the cut-off, else absent (not checked)`, async () => {
+      const server = new MockServer('ios', FRUITS.map((f, i) => ({ id: `r${i}`, name: 'row', label: f })));
+      arrange(server);
+      const deep = why === 'the depth query finds a node';
+      // The android arrangement nests 72 deep; on ios the cut-off is 49 levels, so that node is beyond it too.
+      const miss = await missOf(byText(repoOver(server, { 'accessibility id': 'row' }), 'Durian', 200));
+      expect(miss.missBasis).toBe('full-pass');
+      expect(miss.cleanMiss).toBe(true);
+      if (deep) expect(miss.snapshotTruncated).toBe(true);
+      else expect(miss.snapshotTruncated).toBeUndefined();
+      // The depth check is not repeated after the confirming pass.
+      expect(server.settingsReads()).toBe(counts.settings);
+      expect(server.sentinels()).toHaveLength(counts.sentinels);
+      expect(fullFinds(server)).toEqual(['~row']);
+    });
+
     test(`android: ${why} → one full pass, missBasis 'full-pass', the confirmation's error is not reported`, async () => {
       const server = new MockServer('android', FRUITS.map((f, i) => ({ id: `r${i}`, name: 'row', text: f })));
       arrange(server);
@@ -1244,6 +1287,8 @@ test.describe('a narrowed miss is confirmed against the snapshot depth cap', () 
       expect(miss).toBeInstanceOf(TextNotFoundError);
       expect(miss.missBasis).toBe('full-pass');
       expect(miss.cleanMiss).toBe(true);
+      // The `~row` full pass does not read the snapshot: its miss stands whatever the depth check said.
+      expect(miss.snapshotTruncated).toBe(false);
       expect(miss.lastDriverError).toBeUndefined();
       expect(miss.message).toBe(`Element 'rows' on 'List' with text "Durian" not found.`);
       expect(server.settingsReads()).toBe(counts.settings);
@@ -1297,6 +1342,8 @@ test.describe('a narrowed miss is confirmed against the snapshot depth cap', () 
     const miss = await missOf(repoOver(server, { 'accessibility id': 'row' })
       .get('rows', 'List', { strategy: SelectionStrategy.TEXT, value: 'Durian', timeout: 200, requireFullPass: true }));
     expect(miss.missBasis).toBe('full-pass');
+    // A `~row` full pass does not read the snapshot: its miss needs no depth check.
+    expect(miss.snapshotTruncated).toBe(false);
     expect(server.settingsReads()).toBe(0);
     expect(server.sentinels()).toEqual([]);
     expect(fullFinds(server)).toEqual(['~row']);
@@ -1308,21 +1355,51 @@ test.describe('a narrowed miss is confirmed against the snapshot depth cap', () 
     expect(fullFinds(hit)).toEqual([]);
   });
 
-  test('ios: a value CONTAINS error (a non-string value) makes every poll a full pass: no confirmation, missBasis full-pass', async () => {
+  test('requireFullPass: the depth check runs after the confirming pass misses, and reports the cut-off (ios)', async () => {
+    const server = new MockServer('ios', [{ id: 'a', name: 'row', label: 'Apple' }, nestAt(55, { id: 'deep', name: 'row', label: 'Durian' }, 'w')]);
+    const miss = await missOf(repoOver(server, { 'accessibility id': 'row' })
+      .get('rows', 'List', { strategy: SelectionStrategy.TEXT, value: 'Durian', timeout: 200, requireFullPass: true }));
+    expect(miss.missBasis).toBe('full-pass');
+    expect(miss.snapshotTruncated).toBe(true);
+    expect(server.settingsReads()).toBe(1);
+    expect(server.sentinels()).toEqual([IOS_SENTINEL_50]);
+    expect(fullFinds(server)).toEqual(['~row']);
+    // The order: the full pass, then the settings read and the depth query.
+    expect(server.log.indexOf('settings')).toBeGreaterThan(server.log.indexOf('find ~row'));
+    // A shallow tree: false.
+    const shallow = new MockServer('ios', FRUITS.map((f, i) => ({ id: `r${i}`, name: 'row', label: f })));
+    const flat = await missOf(repoOver(shallow, { 'accessibility id': 'row' })
+      .get('rows', 'List', { strategy: SelectionStrategy.TEXT, value: 'Durian', timeout: 200, requireFullPass: true }));
+    expect(flat.snapshotTruncated).toBe(false);
+  });
+
+  test('requireFullPass on an android XPath base over a cut-off snapshot: snapshotTruncated true', async () => {
+    const server = new MockServer('android', [{ id: 'a', name: 'row', text: 'Apple' }, nestAt(75, { id: 'deep', name: 'row', text: 'Durian' }, 'w')]);
+    const miss = await missOf(repoOver(server, { xpath: '//*[@content-desc="row"]' })
+      .get('rows', 'List', { strategy: SelectionStrategy.TEXT, value: 'Durian', timeout: 200, requireFullPass: true }));
+    expect(miss.snapshotTruncated).toBe(true);
+    expect(server.sentinels()).toEqual([ANDROID_SENTINEL_70]);
+  });
+
+  test('ios: a value CONTAINS error (a non-string value) makes every poll a full pass; the final miss gets one depth check', async () => {
     const server = new MockServer('ios', FRUITS.map((f, i) => ({ id: `r${i}`, name: 'row', label: f })));
     server.failNarrowed = named('unknown error', 'Can\'t do a substring operation with something that isn\'t a string');
     const miss = await missOf(byText(repoOver(server, { 'accessibility id': 'row' }), 'Durian', 300));
     expect(miss.missBasis).toBe('full-pass');
     expect(miss.cleanMiss).toBe(true);
-    expect(server.settingsReads()).toBe(0);
-    expect(server.sentinels()).toEqual([]);
+    expect(miss.snapshotTruncated).toBe(false);
+    expect(server.settingsReads()).toBe(1);
+    expect(server.sentinels()).toEqual([IOS_SENTINEL_50]);
     expect(fullFinds(server).length).toBeGreaterThan(0);
+    // The depth check comes after the last full pass.
+    expect(server.log.indexOf('settings')).toBeGreaterThan(server.log.lastIndexOf('find ~row'));
   });
 
   test('ios: the depth query finding a node → one full pass', async () => {
     const server = new MockServer('ios', [{ id: 'a', name: 'row', label: 'Apple' }, nestAt(52, { id: 'deep-empty' }, 'w')]);
     const miss = await missOf(byText(repoOver(server, { 'accessibility id': 'row' }), 'Durian', 200));
     expect(miss.missBasis).toBe('full-pass');
+    expect(miss.snapshotTruncated).toBe(true);
     expect(server.sentinels()).toEqual([IOS_SENTINEL_50]);
     expect(fullFinds(server)).toEqual(['~row']);
   });
@@ -1357,10 +1434,13 @@ test.describe('a narrowed miss is confirmed against the snapshot depth cap', () 
       const repo = repoOver(server, { 'accessibility id': 'row' });
       const narrowed = await missOf(repo.getByText('rows', 'List', 'Durian', true));
       expect(narrowed.missBasis).toBe('narrowed');
+      expect(narrowed.snapshotTruncated).toBe(false);
       expect(fullFinds(server)).toEqual([]);
 
       const full = await missOf(repo.getByText('rows', 'List', 'Durian', true, { requireFullPass: true }));
       expect(full.missBasis).toBe('full-pass');
+      // `~row` on android: the full comparison's miss stands without a depth check.
+      expect(full.snapshotTruncated).toBe(false);
       expect(full.message).toBe(narrowed.message);
       expect(fullFinds(server)).toEqual(['~row']);
       expect(server.settingsReads()).toBe(1);
@@ -1385,6 +1465,29 @@ test.describe('a narrowed miss is confirmed against the snapshot depth cap', () 
       });
     }
 
+    for (const platform of ['android', 'ios'] as const) {
+      test(`${platform}: a row deeper than the cap, missed by every query on the snapshot: snapshotTruncated true`, async () => {
+        const roots: MockNode[] = [
+          { id: 'a', name: 'row', text: 'Apple', label: 'Apple' },
+          nestAt(platform === 'android' ? 75 : 55, { id: 'deep', name: 'row', text: 'Durian', label: 'Durian' }, 'w'),
+        ];
+        const selector = platform === 'android' ? { xpath: '//*[@content-desc="row"]' } : { 'accessibility id': 'row' };
+        const server = new MockServer(platform, roots);
+        const miss = await missOf(repoOver(server, selector).getByText('rows', 'List', 'Durian', true));
+        expect(miss.missBasis).toBe('full-pass');
+        expect(miss.snapshotTruncated).toBe(true);
+        expect(server.settingsReads()).toBe(1);
+        expect(server.sentinels()).toHaveLength(1);
+        // requireFullPass: the depth check after the full comparison, the same flag.
+        const again = new MockServer(platform, roots);
+        const forced = await missOf(repoOver(again, selector).getByText('rows', 'List', 'Durian', true, { requireFullPass: true }));
+        expect(forced.snapshotTruncated).toBe(true);
+        expect(again.settingsReads()).toBe(1);
+        const firstFull = again.log.findIndex(e => e.startsWith('find ') && !isNarrowedQuery(e.slice(5)) && !isDepthSentinel(e.slice(5)));
+        expect(again.log.indexOf('settings')).toBeGreaterThan(firstFull);
+      });
+    }
+
     test('android ~row: a row deeper than the cap is found by comparing every match', async () => {
       const server = new MockServer('android', [{ id: 'a', name: 'row', text: 'Apple' }, nestAt(75, { id: 'deep', name: 'row', text: 'Durian' }, 'w')]);
       const el = await repoOver(server, { 'accessibility id': 'row' }).getByText('rows', 'List', 'Durian') as PlatformElement;
@@ -1398,6 +1501,8 @@ test.describe('a narrowed miss is confirmed against the snapshot depth cap', () 
         const miss = await missOf(repoOver(server, { 'accessibility id': 'row' }).getByText('rows', 'List', 'Durian', true));
         expect(miss.missBasis).toBe('full-pass');
         expect(miss.cleanMiss).toBe(true);
+        // Not checked: the depth check could not run, so the flag is absent.
+        expect(miss.snapshotTruncated).toBeUndefined();
         expect(fullFinds(server)).toEqual(['~row']);
       }
     });
@@ -1421,6 +1526,16 @@ test.describe('TextNotFoundError.missBasis', () => {
     expect(a.missBasis).toBe('full-pass');
     expect(b.missBasis).toBe('narrowed');
     expect(b.message).toBe(a.message);
+  });
+
+  test('snapshotTruncated: absent unless given (not checked); true and false are kept; the message does not change', () => {
+    const a = new TextNotFoundError({ elementName: 'e', pageName: 'p', text: 't' });
+    const t = new TextNotFoundError({ elementName: 'e', pageName: 'p', text: 't', snapshotTruncated: true });
+    const f = new TextNotFoundError({ elementName: 'e', pageName: 'p', text: 't', snapshotTruncated: false });
+    expect(a.snapshotTruncated).toBeUndefined();
+    expect(t.snapshotTruncated).toBe(true);
+    expect(f.snapshotTruncated).toBe(false);
+    expect(t.message).toBe(a.message);
   });
 });
 

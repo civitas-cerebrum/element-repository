@@ -13,7 +13,7 @@ import {
 import { bindLookupSignal, runLookup } from '../utils/lookupSignal';
 import {
   normaliseText, pickTextTokens, narrowedTextQueries, runNarrowedQueries, pickFromHits, snapshotConfirmedComplete,
-  type TextVerdict, type NarrowedPick,
+  fullPassTruncation, type TextVerdict, type NarrowedPick, type SnapshotState,
 } from '../utils/textNarrowing';
 
 /**
@@ -404,10 +404,21 @@ export class StrategyResolver {
    * reported): ONE full pass runs; a match is returned, else the
    * `TextNotFoundError` has `missBasis: 'full-pass'` and that pass's
    * `cleanMiss` / `lastDriverError`. That pass may overrun the timeout by
-   * one pass. With `requireFullPass`, the full pass always runs, without
-   * the settings read or the depth query. Earlier polls are never
-   * confirmed: per lookup there is at most one settings read, one depth
-   * query and one confirming pass.
+   * one pass. With `requireFullPass`, the full pass always runs first.
+   * Earlier polls are never confirmed: per lookup there is at most one
+   * settings read, one depth query and one confirming pass.
+   *
+   * `snapshotTruncated` on the error: `false` for a narrowed miss (the
+   * snapshot was confirmed complete). For a miss of a full pass (the
+   * confirming one, or the last poll's when the lookup was not narrowed),
+   * the depth check (one settings read and one depth query) runs after that
+   * pass unless it ran before it, and the flag is `true` when it found the
+   * cut-off level and the pass's own find runs on the snapshot (any iOS
+   * selector; an Android XPath): a match below the cut-off can then be
+   * missed even by the full pass. An Android accessibility id, resource id
+   * or class name is found on the live hierarchy, so its full pass's miss
+   * stands: `false`, with no check. Absent when the check could not run
+   * (or on a platform other than iOS and Android).
    *
    * Because the result is picked eagerly it is load-bearing, like ATTRIBUTE
    * and RANDOM: the lookup polls until a match appears or the caller's full
@@ -529,22 +540,33 @@ export class StrategyResolver {
     }
 
     // A narrowed miss ends the lookup only over a snapshot confirmed not
-    // cut off at snapshotMaxDepth; otherwise one full pass decides.
+    // cut off at snapshotMaxDepth; otherwise one full pass decides. A miss
+    // of a full pass gets the depth check after it (unless one ran before
+    // it), so snapshotTruncated says whether that pass could be affected.
     let missBasis: 'full-pass' | 'narrowed' = 'full-pass';
-    if (narrowedMiss) {
-      if (!requireFullPass && await snapshotConfirmedComplete(driver, textPlatform, signal)) {
+    let snapshot: SnapshotState | undefined;
+    let snapshotTruncated: boolean | undefined;
+    if (narrowedMiss && !requireFullPass) {
+      snapshot = await snapshotConfirmedComplete(driver, textPlatform, signal);
+      if (snapshot === 'complete') {
         missBasis = 'narrowed';
-      } else {
+        snapshotTruncated = false;
+      }
+    }
+    if (missBasis === 'full-pass') {
+      if (narrowedMiss) {
         check();
         pass++;
         const raw = await fullPass();
         if (raw !== undefined) return new PlatformElement(driver, selector, raw, timeout, { platform });
       }
+      snapshotTruncated = await fullPassTruncation(driver, selector, textPlatform, signal, snapshot);
     }
 
     check();
     throw new TextNotFoundError({
       elementName, pageName, text: value, lastDriverError: lastError, cleanMiss: lastErrorPass !== pass, missBasis,
+      snapshotTruncated,
     });
   }
 

@@ -59,6 +59,14 @@ export interface TextNotFoundErrorInit {
    * confirmed complete). Defaults to `'full-pass'`.
    */
   missBasis?: 'full-pass' | 'narrowed';
+  /**
+   * Whether the driver's snapshot was cut off at `snapshotMaxDepth` where
+   * it could hide a match: `true`, the depth query found the cut-off level
+   * and the lookup's queries ran on that snapshot; `false`, the snapshot was
+   * confirmed complete, or the full pass's find does not read it; absent,
+   * not checked. Left out by default.
+   */
+  snapshotTruncated?: boolean;
 }
 
 /**
@@ -77,9 +85,18 @@ export interface TextNotFoundErrorInit {
  * `missBasis` says what established the miss: `'full-pass'`, every match of
  * the selector was compared; `'narrowed'`, only the hits of the narrowed
  * text queries were, over a driver snapshot confirmed not cut off at
- * `snapshotMaxDepth` (see the README's absence guarantee). A caller that
- * needs a full pass behind every absence passes `requireFullPass: true`
- * (see `LookupOptions`) or requires `missBasis === 'full-pass'`.
+ * `snapshotMaxDepth` (see the README's absence guarantee).
+ *
+ * The miss means the rule matched nothing among the elements the driver's
+ * snapshot holds. `snapshotTruncated` is `true` when that snapshot was cut
+ * off at `snapshotMaxDepth` and the miss was established on it (any iOS
+ * selector; an Android XPath): a match below the cut-off can be missed even
+ * by the full pass (raise `appium:snapshotMaxDepth`). `false` when the
+ * snapshot was confirmed complete or the full pass's find does not read it;
+ * absent when not checked. Proven absence is
+ * `cleanMiss && snapshotTruncated !== true`; a full pass alone is not proof.
+ * `requireFullPass: true` (see `LookupOptions`) forces a full pass behind
+ * every miss and still reports `snapshotTruncated`.
  *
  * This is the single definition of the class; other packages re-export it so
  * that `instanceof` checks work across package boundaries.
@@ -97,6 +114,12 @@ export class TextNotFoundError extends Error {
   readonly cleanMiss: boolean;
   /** What established the miss: a full pass, or narrowed queries over a snapshot confirmed complete. */
   readonly missBasis: 'full-pass' | 'narrowed';
+  /**
+   * `true`: the snapshot the miss was established on was cut off at
+   * `snapshotMaxDepth`, so a match below the cut-off can be missed;
+   * `false`: the miss is not affected by a cut-off; absent: not checked.
+   */
+  readonly snapshotTruncated?: boolean;
 
   /** @param init The entry, the text and the driver-error state of the lookup. */
   constructor(init: TextNotFoundErrorInit) {
@@ -110,6 +133,7 @@ export class TextNotFoundError extends Error {
     if (lastDriverError !== undefined) this.lastDriverError = lastDriverError;
     this.cleanMiss = init.cleanMiss ?? lastDriverError === undefined;
     this.missBasis = init.missBasis ?? 'full-pass';
+    if (init.snapshotTruncated !== undefined) this.snapshotTruncated = init.snapshotTruncated;
     Object.setPrototypeOf(this, new.target.prototype);
   }
 }

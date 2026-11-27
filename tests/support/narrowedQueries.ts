@@ -299,7 +299,7 @@ export function inSnapshotBelow(root: any, raw: any, cap: SnapshotCap): boolean 
 }
 
 const ANDROID_SENTINEL = /^\(\/\/\*\[count\(ancestor::\*\) >= (\d+)\]\)\[1\]$/;
-const IOS_SENTINEL = /^-ios class chain:\*(?:\/\*)*$/;
+const IOS_SENTINEL = /^-ios class chain:\*(?:\/\*)*\[1\]$/;
 
 /** True when `selector` is a depth query (either platform). */
 export function isDepthSentinel(selector: string): boolean {
@@ -309,15 +309,16 @@ export function isDepthSentinel(selector: string): boolean {
 /**
  * The server's answer to a depth query over `nodes` (every node of the
  * page), or `undefined` when `selector` is not one: Android, the first held
- * node with at least `D` ancestors; iOS, the held nodes exactly as many
- * levels below the application as the chain has segments.
+ * node with at least as many ancestors as the query names; iOS, the first
+ * held node exactly as many levels below the application as the chain has
+ * segments (the last segment's `[1]`).
  */
 export function answerDepthSentinel(selector: string, nodes: any[], cap: SnapshotCap): any[] | undefined {
   const android = selector.match(ANDROID_SENTINEL);
   if (android) return nodes.filter(n => inSnapshot(n, cap) && cap.depthOf(n) >= Number(android[1])).slice(0, 1);
   if (IOS_SENTINEL.test(selector)) {
     const segments = selector.slice('-ios class chain:'.length).split('/').length;
-    return nodes.filter(n => inSnapshot(n, cap) && cap.depthOf(n) === segments);
+    return nodes.filter(n => inSnapshot(n, cap) && cap.depthOf(n) === segments).slice(0, 1);
   }
   return undefined;
 }

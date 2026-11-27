@@ -443,64 +443,117 @@ export async function runNarrowedQueries(
 export const DEFAULT_SNAPSHOT_MAX_DEPTH: Readonly<Record<'android' | 'ios', number>> = { android: 70, ios: 50 };
 
 /**
- * The query that finds an element at the deepest level the driver's
- * snapshot holds for `maxDepth` (its `snapshotMaxDepth`, `D` below), or
- * `null` when none can be composed (another platform, a depth that is not a
- * whole number, or one too small for the query):
+ * The query that finds an element at (or, on Android, one level above) the
+ * deepest level the driver's snapshot holds for `maxDepth` (its
+ * `snapshotMaxDepth`, `D` below), or `null` when none can be composed
+ * (another platform, a depth that is not a whole number, or one too small
+ * for the query). Each returns at most one element.
  *
- * - `android`: `(//*[count(ancestor::*) >= D])[1]`. UiAutomator2 builds the
- *   page source from a root (`hierarchy`) at depth 0, each child one
- *   deeper, and builds no children for a node at depth `D`. A node's depth
- *   in the source is its number of ancestors, so a node with `D` ancestors
- *   is at the cut-off depth: its children, if it has any, are missing.
- * - `ios`: a class chain of `D - 1` segments `*` joined with `/`
- *   (`-ios class chain:*` + `/*` repeated). A class chain run from the
- *   session starts at the application, and a segment joined with `/` (not
- *   `**`) matches the children of the previous one, so the chain matches
- *   the elements `D - 1` levels below the application: the deepest level
- *   WebDriverAgent's snapshot holds when `snapshotMaxDepth` counts the
- *   application as the first of `D` levels. Should it count `D` levels
- *   below the application instead, every element of that deepest level has
- *   a parent this query finds, so the query errs only towards a full pass.
- *   With no position in any segment, WebDriverAgent resolves the chain as
- *   one element query. It needs `D >= 2`.
+ * - `android`: `(//*[count(ancestor::*) >= D-1])[1]` (the number written
+ *   out, `>= 69` for the default 70). UiAutomator2 builds the page source
+ *   from a root (`hierarchy`) at depth 0, each child one deeper, and builds
+ *   no children for a node at depth `D`. A node's depth in the source is
+ *   its number of ancestors, so a node with `D` ancestors is at the cut-off
+ *   depth: its children, if it has any, are missing. The query asks for
+ *   `D - 1` ancestors, one level shallower, so an off-by-one in this model
+ *   of the server errs towards a full pass (a screen exactly `D - 1` deep
+ *   is treated as cut off), never towards a final narrowed miss.
+ * - `ios`: a class chain of `D - 1` segments `*` joined with `/`, the last
+ *   one `*[1]` (`-ios class chain:*` + `/*` repeated + `[1]`). A class
+ *   chain run from the session starts at the application, and a segment
+ *   joined with `/` (not `**`) matches the children of the previous one,
+ *   so the chain matches the elements `D - 1` levels below the
+ *   application: the deepest level WebDriverAgent's snapshot holds when
+ *   `snapshotMaxDepth` counts the application as the first of `D` levels.
+ *   Should it count `D` levels below the application instead, every
+ *   element of that deepest level has a parent this query finds, so the
+ *   query errs only towards a full pass. The last segment's `[1]` asks for
+ *   the first match only: an element exists at that level exactly when one
+ *   is returned. It needs `D >= 2`.
+ *
+ * This depth model is a unit model of the two servers; the boundary (which
+ * level is the last one held) must be checked against a live driver.
  */
 export function depthSentinelQuery(platform: Platform | undefined, maxDepth: number): string | null {
   if (!Number.isInteger(maxDepth) || maxDepth < 1) return null;
-  if (platform === 'android') return `(//*[count(ancestor::*) >= ${maxDepth}])[1]`;
-  if (platform === 'ios' && maxDepth >= 2) return `-ios class chain:${Array(maxDepth - 1).fill('*').join('/')}`;
+  if (platform === 'android') return `(//*[count(ancestor::*) >= ${maxDepth - 1}])[1]`;
+  if (platform === 'ios' && maxDepth >= 2) return `-ios class chain:${Array(maxDepth - 1).fill('*').join('/')}[1]`;
   return null;
 }
 
 /**
- * True when the driver's snapshot of the screen is complete, so a miss of
- * the narrowed queries stands: `snapshotMaxDepth` is read with ONE
- * `getSettings()` (the platform's {@link DEFAULT_SNAPSHOT_MAX_DEPTH} when
- * the settings do not name it), and ONE {@link depthSentinelQuery} finds
- * nothing that deep. `false` (a full pass must decide) when the sentinel
- * finds an element, or the settings cannot be read, name an unusable depth,
- * or the sentinel fails. A lost session or connection
+ * What the depth check found: `'complete'`, nothing at the cut-off level
+ * (the snapshot holds the whole screen); `'truncated'`, an element at the
+ * cut-off level (the snapshot may be missing what lies below it);
+ * `'unknown'`, the check could not run.
+ */
+export type SnapshotState = 'complete' | 'truncated' | 'unknown';
+
+/**
+ * Whether the driver's snapshot of the screen is complete:
+ * `snapshotMaxDepth` is read with ONE `getSettings()` (the platform's
+ * {@link DEFAULT_SNAPSHOT_MAX_DEPTH} when the settings do not name it), and
+ * ONE {@link depthSentinelQuery} is run. `'complete'` when it finds
+ * nothing (a miss of the narrowed queries then stands), `'truncated'` when
+ * it finds an element, `'unknown'` when the platform is neither `android`
+ * nor `ios`, or the settings cannot be read, name an unusable depth, or
+ * the depth query fails. A lost session or connection
  * ({@link isSessionLostError}) is thrown; any other error only means
- * `false`. With `signal`, it is checked before each call and an abort
+ * `'unknown'`. With `signal`, it is checked before each call and an abort
  * (`LookupAbortedError`) is thrown.
  */
 export async function snapshotConfirmedComplete(
   driver: any, platform: Platform | undefined, signal?: AbortSignal,
-): Promise<boolean> {
-  if (platform !== 'android' && platform !== 'ios') return false;
+): Promise<SnapshotState> {
+  if (platform !== 'android' && platform !== 'ios') return 'unknown';
   try {
     throwIfAborted(signal);
-    if (typeof driver?.getSettings !== 'function') return false;
+    if (typeof driver?.getSettings !== 'function') return 'unknown';
     const settings = await driver.getSettings();
     const named = settings?.snapshotMaxDepth;
     const maxDepth = named === undefined || named === null ? DEFAULT_SNAPSHOT_MAX_DEPTH[platform] : Number(named);
     const sentinel = depthSentinelQuery(platform, maxDepth);
-    if (sentinel === null) return false;
+    if (sentinel === null) return 'unknown';
     throwIfAborted(signal);
-    return Array.from((await driver.$$(sentinel)) ?? []).length === 0;
+    return Array.from((await driver.$$(sentinel)) ?? []).length === 0 ? 'complete' : 'truncated';
   } catch (err) {
     rethrowAbort(err);
     if (isSessionLostError(err)) throw err;
-    return false;
+    return 'unknown';
   }
+}
+
+/**
+ * True when the driver answers `selector` from its cut-off snapshot, so a
+ * match below `snapshotMaxDepth` is not among its matches: every iOS query
+ * (WebDriverAgent resolves each on its snapshot), and an Android XPath
+ * (UiAutomator2 evaluates it on the page source). An Android accessibility
+ * id, resource id, class name or UiAutomator selector is resolved on the
+ * live hierarchy, which is not cut off.
+ */
+export function selectorReadsSnapshot(selector: string, platform: Platform | undefined): boolean {
+  if (platform === 'ios') return true;
+  if (platform === 'android') return selectorKind(selector)?.using === 'xpath';
+  return false;
+}
+
+/**
+ * The `snapshotTruncated` of a miss established by a full pass over
+ * `selector` (every match compared): `true` when the pass's own find ran on
+ * a snapshot the depth check found cut off (a match below the cut-off can
+ * be missed); `false` when the depth check found it complete, or when the
+ * find does not read the snapshot (see {@link selectorReadsSnapshot}: its
+ * miss stands either way, and no check is run); `undefined` (not checked)
+ * on a platform other than `android` / `ios`, or when the check could not
+ * run. `known` is the state a check before the pass found; without it,
+ * ONE check ({@link snapshotConfirmedComplete}) runs now, after the pass.
+ */
+export async function fullPassTruncation(
+  driver: any, selector: string, platform: Platform | undefined, signal?: AbortSignal, known?: SnapshotState,
+): Promise<boolean | undefined> {
+  if (platform !== 'android' && platform !== 'ios') return undefined;
+  if (!selectorReadsSnapshot(selector, platform)) return false;
+  const state = known ?? await snapshotConfirmedComplete(driver, platform, signal);
+  if (state === 'unknown') return undefined;
+  return state === 'truncated';
 }

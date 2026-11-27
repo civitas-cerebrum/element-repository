@@ -31,7 +31,7 @@ async function startFakeServer(
   const isNarrowed = (body: any) =>
     typeof body?.value === 'string' && (body.value.includes('CONTAINS[cd]') || body.value.includes('contains(translate('));
   const isSentinel = (body: any) => typeof body?.value === 'string'
-    && (body.value.startsWith('(//*[count(ancestor::*) >= ') || /^\*(\/\*)*$/.test(body.value));
+    && (body.value.startsWith('(//*[count(ancestor::*) >= ') || /^\*(\/\*)*\[1\]$/.test(body.value));
   const server =http.createServer((req, res) => {
     let raw = '';
     req.on('data', chunk => { raw += chunk; });
@@ -186,11 +186,12 @@ test.describe('narrowed text queries on the wire (WebdriverIO 10)', () => {
         .then(() => null, (e: unknown) => e) as TextNotFoundError;
       expect(err).toBeInstanceOf(TextNotFoundError);
       expect(err.missBasis).toBe('narrowed');
+      expect(err.snapshotTruncated).toBe(false);
       const settingsReads = server.requests.filter(r => r.method === 'GET' && r.path === `/session/${server!.session}/appium/settings`);
       expect(settingsReads).toHaveLength(1);
       const sentinel = platformName === 'iOS'
-        ? { using: '-ios class chain', value: Array(11).fill('*').join('/') }
-        : { using: 'xpath', value: '(//*[count(ancestor::*) >= 12])[1]' };
+        ? { using: '-ios class chain', value: `${Array(11).fill('*').join('/')}[1]` }
+        : { using: 'xpath', value: '(//*[count(ancestor::*) >= 11])[1]' };
       const sent = finds(server);
       expect(sent.filter(f => f.value === sentinel.value)).toEqual([sentinel]);
       // The depth query is the last find; no full pass followed.
@@ -207,10 +208,27 @@ test.describe('narrowed text queries on the wire (WebdriverIO 10)', () => {
       .then(() => null, (e: unknown) => e) as TextNotFoundError;
     expect(err).toBeInstanceOf(TextNotFoundError);
     expect(err.missBasis).toBe('full-pass');
+    // `~row` is not found on the page source: the full pass's miss stands.
+    expect(err.snapshotTruncated).toBe(false);
     const sent = finds(server);
-    expect(sent.filter(f => f.value === '(//*[count(ancestor::*) >= 70])[1]')).toHaveLength(1);
+    expect(sent.filter(f => f.value === '(//*[count(ancestor::*) >= 69])[1]')).toHaveLength(1);
     expect(sent[sent.length - 1]).toEqual({ using: 'accessibility id', value: 'row' });
     expect(sent.filter(f => f.using === 'accessibility id')).toHaveLength(1);
+  });
+
+  test('iOS: the depth query finding an element → one full pass whose miss reports snapshotTruncated true (default depth 50)', async () => {
+    server = await startFakeServer('iOS', { deep: true });
+    driver = await session(server, 'iOS');
+    const err = await repo(driver, 'ios', { 'accessibility id': 'row' })
+      .get('rows', 'List', { strategy: SelectionStrategy.TEXT, value: 'Durian', timeout: 300 })
+      .then(() => null, (e: unknown) => e) as TextNotFoundError;
+    expect(err).toBeInstanceOf(TextNotFoundError);
+    expect(err.missBasis).toBe('full-pass');
+    expect(err.snapshotTruncated).toBe(true);
+    const sentinel = { using: '-ios class chain', value: `${Array(49).fill('*').join('/')}[1]` };
+    const sent = finds(server);
+    expect(sent.filter(f => f.value === sentinel.value)).toEqual([sentinel]);
+    expect(sent[sent.length - 1]).toEqual({ using: 'accessibility id', value: 'row' });
   });
 
   test('getByText on ios sends the same narrowed queries', async () => {
