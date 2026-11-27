@@ -37,6 +37,16 @@ export interface LookupOptions {
    * background.
    */
   signal?: AbortSignal;
+  /**
+   * Text lookups only: the platform `TEXT` strategy and `getByText` (other
+   * getters ignore it). When `true`, a miss of the narrowed text queries is
+   * always confirmed by one full pass over every match, so a
+   * `TextNotFoundError` always has `missBasis: 'full-pass'` and a
+   * non-strict `getByText` returns `null` only after a full pass. Without
+   * it, a narrowed miss over a snapshot confirmed complete is final
+   * (`missBasis: 'narrowed'`). Defaults to `false`.
+   */
+  requireFullPass?: boolean;
 }
 
 /**

@@ -53,6 +53,12 @@ export interface TextNotFoundErrorInit {
    * real "no element has this text". Defaults to `lastDriverError === undefined`.
    */
   cleanMiss?: boolean;
+  /**
+   * What established the miss: `'full-pass'` (every match of the selector
+   * was compared) or `'narrowed'` (narrowed queries over a driver snapshot
+   * confirmed complete). Defaults to `'full-pass'`.
+   */
+  missBasis?: 'full-pass' | 'narrowed';
 }
 
 /**
@@ -68,6 +74,13 @@ export interface TextNotFoundErrorInit {
  * driver error, `false` when the final pass hit one. `lastDriverError` may be
  * set while `cleanMiss` is `true`, when only an earlier pass failed.
  *
+ * `missBasis` says what established the miss: `'full-pass'`, every match of
+ * the selector was compared; `'narrowed'`, only the hits of the narrowed
+ * text queries were, over a driver snapshot confirmed not cut off at
+ * `snapshotMaxDepth` (see the README's absence guarantee). A caller that
+ * needs a full pass behind every absence passes `requireFullPass: true`
+ * (see `LookupOptions`) or requires `missBasis === 'full-pass'`.
+ *
  * This is the single definition of the class; other packages re-export it so
  * that `instanceof` checks work across package boundaries.
  */
@@ -82,6 +95,8 @@ export class TextNotFoundError extends Error {
   readonly lastDriverError?: unknown;
   /** `true` when the final pass ran without a driver error. */
   readonly cleanMiss: boolean;
+  /** What established the miss: a full pass, or narrowed queries over a snapshot confirmed complete. */
+  readonly missBasis: 'full-pass' | 'narrowed';
 
   /** @param init The entry, the text and the driver-error state of the lookup. */
   constructor(init: TextNotFoundErrorInit) {
@@ -94,6 +109,7 @@ export class TextNotFoundError extends Error {
     this.text = text;
     if (lastDriverError !== undefined) this.lastDriverError = lastDriverError;
     this.cleanMiss = init.cleanMiss ?? lastDriverError === undefined;
+    this.missBasis = init.missBasis ?? 'full-pass';
     Object.setPrototypeOf(this, new.target.prototype);
   }
 }

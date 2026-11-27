@@ -89,6 +89,15 @@ const SIGMAS = new Set(['σ', 'ς']);
 const NEVER_SAFE = /[\p{Cc}\p{Cs}]/u;
 
 /**
+ * The noncharacters U+FFFE and U+FFFF, which XML 1.0 cannot hold:
+ * UiAutomator2 writes `?` for them in the page source the narrowed XPath
+ * runs on, so a word holding one would miss an element whose text holds it.
+ * (Controls and lone surrogates, the other characters it replaces, are
+ * never safe.)
+ */
+const ANDROID_NON_XML = /[￾￿]/;
+
+/**
  * The characters an iOS word may hold. NSPredicate's `CONTAINS` matches only
  * on whole composed character sequences, where the rule's plain substring
  * test matches inside one: a word next to a spacing or conjoining mark, a
@@ -142,7 +151,7 @@ function androidLowercaseMap(token: string): { from: string; to: string } | null
 /** True when `token` can be carried by the composed query on `platform`. */
 function isSafeToken(token: string, platform: Platform): boolean {
   if (NEVER_SAFE.test(token)) return false;
-  if (platform === 'android') return androidLowercaseMap(token) !== null;
+  if (platform === 'android') return !ANDROID_NON_XML.test(token) && androidLowercaseMap(token) !== null;
   if (platform === 'ios') return IOS_SAFE_WORD.test(token) && !GRAPHEME_EXTEND.test(token);
   return false;
 }
@@ -421,4 +430,77 @@ export async function runNarrowedQueries(
     return { error: err };
   }
   return { lists };
+}
+
+// ---------------------------------------------------------------------------
+// Confirming a narrowed miss
+// ---------------------------------------------------------------------------
+
+/**
+ * The `snapshotMaxDepth` a driver uses when its settings do not name one:
+ * UiAutomator2 70, WebDriverAgent 50.
+ */
+export const DEFAULT_SNAPSHOT_MAX_DEPTH: Readonly<Record<'android' | 'ios', number>> = { android: 70, ios: 50 };
+
+/**
+ * The query that finds an element at the deepest level the driver's
+ * snapshot holds for `maxDepth` (its `snapshotMaxDepth`, `D` below), or
+ * `null` when none can be composed (another platform, a depth that is not a
+ * whole number, or one too small for the query):
+ *
+ * - `android`: `(//*[count(ancestor::*) >= D])[1]`. UiAutomator2 builds the
+ *   page source from a root (`hierarchy`) at depth 0, each child one
+ *   deeper, and builds no children for a node at depth `D`. A node's depth
+ *   in the source is its number of ancestors, so a node with `D` ancestors
+ *   is at the cut-off depth: its children, if it has any, are missing.
+ * - `ios`: a class chain of `D - 1` segments `*` joined with `/`
+ *   (`-ios class chain:*` + `/*` repeated). A class chain run from the
+ *   session starts at the application, and a segment joined with `/` (not
+ *   `**`) matches the children of the previous one, so the chain matches
+ *   the elements `D - 1` levels below the application: the deepest level
+ *   WebDriverAgent's snapshot holds when `snapshotMaxDepth` counts the
+ *   application as the first of `D` levels. Should it count `D` levels
+ *   below the application instead, every element of that deepest level has
+ *   a parent this query finds, so the query errs only towards a full pass.
+ *   With no position in any segment, WebDriverAgent resolves the chain as
+ *   one element query. It needs `D >= 2`.
+ */
+export function depthSentinelQuery(platform: Platform | undefined, maxDepth: number): string | null {
+  if (!Number.isInteger(maxDepth) || maxDepth < 1) return null;
+  if (platform === 'android') return `(//*[count(ancestor::*) >= ${maxDepth}])[1]`;
+  if (platform === 'ios' && maxDepth >= 2) return `-ios class chain:${Array(maxDepth - 1).fill('*').join('/')}`;
+  return null;
+}
+
+/**
+ * True when the driver's snapshot of the screen is complete, so a miss of
+ * the narrowed queries stands: `snapshotMaxDepth` is read with ONE
+ * `getSettings()` (the platform's {@link DEFAULT_SNAPSHOT_MAX_DEPTH} when
+ * the settings do not name it), and ONE {@link depthSentinelQuery} finds
+ * nothing that deep. `false` (a full pass must decide) when the sentinel
+ * finds an element, or the settings cannot be read, name an unusable depth,
+ * or the sentinel fails. A lost session or connection
+ * ({@link isSessionLostError}) is thrown; any other error only means
+ * `false`. With `signal`, it is checked before each call and an abort
+ * (`LookupAbortedError`) is thrown.
+ */
+export async function snapshotConfirmedComplete(
+  driver: any, platform: Platform | undefined, signal?: AbortSignal,
+): Promise<boolean> {
+  if (platform !== 'android' && platform !== 'ios') return false;
+  try {
+    throwIfAborted(signal);
+    if (typeof driver?.getSettings !== 'function') return false;
+    const settings = await driver.getSettings();
+    const named = settings?.snapshotMaxDepth;
+    const maxDepth = named === undefined || named === null ? DEFAULT_SNAPSHOT_MAX_DEPTH[platform] : Number(named);
+    const sentinel = depthSentinelQuery(platform, maxDepth);
+    if (sentinel === null) return false;
+    throwIfAborted(signal);
+    return Array.from((await driver.$$(sentinel)) ?? []).length === 0;
+  } catch (err) {
+    rethrowAbort(err);
+    if (isSessionLostError(err)) throw err;
+    return false;
+  }
 }

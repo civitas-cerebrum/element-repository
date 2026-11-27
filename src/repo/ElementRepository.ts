@@ -6,7 +6,9 @@ import { Platform, PLATFORMS, isPlatformName } from '../enum/Platform';
 import { pickRandomIndex } from '../utils/math';
 import { Element, PlatformElement } from '../types';
 import { detectDriverPlatform } from '../utils/platformText';
-import { pickTextTokens, narrowedTextQueries, runNarrowedQueries, pickFromHits } from '../utils/textNarrowing';
+import {
+  pickTextTokens, narrowedTextQueries, runNarrowedQueries, pickFromHits, snapshotConfirmedComplete,
+} from '../utils/textNarrowing';
 import {
   SelectorFormatter,
   WEB_FORMATTERS, APPIUM_FORMATTERS, ANDROID_FORMATTERS, IOS_FORMATTERS,
@@ -508,16 +510,23 @@ export class ElementRepository {
    * the text cannot be narrowed, when a narrowed query fails (a lost
    * session or connection is thrown; any other error of that query is not
    * reported), or when on iOS the winning hits come from both narrowed
-   * queries. Known limit (Android): the narrowed XPath runs on the page
-   * source, capped at `snapshotMaxDepth` (default 70), so a match deeper
-   * than that is not found.
+   * queries. When the narrowed queries miss, the miss stands only when the
+   * driver's snapshot was not cut off at `snapshotMaxDepth` (one
+   * `getSettings()` and one depth query, as for the `TEXT` strategy);
+   * otherwise, or when either call fails, every match is compared once.
+   *
+   * A strict miss throws a {@link TextNotFoundError} whose `missBasis` says
+   * which established it: `'full-pass'` (every match compared) or
+   * `'narrowed'` (narrowed queries over a snapshot confirmed complete). A
+   * non-strict miss returns `null`; pass `options.requireFullPass: true`
+   * for a `null` (or a strict miss) always backed by comparing every match.
    *
    * @param elementName The specific element name to look up.
    * @param pageName The name of the page block in the JSON repository.
    * @param desiredText The string of text to search for within the elements.
    * @param strict If true, throws a {@link TextNotFoundError} (`cleanMiss` true) if the element is not found. Defaults to false.
    * @param options Optional `signal` that cancels the lookup, including its
-   * narrowed queries and text reads (see {@link LookupOptions}).
+   * narrowed queries and text reads, and `requireFullPass` (see {@link LookupOptions}).
    * @returns A promise that resolves to the matched Element, or null if not found.
    * @throws LookupAbortedError when `options.signal` is aborted, also when `strict` is false.
    */
@@ -525,20 +534,24 @@ export class ElementRepository {
     elementName: string, pageName: string, desiredText: string, strict: boolean = false, options?: LookupOptions,
   ): Promise<Element | null> {
     const signal = options?.signal;
-    return runLookup(signal, { elementName, pageName }, () => this.textMatch(elementName, pageName, desiredText, strict, signal));
+    const requireFullPass = options?.requireFullPass === true;
+    return runLookup(signal, { elementName, pageName },
+      () => this.textMatch(elementName, pageName, desiredText, strict, signal, requireFullPass));
   }
 
   /** Body of {@link getByText}. */
   private async textMatch(
     elementName: string, pageName: string, desiredText: string, strict: boolean, signal: AbortSignal | undefined,
+    requireFullPass: boolean,
   ): Promise<Element | null> {
     const base = bindLookupSignal(
       await this.resolveElement(elementName, pageName, { strategy: SelectionStrategy.ALL, signal }), signal,
     );
 
-    const narrowed = await this.narrowedGetByText(base, pageName, desiredText, signal);
+    const narrowed = await this.narrowedGetByText(base, pageName, desiredText, signal, requireFullPass);
     if (narrowed) return narrowed;
     if (narrowed === undefined) {
+      throwIfAborted(signal);
       const allElements = await base.all();
 
       // Each element's text is read once. An exact match wins, so the first
@@ -556,7 +569,9 @@ export class ElementRepository {
 
     // A text read that fails is not caught here, so a miss is always clean.
     throwIfAborted(signal);
-    const notFound = new TextNotFoundError({ elementName, pageName, text: desiredText, cleanMiss: true });
+    const notFound = new TextNotFoundError({
+      elementName, pageName, text: desiredText, cleanMiss: true, missBasis: narrowed === null ? 'narrowed' : 'full-pass',
+    });
     if (strict) throw notFound;
     console.warn(notFound.message);
     return null;
@@ -566,15 +581,17 @@ export class ElementRepository {
    * `getByText` on a platform element, narrowed (see `textNarrowing`): the
    * composed queries' hits are compared with `getByText`'s own rule (the
    * trimmed `textContent()` equal to `desiredText`, else the first that
-   * includes it, case-sensitively). Returns the match, `null` for a miss,
-   * or `undefined` when the lookup is not narrowed (a web element, a
-   * selector kind or text that cannot be narrowed, a composed query the
-   * driver could not run, or winning hits from two iOS queries whose
-   * relative order is unknown): the caller then compares every match.
-   * With `signal`, the queries and the hits' reads check it.
+   * includes it, case-sensitively). Returns the match, `null` for a miss
+   * over a snapshot confirmed complete (see `snapshotConfirmedComplete`),
+   * or `undefined` when the narrowed answer does not settle the lookup (a
+   * web element, a selector kind or text that cannot be narrowed, a
+   * composed query the driver could not run, winning hits from two iOS
+   * queries whose relative order is unknown, a miss not confirmed, or any
+   * miss with `requireFullPass`): the caller then compares every match.
+   * With `signal`, the queries, the confirmation and the hits' reads check it.
    */
   private async narrowedGetByText(
-    base: Element, pageName: string, desiredText: string, signal?: AbortSignal,
+    base: Element, pageName: string, desiredText: string, signal: AbortSignal | undefined, requireFullPass: boolean,
   ): Promise<Element | null | undefined> {
     if (!(base instanceof PlatformElement)) return undefined;
     const pagePlatform = this.requirePage(pageName).platform;
@@ -594,7 +611,9 @@ export class ElementRepository {
       return text?.includes(desiredText) ? 'contains' : 'none';
     });
     if (picked === 'ambiguous') return undefined;
-    return picked ? wrap(picked.raw) : null;
+    if (picked) return wrap(picked.raw);
+    if (requireFullPass) return undefined;
+    return await snapshotConfirmedComplete(base.driver, platform, signal) ? null : undefined;
   }
 
   /**

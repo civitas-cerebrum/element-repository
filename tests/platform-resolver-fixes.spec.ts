@@ -307,6 +307,11 @@ test('TEXT reads a started pass to its end: the deadline only decides whether an
   const { rows, reads } = slowRows(12, 50);
   let passes = 0;
   const driver = listDriver(async () => { passes++; return rows; });
+  // A complete snapshot: nothing at the cut-off depth, so the narrowed miss
+  // is not confirmed by another pass.
+  const listAll = driver.$$;
+  driver.getSettings = async () => ({});
+  driver.$$ = async (sel: string) => (sel.startsWith('(//*[count(ancestor::*)') ? [] : listAll(sel));
   const started = Date.now();
   await expect(StrategyResolver.fromSelector(
     driver, '~row', androidPage, 'row', 'Settings', 100,

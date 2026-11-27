@@ -21,6 +21,10 @@
  * The parser splits on ` or `, ` and `, ` OR ` and ` AND `: a composed word
  * never holds a space.
  *
+ * With a {@link SnapshotCap}, the queries run on a snapshot cut off at
+ * `snapshotMaxDepth` as each server cuts it, and the depth query that
+ * confirms a narrowed miss is answered by {@link answerDepthSentinel}.
+ *
  * Mock elements describe themselves with {@link MockFields} (read without
  * going through the element's own, possibly counted, methods).
  */
@@ -43,8 +47,8 @@ export type FieldsOf = (raw: any) => MockFields;
 /** Reads `raw.__fields`, the convention of the specs' mock elements. */
 export const fieldsOfMock: FieldsOf = raw => raw?.__fields ?? {};
 
-function descendants(raw: any, fieldsOf: FieldsOf): any[] {
-  return (fieldsOf(raw).children ?? []).flatMap(c => [c, ...descendants(c, fieldsOf)]);
+function allDescendants(raw: any, fieldsOf: FieldsOf): any[] {
+  return (fieldsOf(raw).children ?? []).flatMap(c => [c, ...allDescendants(c, fieldsOf)]);
 }
 
 /** Decodes an XPath 1.0 string literal or a `concat()` of literals. */
@@ -209,18 +213,24 @@ function parseNarrowed(selector: string): Parsed | null {
  * The server's answer to `selector` when it is a narrowed text query, or
  * `undefined` when it is not one. `baseMatches(base)` returns the base
  * selector's matches (`undefined` for a selector the mock does not know).
+ * With `cap`, the query runs on a snapshot cut off as the driver cuts it
+ * (see {@link SnapshotCap}): a base match or descendant outside it is not
+ * seen.
  */
 export function answerNarrowed(
   selector: string,
   baseMatches: (base: string) => any[] | undefined,
   fieldsOf: FieldsOf = fieldsOfMock,
+  cap?: SnapshotCap,
 ): any[] | undefined {
   const parsed = parseNarrowed(selector);
   if (!parsed) return undefined;
+  const seen = (raw: any) => !cap || inSnapshot(raw, cap);
   const lookup = (bases: string[]) => {
-    for (const b of bases) { const m = baseMatches(b); if (m !== undefined) return m; }
+    for (const b of bases) { const m = baseMatches(b); if (m !== undefined) return m.filter(seen); }
     return [];
   };
+  const descendants = (raw: any, f: FieldsOf) => allDescendants(raw, f).filter(seen);
 
   if (parsed.kind === 'android') {
     const has = (raw: any, c: AndroidCondition) => {
@@ -244,6 +254,72 @@ export function answerNarrowed(
   }
   return lookup(parsed.bases).filter(raw => !ownOf(raw, parsed.word)
     && descendants(raw, fieldsOf).some(d => fieldsOf(d).type === 'XCUIElementTypeStaticText' && ownOf(d, parsed.word)));
+}
+
+// ---------------------------------------------------------------------------
+// The snapshot depth cap
+// ---------------------------------------------------------------------------
+
+/**
+ * How a driver cuts off the snapshot its page-level queries run on, at
+ * `snapshotMaxDepth` (`maxDepth`):
+ *
+ * - `android` (UiAutomator2): the page source's root `hierarchy` is depth 0
+ *   and each child is one deeper; a node at depth `maxDepth` gets no
+ *   children. So the source holds depths `0..maxDepth`. Page-level XPath
+ *   runs on it; UiAutomator finds (`~name`, `id=`) do not.
+ * - `ios` (WebDriverAgent): the application is depth 0 and the snapshot
+ *   holds `maxDepth` levels, depths `0..maxDepth - 1`. Every query runs on
+ *   it.
+ *
+ * An element-scoped query starts a snapshot of its own at the element
+ * (depth 0 again), with the same cap: the element's descendants
+ * `maxDepth` (Android) or `maxDepth - 1` (iOS) levels below it are seen.
+ * `depthOf` is a node's depth below the page root.
+ */
+export interface SnapshotCap {
+  platform: 'android' | 'ios';
+  maxDepth: number;
+  depthOf: (raw: any) => number;
+}
+
+/** The deepest depth below a snapshot root that `cap`'s snapshot holds. */
+export function deepestHeld(cap: SnapshotCap): number {
+  return cap.platform === 'android' ? cap.maxDepth : cap.maxDepth - 1;
+}
+
+/** True when the page snapshot holds `raw`. */
+export function inSnapshot(raw: any, cap: SnapshotCap): boolean {
+  return cap.depthOf(raw) <= deepestHeld(cap);
+}
+
+/** True when a snapshot rooted at `root` holds its descendant `raw`. */
+export function inSnapshotBelow(root: any, raw: any, cap: SnapshotCap): boolean {
+  return cap.depthOf(raw) - cap.depthOf(root) <= deepestHeld(cap);
+}
+
+const ANDROID_SENTINEL = /^\(\/\/\*\[count\(ancestor::\*\) >= (\d+)\]\)\[1\]$/;
+const IOS_SENTINEL = /^-ios class chain:\*(?:\/\*)*$/;
+
+/** True when `selector` is a depth query (either platform). */
+export function isDepthSentinel(selector: string): boolean {
+  return ANDROID_SENTINEL.test(selector) || IOS_SENTINEL.test(selector);
+}
+
+/**
+ * The server's answer to a depth query over `nodes` (every node of the
+ * page), or `undefined` when `selector` is not one: Android, the first held
+ * node with at least `D` ancestors; iOS, the held nodes exactly as many
+ * levels below the application as the chain has segments.
+ */
+export function answerDepthSentinel(selector: string, nodes: any[], cap: SnapshotCap): any[] | undefined {
+  const android = selector.match(ANDROID_SENTINEL);
+  if (android) return nodes.filter(n => inSnapshot(n, cap) && cap.depthOf(n) >= Number(android[1])).slice(0, 1);
+  if (IOS_SENTINEL.test(selector)) {
+    const segments = selector.slice('-ios class chain:'.length).split('/').length;
+    return nodes.filter(n => inSnapshot(n, cap) && cap.depthOf(n) === segments);
+  }
+  return undefined;
 }
 
 /** True when `selector` is a narrowed text query (any platform). */

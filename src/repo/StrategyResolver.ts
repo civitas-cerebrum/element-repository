@@ -12,7 +12,7 @@ import {
 } from '../utils/abort';
 import { bindLookupSignal, runLookup } from '../utils/lookupSignal';
 import {
-  normaliseText, pickTextTokens, narrowedTextQueries, runNarrowedQueries, pickFromHits,
+  normaliseText, pickTextTokens, narrowedTextQueries, runNarrowedQueries, pickFromHits, snapshotConfirmedComplete,
   type TextVerdict, type NarrowedPick,
 } from '../utils/textNarrowing';
 
@@ -250,6 +250,7 @@ export class StrategyResolver {
           if (!isWeb) {
             return StrategyResolver.resolvePlatformByText(
               driver, selector, elementName, pageName, timeout, options.value, platform, signal,
+              options.requireFullPass === true,
             );
           }
           const filtered = driver.locator(selector).filter({ hasText: options.value });
@@ -392,11 +393,21 @@ export class StrategyResolver {
    * WebDriverAgent fail the narrowed query this way: the lookup is then
    * slower, but its answer is the same.
    *
-   * Known limit (Android): the narrowed XPath runs on the page source,
-   * which UiAutomator2 caps at `snapshotMaxDepth` (default 70). A match
-   * deeper than that is not found by a narrowed lookup, and its miss is a
-   * clean miss for the poll; raise `appium:snapshotMaxDepth` for such a
-   * screen.
+   * Confirming a narrowed miss: the narrowed queries run on the driver's
+   * snapshot, which UiAutomator2 and WebDriverAgent cut off at
+   * `snapshotMaxDepth` (default 70 and 50), while the full pass's text
+   * reads start again at each match. So when the last poll's narrowed
+   * queries miss, the lookup reads `snapshotMaxDepth` (one `getSettings()`)
+   * and runs one depth query (see `depthSentinelQuery`). Nothing that deep:
+   * the miss is final (`missBasis: 'narrowed'`). Something that deep, or
+   * either call failing (a lost session is thrown; other errors are not
+   * reported): ONE full pass runs; a match is returned, else the
+   * `TextNotFoundError` has `missBasis: 'full-pass'` and that pass's
+   * `cleanMiss` / `lastDriverError`. That pass may overrun the timeout by
+   * one pass. With `requireFullPass`, the full pass always runs, without
+   * the settings read or the depth query. Earlier polls are never
+   * confirmed: per lookup there is at most one settings read, one depth
+   * query and one confirming pass.
    *
    * Because the result is picked eagerly it is load-bearing, like ATTRIBUTE
    * and RANDOM: the lookup polls until a match appears or the caller's full
@@ -430,6 +441,7 @@ export class StrategyResolver {
     value: string,
     platform?: Platform,
     signal?: AbortSignal,
+    requireFullPass = false,
   ): Promise<Element> {
     const ctx: AbortContext = { elementName, pageName };
     const check = () => throwIfAborted(signal, ctx);
@@ -487,6 +499,8 @@ export class StrategyResolver {
       return normaliseText(text).includes(wantedNorm) ? 'contains' : 'none';
     };
 
+    // True when the last poll's miss came from the narrowed queries alone.
+    let narrowedMiss = false;
     for (;;) {
       check();
       pass++;
@@ -507,15 +521,30 @@ export class StrategyResolver {
         ? await fullPass()
         : picked?.raw;
       if (raw !== undefined) return new PlatformElement(driver, selector, raw, timeout, { platform });
+      narrowedMiss = picked === null;
 
       const remaining = deadline - Date.now();
       if (remaining <= 0) break;
       await abortableSleep(Math.min(TEXT_POLL_INTERVAL_MS, remaining), signal, ctx);
     }
 
+    // A narrowed miss ends the lookup only over a snapshot confirmed not
+    // cut off at snapshotMaxDepth; otherwise one full pass decides.
+    let missBasis: 'full-pass' | 'narrowed' = 'full-pass';
+    if (narrowedMiss) {
+      if (!requireFullPass && await snapshotConfirmedComplete(driver, textPlatform, signal)) {
+        missBasis = 'narrowed';
+      } else {
+        check();
+        pass++;
+        const raw = await fullPass();
+        if (raw !== undefined) return new PlatformElement(driver, selector, raw, timeout, { platform });
+      }
+    }
+
     check();
     throw new TextNotFoundError({
-      elementName, pageName, text: value, lastDriverError: lastError, cleanMiss: lastErrorPass !== pass,
+      elementName, pageName, text: value, lastDriverError: lastError, cleanMiss: lastErrorPass !== pass, missBasis,
     });
   }
 

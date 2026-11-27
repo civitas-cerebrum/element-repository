@@ -2,14 +2,16 @@ import { test, expect } from '@playwright/test';
 import { ElementRepository } from '../src/repo/ElementRepository';
 import { SelectionStrategy } from '../src/enum/Options';
 import { PlatformElement } from '../src/types';
-import { TextNotFoundError } from '../src/types/errors';
+import { TextNotFoundError, LookupAbortedError } from '../src/types/errors';
 import { readPlatformText, ANDROID_DESCENDANT_TEXT_XPATH, IOS_DESCENDANT_TEXT_SELECTOR } from '../src/utils/platformText';
 import {
   pickTextTokens, MAX_TEXT_TOKENS, narrowedTextQueries, selectorKind, xpathLiteral, normaliseText,
+  DEFAULT_SNAPSHOT_MAX_DEPTH, depthSentinelQuery, snapshotConfirmedComplete,
 } from '../src/utils/textNarrowing';
 import { isSessionLostError, isFatalDriverError } from '../src/utils/driverErrors';
 import {
   answerNarrowed, decodeXPathLiteral, decodePredicateString, isNarrowedQuery, narrowedWords, wasQueried, fold,
+  type SnapshotCap, inSnapshot, inSnapshotBelow, isDepthSentinel, answerDepthSentinel,
 } from './support/narrowedQueries';
 
 // ===========================================================================
@@ -479,6 +481,8 @@ interface MockNode {
   label?: string | null;
   value?: string | null;
   children?: MockNode[];
+  /** A top-level node's depth below the page root (default 1); a child is one deeper than its parent. */
+  depth?: number;
 }
 
 /** A raw iOS element from a node (no request counting): for the fixtures above. */
@@ -493,16 +497,51 @@ function iosRaw(node: MockNode): any {
  * `support/narrowedQueries`); `failNarrowed` makes it fail instead. Base
  * selectors: `~<name>`, `id=<resource id>`, any other selector string
  * matches every top-level node (UiAutomator, XPath, class names).
+ *
+ * The snapshot is cut off at `snapshotMaxDepth` as the server cuts it (see
+ * `SnapshotCap`): Android page-level XPath (the narrowed query, an XPath
+ * base, the depth query) and every iOS query see only held nodes;
+ * Android `~name` / `id=` finds see every node; element-scoped reads
+ * start a snapshot of their own at the element. `settings` is what
+ * `getSettings()` answers (an `Error` is thrown, `'unsupported'` leaves the
+ * method out; `{}` means the default depth); `failSentinel` makes the depth
+ * query fail.
  */
 class MockServer {
   readonly log: string[] = [];
   private readonly raws = new Map<string, any>();
   failNarrowed?: Error;
+  settings: Record<string, unknown> | Error | 'unsupported' = {};
+  failSentinel?: Error;
+  /** Makes the full pass's find (any query but a narrowed or depth one) fail. */
+  failFull?: Error;
+  /** Called with each request as it is made. */
+  onRequest?: (entry: string) => void;
 
   constructor(readonly platform: 'android' | 'ios', readonly roots: MockNode[], readonly latencyMs = 0) {}
 
+  /** The snapshot cap the server applies now. */
+  cap(): SnapshotCap {
+    const named = this.settings instanceof Error || this.settings === 'unsupported' ? undefined : this.settings.snapshotMaxDepth;
+    const maxDepth = typeof named === 'number' ? named : DEFAULT_SNAPSHOT_MAX_DEPTH[this.platform];
+    const depths = new Map<string, number>();
+    const walk = (nodes: MockNode[], parent?: number) => nodes.forEach(n => {
+      const d = parent === undefined ? n.depth ?? 1 : parent + 1;
+      depths.set(n.id, d);
+      walk(n.children ?? [], d);
+    });
+    walk(this.roots);
+    return { platform: this.platform, maxDepth, depthOf: raw => depths.get(raw.elementId) ?? 0 };
+  }
+
+  /** The finds that were depth queries. */
+  sentinels(): string[] { return this.finds().filter(isDepthSentinel); }
+  /** How many times the settings were read. */
+  settingsReads(): number { return this.log.filter(e => e === 'settings').length; }
+
   private async request(entry: string): Promise<void> {
     this.log.push(entry);
+    this.onRequest?.(entry);
     if (this.latencyMs > 0) await new Promise(r => setTimeout(r, this.latencyMs));
   }
 
@@ -515,17 +554,28 @@ class MockServer {
 
   private baseMatches(selector: string): any[] | undefined {
     const nodes = MockServer.all(this.roots);
-    if (selector.startsWith('~')) return nodes.filter(n => n.name === selector.slice(1)).map(n => this.raw(n));
-    if (selector.startsWith('id=')) return nodes.filter(n => n.resourceId === selector.slice(3)).map(n => this.raw(n));
-    return this.roots.map(n => this.raw(n));
+    const cap = this.cap();
+    // iOS finds and Android XPath run on the cut-off snapshot.
+    const held = (raws: any[], snapshot: boolean) => (snapshot ? raws.filter(r => inSnapshot(r, cap)) : raws);
+    const ios = this.platform === 'ios';
+    if (selector.startsWith('~')) return held(nodes.filter(n => n.name === selector.slice(1)).map(n => this.raw(n)), ios);
+    if (selector.startsWith('id=')) return held(nodes.filter(n => n.resourceId === selector.slice(3)).map(n => this.raw(n)), ios);
+    // An XPath by name: every node of that name the snapshot holds.
+    const byName = selector.match(/^\/\/\*\[@content-desc="([^"]*)"\]$/);
+    if (byName) return held(nodes.filter(n => n.name === byName[1]).map(n => this.raw(n)), true);
+    return held(this.roots.map(n => this.raw(n)), ios || selector.startsWith('/') || selector.startsWith('('));
   }
 
   raw(node: MockNode): any {
     const existing = this.raws.get(node.id);
     if (existing) return existing;
     const server = this;
-    const descendants = () => MockServer.all(node.children ?? []);
-    const raw = {
+    // An element-scoped read starts a snapshot of its own at the element.
+    const descendants = () => {
+      const cap = server.cap();
+      return MockServer.all(node.children ?? []).filter(d => inSnapshotBelow(raw, server.raw(d), cap));
+    };
+    const raw: any = {
       elementId: node.id,
       get __fields() {
         return {
@@ -560,18 +610,31 @@ class MockServer {
   }
 
   driver(): any {
-    return {
+    const driver: any = {
       capabilities: { platformName: this.platform === 'ios' ? 'iOS' : 'Android' },
       $: async (selector: string) => (this.baseMatches(selector) ?? [])[0],
       $$: async (selector: string) => {
         await this.request(`find ${selector}`);
         if (isNarrowedQuery(selector)) {
           if (this.failNarrowed) throw this.failNarrowed;
-          return answerNarrowed(selector, b => this.baseMatches(b));
+          return answerNarrowed(selector, b => this.baseMatches(b), undefined, this.cap());
         }
+        if (isDepthSentinel(selector)) {
+          if (this.failSentinel) throw this.failSentinel;
+          return answerDepthSentinel(selector, MockServer.all(this.roots).map(n => this.raw(n)), this.cap());
+        }
+        if (this.failFull) throw this.failFull;
         return this.baseMatches(selector) ?? [];
       },
     };
+    if (this.settings !== 'unsupported') {
+      driver.getSettings = async () => {
+        await this.request('settings');
+        if (this.settings instanceof Error) throw this.settings;
+        return this.settings;
+      };
+    }
+    return driver;
   }
 }
 
@@ -838,7 +901,7 @@ test.describe('narrowed TEXT costs', () => {
     expect(server.log.filter(e => e.endsWith(':text'))).toHaveLength(16);
   });
 
-  test('a miss: each poll costs 1 query on android and 2 on ios, and polls until the deadline (clean miss)', async () => {
+  test('a miss: each poll costs 1 query on android and 2 on ios, polls until the deadline, then one settings read and one depth query (clean, narrowed)', async () => {
     for (const platform of ['android', 'ios'] as const) {
       const rows = FRUITS.map((f, i): MockNode => (platform === 'android' ? { id: `r${i}`, name: 'row', text: f } : { id: `r${i}`, name: 'row', label: f }));
       const server = new MockServer(platform, rows, LATENCY);
@@ -846,11 +909,16 @@ test.describe('narrowed TEXT costs', () => {
       expect(err).toBeInstanceOf(TextNotFoundError);
       expect((err as TextNotFoundError).cleanMiss).toBe(true);
       expect((err as TextNotFoundError).lastDriverError).toBeUndefined();
+      expect((err as TextNotFoundError).missBasis).toBe('narrowed');
       const perPoll = platform === 'android' ? 1 : 2;
-      // Only queries, no reads, and more than one poll.
-      expect(server.log.every(e => e.startsWith('find '))).toBe(true);
-      expect(server.log.length % perPoll).toBe(0);
-      expect(server.log.length / perPoll).toBeGreaterThan(1);
+      // The confirmation comes last: one settings read, one depth query.
+      expect(server.log.slice(-2)).toEqual(['settings', `find ${server.sentinels()[0]}`]);
+      expect(server.sentinels()).toHaveLength(1);
+      const polls = server.log.slice(0, -2);
+      // Only narrowed queries, no reads, and more than one poll.
+      expect(polls.every(e => e.startsWith('find ') && isNarrowedQuery(e.slice(5)))).toBe(true);
+      expect(polls.length % perPoll).toBe(0);
+      expect(polls.length / perPoll).toBeGreaterThan(1);
     }
   });
 
@@ -981,7 +1049,11 @@ test.describe('narrowed getByText', () => {
     const err = await repo.getByText('rows', 'List', 'Durian', true).then(() => null, (e: unknown) => e) as TextNotFoundError;
     expect(err).toBeInstanceOf(TextNotFoundError);
     expect(err.cleanMiss).toBe(true);
-    expect(server.log.filter(e => !e.startsWith('find '))).toEqual([]);
+    expect(err.missBasis).toBe('narrowed');
+    // Each lookup: the narrowed query, one settings read, one depth query.
+    expect(server.log.filter(e => !e.startsWith('find '))).toEqual(['settings', 'settings']);
+    expect(server.finds().filter(f => !isNarrowedQuery(f))).toEqual(server.sentinels());
+    expect(server.sentinels()).toHaveLength(2);
   });
 
   test('an untrimmed needle: no exact match (texts are trimmed), as in the full comparison', async () => {
@@ -1025,6 +1097,340 @@ test.describe('narrowed getByText', () => {
     expect(el.resolvedElement.elementId).toBe('box');
     expect(server.finds()).toContain('~row');
   });
+});
+
+// ===========================================================================
+// Confirming a narrowed miss: the snapshot depth cap
+// ===========================================================================
+
+/** `node` placed `depth` levels below the page root, under a chain of plain containers. */
+function nestAt(depth: number, node: MockNode, prefix: string): MockNode {
+  let current = node;
+  for (let d = depth - 1; d >= 1; d--) current = { id: `${prefix}${d}`, children: [current] };
+  return current;
+}
+
+/** The children of a container whose descendant `levels` below it is `leaf`. */
+function chainBelow(levels: number, leaf: MockNode, prefix: string): MockNode[] {
+  let current = leaf;
+  for (let k = levels - 1; k >= 1; k--) current = { id: `${prefix}${k}`, children: [current] };
+  return [current];
+}
+
+const missOf = (p: Promise<unknown>) => p.then(() => null, (e: unknown) => e) as Promise<TextNotFoundError>;
+/** The full pass's finds: every find but the narrowed and the depth queries. */
+const fullFinds = (server: MockServer) => server.finds().filter(f => !isNarrowedQuery(f) && !isDepthSentinel(f));
+
+test.describe('a narrowed miss is confirmed against the snapshot depth cap', () => {
+  const ANDROID_SENTINEL_70 = '(//*[count(ancestor::*) >= 70])[1]';
+  const IOS_SENTINEL_50 = `-ios class chain:${Array(49).fill('*').join('/')}`;
+
+  test('the depth queries: android counts ancestors from the hierarchy root, ios has D - 1 child segments', () => {
+    expect(depthSentinelQuery('android', 70)).toBe(ANDROID_SENTINEL_70);
+    expect(depthSentinelQuery('android', 1)).toBe('(//*[count(ancestor::*) >= 1])[1]');
+    expect(depthSentinelQuery('ios', 50)).toBe(IOS_SENTINEL_50);
+    expect(depthSentinelQuery('ios', 3)).toBe('-ios class chain:*/*');
+    expect(depthSentinelQuery('ios', 2)).toBe('-ios class chain:*');
+    expect(depthSentinelQuery('ios', 1)).toBeNull();
+    for (const bad of [0, -1, 2.5, NaN]) expect(depthSentinelQuery('android', bad)).toBeNull();
+    expect(depthSentinelQuery('web', 70)).toBeNull();
+    expect(DEFAULT_SNAPSHOT_MAX_DEPTH).toEqual({ android: 70, ios: 50 });
+  });
+
+  test('the model: a node at the cut-off depth is held, and is what the depth query finds', () => {
+    for (const platform of ['android', 'ios'] as const) {
+      const cutOff = platform === 'android' ? 70 : 49;
+      const server = new MockServer(platform, [nestAt(cutOff + 3, { id: 'leaf' }, 'w')]);
+      const cap = server.cap();
+      const all = ['w1', `w${cutOff}`, `w${cutOff + 1}`].map(id => ({ elementId: id }));
+      expect(all.map(r => inSnapshot(r, cap))).toEqual([true, true, false]);
+      const sentinel = depthSentinelQuery(platform, cap.maxDepth)!;
+      const nodes = Array.from({ length: cutOff + 2 }, (_, i) => ({ elementId: `w${i + 1}` }));
+      expect(answerDepthSentinel(sentinel, nodes, cap)!.map(r => r.elementId)).toEqual([`w${cutOff}`]);
+      // One level shallower: nothing that deep.
+      expect(answerDepthSentinel(sentinel, nodes.slice(0, cutOff - 1), cap)).toEqual([]);
+    }
+  });
+
+  test('android ~row: a row deeper than the cap is missed by the narrowed query and found by the confirming pass', async () => {
+    const server = new MockServer('android', [
+      { id: 'a', name: 'row', text: 'Apple' },
+      nestAt(75, { id: 'deep', name: 'row', text: 'Durian' }, 'w'),
+    ]);
+    const el = await byText(repoOver(server, { 'accessibility id': 'row' }), 'Durian', 200) as PlatformElement;
+    expect(el.resolvedElement.elementId).toBe('deep');
+    expect(server.settingsReads()).toBe(1);
+    expect(server.sentinels()).toEqual([ANDROID_SENTINEL_70]);
+    expect(fullFinds(server)).toEqual(['~row']);
+  });
+
+  test('android XPath base: the row deeper than the cap is outside every pass (the same snapshot); the miss is a full pass', async () => {
+    const server = new MockServer('android', [
+      { id: 'a', name: 'row', text: 'Apple' },
+      nestAt(75, { id: 'deep', name: 'row', text: 'Durian' }, 'w'),
+    ]);
+    const miss = await missOf(byText(repoOver(server, { xpath: '//*[@content-desc="row"]' }), 'Durian', 200));
+    expect(miss).toBeInstanceOf(TextNotFoundError);
+    expect(miss.missBasis).toBe('full-pass');
+    expect(miss.cleanMiss).toBe(true);
+    expect(fullFinds(server)).toEqual(['//*[@content-desc="row"]']);
+  });
+
+  for (const selector of [{ 'accessibility id': 'row' }, { xpath: '//*[@content-desc="row"]' }]) {
+    test(`android ${Object.values(selector)[0]}: a row within the cap whose text lies below it is found by the confirming pass`, async () => {
+      const box: MockNode = { id: 'box', name: 'row', text: '', children: chainBelow(45, { id: 'leaf', text: 'Durian' }, 'c') };
+      const server = new MockServer('android', [{ id: 'a', name: 'row', text: 'Apple' }, nestAt(30, box, 'w')]);
+      const el = await byText(repoOver(server, selector), 'Durian', 200) as PlatformElement;
+      expect(el.resolvedElement.elementId).toBe('box');
+      expect(server.sentinels()).toEqual([ANDROID_SENTINEL_70]);
+      expect(fullFinds(server)).toHaveLength(1);
+    });
+  }
+
+  test('ios ~row: a row within the cap whose StaticText lies below it is found by the confirming pass', async () => {
+    const box: MockNode = { id: 'box', name: 'row', label: null, children: chainBelow(40, { id: 'leaf', type: 'XCUIElementTypeStaticText', label: 'Durian' }, 'c') };
+    const server = new MockServer('ios', [{ id: 'a', name: 'row', label: 'Apple' }, nestAt(20, box, 'w')]);
+    const el = await byText(repoOver(server, { 'accessibility id': 'row' }), 'Durian', 200) as PlatformElement;
+    expect(el.resolvedElement.elementId).toBe('box');
+    expect(server.settingsReads()).toBe(1);
+    expect(server.sentinels()).toEqual([IOS_SENTINEL_50]);
+    expect(fullFinds(server)).toEqual(['~row']);
+  });
+
+  test('ios ~row: a row deeper than the cap: every query runs on the snapshot, so the confirming pass misses it too', async () => {
+    const server = new MockServer('ios', [
+      { id: 'a', name: 'row', label: 'Apple' },
+      nestAt(55, { id: 'deep', name: 'row', label: 'Durian' }, 'w'),
+    ]);
+    const miss = await missOf(byText(repoOver(server, { 'accessibility id': 'row' }), 'Durian', 200));
+    expect(miss.missBasis).toBe('full-pass');
+    expect(fullFinds(server)).toEqual(['~row']);
+  });
+
+  for (const platform of ['android', 'ios'] as const) {
+    test(`${platform}: a shallow tree: one settings read, one depth query, no full pass, missBasis 'narrowed'`, async () => {
+      const server = new MockServer(platform, FRUITS.map((f, i) => ({ id: `r${i}`, name: 'row', text: f, label: f })));
+      const miss = await missOf(byText(repoOver(server, { 'accessibility id': 'row' }), 'Durian', 200));
+      expect(miss).toBeInstanceOf(TextNotFoundError);
+      expect(miss.missBasis).toBe('narrowed');
+      expect(miss.cleanMiss).toBe(true);
+      expect(server.settingsReads()).toBe(1);
+      expect(server.sentinels()).toEqual([platform === 'android' ? ANDROID_SENTINEL_70 : IOS_SENTINEL_50]);
+      expect(fullFinds(server)).toEqual([]);
+      expect(miss.message).toBe(`Element 'rows' on 'List' with text "Durian" not found.`);
+    });
+
+    test(`${platform}: the depth named in the settings is the one queried`, async () => {
+      const server = new MockServer(platform, [{ id: 'a', name: 'row', text: 'Apple', label: 'Apple' }]);
+      server.settings = { snapshotMaxDepth: 12, otherSetting: true };
+      await missOf(byText(repoOver(server, { 'accessibility id': 'row' }), 'Durian', 100));
+      expect(server.sentinels()).toEqual([depthSentinelQuery(platform, 12)]);
+    });
+  }
+
+  const named = (name: string, message: string) => Object.assign(new Error(message), { name });
+  const confirmers: Array<[string, (s: MockServer) => void, { settings: number; sentinels: number }]> = [
+    ['the depth query finds a node', s => { s.roots.push(nestAt(72, { id: 'deep-empty' }, 'w')); }, { settings: 1, sentinels: 1 }],
+    ['getSettings is unsupported', s => { s.settings = 'unsupported'; }, { settings: 0, sentinels: 0 }],
+    ['getSettings fails', s => { s.settings = named('unknown command', 'settings refused'); }, { settings: 1, sentinels: 0 }],
+    ['the settings name an unusable depth', s => { s.settings = { snapshotMaxDepth: 'deep' }; }, { settings: 1, sentinels: 0 }],
+    ['the depth query fails', s => { s.failSentinel = named('invalid selector', 'sentinel refused'); }, { settings: 1, sentinels: 1 }],
+  ];
+  for (const [why, arrange, counts] of confirmers) {
+    test(`android: ${why} → one full pass, missBasis 'full-pass', the confirmation's error is not reported`, async () => {
+      const server = new MockServer('android', FRUITS.map((f, i) => ({ id: `r${i}`, name: 'row', text: f })));
+      arrange(server);
+      const miss = await missOf(byText(repoOver(server, { 'accessibility id': 'row' }), 'Durian', 200));
+      expect(miss).toBeInstanceOf(TextNotFoundError);
+      expect(miss.missBasis).toBe('full-pass');
+      expect(miss.cleanMiss).toBe(true);
+      expect(miss.lastDriverError).toBeUndefined();
+      expect(miss.message).toBe(`Element 'rows' on 'List' with text "Durian" not found.`);
+      expect(server.settingsReads()).toBe(counts.settings);
+      expect(server.sentinels()).toHaveLength(counts.sentinels);
+      expect(fullFinds(server)).toEqual(['~row']);
+      // The full pass read every row.
+      expect(server.log.filter(e => e.endsWith(':text'))).toHaveLength(FRUITS.length);
+    });
+  }
+
+  test('a lost session in the settings read or the depth query is thrown', async () => {
+    const lost = named('invalid session id', 'session deleted');
+    const a = new MockServer('android', [{ id: 'a', name: 'row', text: 'Apple' }]);
+    a.settings = lost;
+    await expect(byText(repoOver(a, { 'accessibility id': 'row' }), 'Durian', 100)).rejects.toBe(lost);
+    const b = new MockServer('ios', [{ id: 'a', name: 'row', label: 'Apple' }]);
+    b.failSentinel = lost;
+    await expect(byText(repoOver(b, { 'accessibility id': 'row' }), 'Durian', 100)).rejects.toBe(lost);
+    await expect(repoOver(b, { 'accessibility id': 'row' }).getByText('rows', 'List', 'Durian')).rejects.toBe(lost);
+  });
+
+  test('a driver error in the confirming pass: cleanMiss false, lastDriverError that error', async () => {
+    const server = new MockServer('android', [{ id: 'a', name: 'row', text: 'Apple' }, nestAt(72, { id: 'deep-empty' }, 'w')]);
+    const stale = named('stale element reference', 'list changed');
+    server.onRequest = entry => { if (isDepthSentinel(entry.slice(5))) server.failFull = stale; };
+    const miss = await missOf(byText(repoOver(server, { 'accessibility id': 'row' }), 'Durian', 200));
+    expect(miss.missBasis).toBe('full-pass');
+    expect(miss.cleanMiss).toBe(false);
+    expect(miss.lastDriverError).toBe(stale);
+    expect(miss.message).toContain('(last driver error: stale element reference: list changed)');
+  });
+
+  test('over a timeout of many polls: one settings read, one depth query and at most one confirming pass', async () => {
+    for (const deep of [false, true]) {
+      const roots: MockNode[] = FRUITS.map((f, i) => ({ id: `r${i}`, name: 'row', text: f }));
+      if (deep) roots.push(nestAt(72, { id: 'deep-empty' }, 'w'));
+      const server = new MockServer('android', roots, 10);
+      await missOf(byText(repoOver(server, { 'accessibility id': 'row' }), 'Durian', 600));
+      expect(server.finds().filter(isNarrowedQuery).length).toBeGreaterThan(3);
+      expect(server.settingsReads()).toBe(1);
+      expect(server.sentinels()).toHaveLength(1);
+      expect(fullFinds(server)).toHaveLength(deep ? 1 : 0);
+      // The confirmation comes after the last poll.
+      const lastNarrowed = server.log.map(e => isNarrowedQuery(e.slice(5))).lastIndexOf(true);
+      expect(server.log.indexOf('settings')).toBeGreaterThan(lastNarrowed);
+    }
+  });
+
+  test('requireFullPass: a narrowed miss is always confirmed by a full pass, without the settings read or depth query', async () => {
+    const server = new MockServer('android', FRUITS.map((f, i) => ({ id: `r${i}`, name: 'row', text: f })));
+    const miss = await missOf(repoOver(server, { 'accessibility id': 'row' })
+      .get('rows', 'List', { strategy: SelectionStrategy.TEXT, value: 'Durian', timeout: 200, requireFullPass: true }));
+    expect(miss.missBasis).toBe('full-pass');
+    expect(server.settingsReads()).toBe(0);
+    expect(server.sentinels()).toEqual([]);
+    expect(fullFinds(server)).toEqual(['~row']);
+    // A hit is still narrowed.
+    const hit = new MockServer('android', FRUITS.map((f, i) => ({ id: `r${i}`, name: 'row', text: f })));
+    const el = await repoOver(hit, { 'accessibility id': 'row' })
+      .get('rows', 'List', { strategy: SelectionStrategy.TEXT, value: 'Mango', requireFullPass: true }) as PlatformElement;
+    expect(el.resolvedElement.elementId).toBe('r13');
+    expect(fullFinds(hit)).toEqual([]);
+  });
+
+  test('ios: a value CONTAINS error (a non-string value) makes every poll a full pass: no confirmation, missBasis full-pass', async () => {
+    const server = new MockServer('ios', FRUITS.map((f, i) => ({ id: `r${i}`, name: 'row', label: f })));
+    server.failNarrowed = named('unknown error', 'Can\'t do a substring operation with something that isn\'t a string');
+    const miss = await missOf(byText(repoOver(server, { 'accessibility id': 'row' }), 'Durian', 300));
+    expect(miss.missBasis).toBe('full-pass');
+    expect(miss.cleanMiss).toBe(true);
+    expect(server.settingsReads()).toBe(0);
+    expect(server.sentinels()).toEqual([]);
+    expect(fullFinds(server).length).toBeGreaterThan(0);
+  });
+
+  test('ios: the depth query finding a node → one full pass', async () => {
+    const server = new MockServer('ios', [{ id: 'a', name: 'row', label: 'Apple' }, nestAt(52, { id: 'deep-empty' }, 'w')]);
+    const miss = await missOf(byText(repoOver(server, { 'accessibility id': 'row' }), 'Durian', 200));
+    expect(miss.missBasis).toBe('full-pass');
+    expect(server.sentinels()).toEqual([IOS_SENTINEL_50]);
+    expect(fullFinds(server)).toEqual(['~row']);
+  });
+
+  for (const stage of ['settings', 'sentinel'] as const) {
+    test(`an abort during the ${stage} stops the lookup before the next call`, async () => {
+      const server = new MockServer('android', [{ id: 'a', name: 'row', text: 'Apple' }, nestAt(72, { id: 'deep-empty' }, 'w')], 20);
+      const controller = new AbortController();
+      server.onRequest = entry => {
+        if (stage === 'settings' ? entry === 'settings' : isDepthSentinel(entry.slice(5))) controller.abort(new Error('stop'));
+      };
+      const err = await repoOver(server, { 'accessibility id': 'row' })
+        .get('rows', 'List', { strategy: SelectionStrategy.TEXT, value: 'Durian', timeout: 100, signal: controller.signal })
+        .then(() => null, (e: unknown) => e);
+      expect(err).toBeInstanceOf(LookupAbortedError);
+      expect(server.sentinels()).toHaveLength(stage === 'settings' ? 0 : 1);
+      expect(fullFinds(server)).toEqual([]);
+    });
+  }
+
+  test('an aborted signal is checked before the settings read', async () => {
+    const server = new MockServer('android', [{ id: 'a', name: 'row', text: 'Apple' }]);
+    const controller = new AbortController();
+    controller.abort(new Error('early'));
+    await expect(snapshotConfirmedComplete(server.driver(), 'android', controller.signal)).rejects.toBeInstanceOf(LookupAbortedError);
+    expect(server.settingsReads()).toBe(0);
+  });
+
+  test.describe('getByText', () => {
+    test('a shallow tree: strict miss with missBasis narrowed; requireFullPass: missBasis full-pass and a full comparison', async () => {
+      const server = new MockServer('android', FRUITS.map((f, i) => ({ id: `r${i}`, name: 'row', text: f })));
+      const repo = repoOver(server, { 'accessibility id': 'row' });
+      const narrowed = await missOf(repo.getByText('rows', 'List', 'Durian', true));
+      expect(narrowed.missBasis).toBe('narrowed');
+      expect(fullFinds(server)).toEqual([]);
+
+      const full = await missOf(repo.getByText('rows', 'List', 'Durian', true, { requireFullPass: true }));
+      expect(full.missBasis).toBe('full-pass');
+      expect(full.message).toBe(narrowed.message);
+      expect(fullFinds(server)).toEqual(['~row']);
+      expect(server.settingsReads()).toBe(1);
+
+      // Non-strict: null either way; requireFullPass backs it with a full comparison.
+      const before = fullFinds(server).length;
+      expect(await repo.getByText('rows', 'List', 'Durian', false, { requireFullPass: true })).toBeNull();
+      expect(fullFinds(server).length).toBe(before + 1);
+    });
+
+    for (const platform of ['android', 'ios'] as const) {
+      test(`${platform}: a row within the cap whose text lies below it is found by comparing every match`, async () => {
+        const leaf: MockNode = platform === 'android' ? { id: 'leaf', text: 'Durian' } : { id: 'leaf', type: 'XCUIElementTypeStaticText', label: 'Durian' };
+        // The leaf lies below the page's cut-off but within the row's own snapshot.
+        const box: MockNode = { id: 'box', name: 'row', text: '', label: null, children: chainBelow(platform === 'android' ? 50 : 40, leaf, 'c') };
+        const server = new MockServer(platform, [{ id: 'a', name: 'row', text: 'Apple', label: 'Apple' }, nestAt(25, box, 'w')]);
+        const el = await repoOver(server, { 'accessibility id': 'row' }).getByText('rows', 'List', 'Durian', true) as PlatformElement;
+        expect(el.resolvedElement.elementId).toBe('box');
+        expect(server.settingsReads()).toBe(1);
+        expect(server.sentinels()).toHaveLength(1);
+        expect(fullFinds(server)).toEqual(['~row']);
+      });
+    }
+
+    test('android ~row: a row deeper than the cap is found by comparing every match', async () => {
+      const server = new MockServer('android', [{ id: 'a', name: 'row', text: 'Apple' }, nestAt(75, { id: 'deep', name: 'row', text: 'Durian' }, 'w')]);
+      const el = await repoOver(server, { 'accessibility id': 'row' }).getByText('rows', 'List', 'Durian') as PlatformElement;
+      expect(el.resolvedElement.elementId).toBe('deep');
+    });
+
+    test('getSettings unsupported, or the depth query failing: every match is compared, missBasis full-pass', async () => {
+      for (const arrange of [(s: MockServer) => { s.settings = 'unsupported'; }, (s: MockServer) => { s.failSentinel = named('invalid selector', 'x'); }]) {
+        const server = new MockServer('ios', FRUITS.map((f, i) => ({ id: `r${i}`, name: 'row', label: f })));
+        arrange(server);
+        const miss = await missOf(repoOver(server, { 'accessibility id': 'row' }).getByText('rows', 'List', 'Durian', true));
+        expect(miss.missBasis).toBe('full-pass');
+        expect(miss.cleanMiss).toBe(true);
+        expect(fullFinds(server)).toEqual(['~row']);
+      }
+    });
+
+    test('an abort during the depth query rejects, also when strict is false', async () => {
+      const server = new MockServer('android', [{ id: 'a', name: 'row', text: 'Apple' }, nestAt(72, { id: 'deep-empty' }, 'w')]);
+      const controller = new AbortController();
+      server.onRequest = entry => { if (isDepthSentinel(entry.slice(5))) controller.abort(new Error('stop')); };
+      await expect(repoOver(server, { 'accessibility id': 'row' }).getByText('rows', 'List', 'Durian', false, { signal: controller.signal }))
+        .rejects.toBeInstanceOf(LookupAbortedError);
+      // Nothing after the depth query (the `~row` find before it is the attach wait a signal adds).
+      expect(isDepthSentinel(server.log[server.log.length - 1].slice(5))).toBe(true);
+    });
+  });
+});
+
+test.describe('TextNotFoundError.missBasis', () => {
+  test('defaults to full-pass; the message does not change with it', () => {
+    const a = new TextNotFoundError({ elementName: 'e', pageName: 'p', text: 't' });
+    const b = new TextNotFoundError({ elementName: 'e', pageName: 'p', text: 't', missBasis: 'narrowed' });
+    expect(a.missBasis).toBe('full-pass');
+    expect(b.missBasis).toBe('narrowed');
+    expect(b.message).toBe(a.message);
+  });
+});
+
+test('android: U+FFFE and U+FFFF are unsafe (UiAutomator2 writes ? for them in the page source)', () => {
+  expect(pickTextTokens('ab￾cd ok', 'android')).toEqual(['ok']);
+  expect(pickTextTokens('ab￿cd ok', 'android')).toEqual(['ok']);
+  expect(pickTextTokens('￾', 'android')).toEqual([]);
+  expect(pickTextTokens('ab￾cd ok', 'ios')).toEqual(['ok']);
+  // The neighbours U+FFFD and U+E000 are XML characters and stay safe.
+  expect(pickTextTokens('ab�cd', 'android')).toEqual(['ab�cd']);
 });
 
 test('the iOS CONTAINS[cd] model folds case and diacritics', () => {

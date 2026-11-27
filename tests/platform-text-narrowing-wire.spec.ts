@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import * as http from 'http';
 import type { AddressInfo } from 'net';
-import { ElementRepository, SelectionStrategy, PlatformElement } from '../src';
+import { ElementRepository, SelectionStrategy, PlatformElement, TextNotFoundError } from '../src';
 
 // The narrowed text queries over a REAL WebdriverIO 10 `remote()` session
 // against a local fake WebDriver server: the composed selector strings reach
@@ -18,12 +18,21 @@ interface FakeServer { port: number; session: string; requests: Recorded[]; clos
 /** Elements of the fake app: two rows, the second is "Apple Pie". */
 const ROWS: Record<string, string> = { 'row-1': 'Banana Split', 'row-2': 'Apple Pie' };
 
-async function startFakeServer(platformName: 'iOS' | 'Android', options: { rejectNarrowed?: boolean } = {}): Promise<FakeServer> {
+/**
+ * `settings`: the answer to `GET /appium/settings`; `deep`: the depth
+ * query finds an element (else nothing).
+ */
+async function startFakeServer(
+  platformName: 'iOS' | 'Android',
+  options: { rejectNarrowed?: boolean; settings?: Record<string, unknown>; deep?: boolean } = {},
+): Promise<FakeServer> {
   const requests: Recorded[] = [];
   const session = `fake-narrowing-${process.pid}-${++sessionCounter}`;
   const isNarrowed = (body: any) =>
     typeof body?.value === 'string' && (body.value.includes('CONTAINS[cd]') || body.value.includes('contains(translate('));
-  const server = http.createServer((req, res) => {
+  const isSentinel = (body: any) => typeof body?.value === 'string'
+    && (body.value.startsWith('(//*[count(ancestor::*) >= ') || /^\*(\/\*)*$/.test(body.value));
+  const server =http.createServer((req, res) => {
     let raw = '';
     req.on('data', chunk => { raw += chunk; });
     req.on('end', () => {
@@ -38,6 +47,10 @@ async function startFakeServer(platformName: 'iOS' | 'Android', options: { rejec
       const rowId = url.split('/')[4];
       if (method === 'POST' && url === '/session') {
         value = { sessionId: session, capabilities: { platformName } };
+      } else if (method === 'GET' && url === `${s}/appium/settings`) {
+        value = options.settings ?? {};
+      } else if (method === 'POST' && url === `${s}/elements` && isSentinel(body)) {
+        value = options.deep ? ids(['deep-1']) : [];
       } else if (method === 'POST' && url === `${s}/elements` && isNarrowed(body)) {
         if (options.rejectNarrowed) {
           status = 400;
@@ -161,6 +174,43 @@ test.describe('narrowed text queries on the wire (WebdriverIO 10)', () => {
     expect(el.resolvedElement.elementId).toBe('row-2');
     expect(finds(server).map(f => f.using)).toEqual(['xpath', 'accessibility id']);
     expect(finds(server)[1].value).toBe('row');
+  });
+
+  for (const platformName of ['Android', 'iOS'] as const) {
+    test(`${platformName}: a narrowed miss reads the settings once and sends one depth query for the depth they name`, async () => {
+      server = await startFakeServer(platformName, { settings: { snapshotMaxDepth: 12 } });
+      driver = await session(server, platformName);
+      const platform = platformName === 'iOS' ? 'ios' : 'android';
+      const err = await repo(driver, platform, { 'accessibility id': 'row' })
+        .get('rows', 'List', { strategy: SelectionStrategy.TEXT, value: 'Durian', timeout: 300 })
+        .then(() => null, (e: unknown) => e) as TextNotFoundError;
+      expect(err).toBeInstanceOf(TextNotFoundError);
+      expect(err.missBasis).toBe('narrowed');
+      const settingsReads = server.requests.filter(r => r.method === 'GET' && r.path === `/session/${server!.session}/appium/settings`);
+      expect(settingsReads).toHaveLength(1);
+      const sentinel = platformName === 'iOS'
+        ? { using: '-ios class chain', value: Array(11).fill('*').join('/') }
+        : { using: 'xpath', value: '(//*[count(ancestor::*) >= 12])[1]' };
+      const sent = finds(server);
+      expect(sent.filter(f => f.value === sentinel.value)).toEqual([sentinel]);
+      // The depth query is the last find; no full pass followed.
+      expect(sent[sent.length - 1]).toEqual(sentinel);
+      expect(sent.some(f => f.using === 'accessibility id')).toBe(false);
+    });
+  }
+
+  test('Android: the depth query finding an element → one full pass, missBasis full-pass (default depth 70)', async () => {
+    server = await startFakeServer('Android', { deep: true });
+    driver = await session(server, 'Android');
+    const err = await repo(driver, 'android', { 'accessibility id': 'row' })
+      .get('rows', 'List', { strategy: SelectionStrategy.TEXT, value: 'Durian', timeout: 300 })
+      .then(() => null, (e: unknown) => e) as TextNotFoundError;
+    expect(err).toBeInstanceOf(TextNotFoundError);
+    expect(err.missBasis).toBe('full-pass');
+    const sent = finds(server);
+    expect(sent.filter(f => f.value === '(//*[count(ancestor::*) >= 70])[1]')).toHaveLength(1);
+    expect(sent[sent.length - 1]).toEqual({ using: 'accessibility id', value: 'row' });
+    expect(sent.filter(f => f.using === 'accessibility id')).toHaveLength(1);
   });
 
   test('getByText on ios sends the same narrowed queries', async () => {
