@@ -5,5 +5,5 @@ export {
 export { WebElement } from './WebElement';
 export { PlatformElement, PlatformElementOptions } from './PlatformElement';
 export { ElementChain } from './ElementChain';
-export { TextNotFoundError, LookupAbortedError } from './errors';
-export type { TextNotFoundErrorInit, LookupAbortedErrorInit } from './errors';
+export { TextNotFoundError, LookupAbortedError, ElementNotFoundError } from './errors';
+export type { TextNotFoundErrorInit, LookupAbortedErrorInit, ElementNotFoundErrorInit } from './errors';

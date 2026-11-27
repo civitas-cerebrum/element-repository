@@ -17,7 +17,8 @@ import {
 import { ElementResolutionOptions, LookupOptions, SelectionStrategy } from '../enum/Options';
 import { EnhancedResolver } from './EnhancedResolver';
 import { StrategyResolver } from './StrategyResolver';
-import { TextNotFoundError } from '../types/errors';
+import { ElementNotFoundError, TextNotFoundError } from '../types/errors';
+import { isFatalDriverError, isSessionLostError } from '../utils/driverErrors';
 import { argumentError, isArgumentError, rethrowAbort, throwIfAborted } from '../utils/abort';
 import { bindLookupSignal, releaseLookupSignal, runLookup } from '../utils/lookupSignal';
 
@@ -316,6 +317,8 @@ export class ElementRepository {
       element = await this.resolveFromSingleSelector(pageObj, elementName, selector, pageName, options);
     } catch (primaryError) {
       rethrowAbort(primaryError);
+      // A lost session or connection fails every node alike: thrown at once.
+      if (isSessionLostError(primaryError)) throw primaryError;
       // An argument error comes before the signal check, as on an entry
       // without a fallback. Under a live signal the fallback is walked as
       // without one.
@@ -348,6 +351,7 @@ export class ElementRepository {
     } catch (err) {
       releaseLookupSignal(element);
       rethrowAbort(err);
+      if (isSessionLostError(err)) throw err;
       throwIfAborted(signal);
       return this.resolveWithFallback(pageObj, elementName, fallback, pageName, options);
     }
@@ -463,9 +467,16 @@ export class ElementRepository {
 
   /**
    * Randomly selects one element from a list of elements matching the given selector.
+   *
+   * A miss (no element within the timeout, see the RANDOM strategy) is an
+   * {@link ElementNotFoundError}: thrown when `strict`, otherwise its message
+   * is warned and `null` returned. An unknown element or page is thrown as
+   * it is when `strict`, otherwise `null`. A driver error that is not a miss
+   * (a fatal one, see `isFatalDriverError`, or one raised after the wait) is
+   * thrown in both modes.
    * @param elementName The specific element name to look up.
    * @param pageName The name of the page block in the JSON repository.
-   * @param strict If true, throws an error if no elements are found. Defaults to false.
+   * @param strict If true, throws an {@link ElementNotFoundError} if no elements are found. Defaults to false.
    * @param options Optional `signal` that cancels the lookup (see {@link LookupOptions}).
    * @returns A promise that resolves to a randomly selected Element, or null if none are found.
    * @throws LookupAbortedError when `options.signal` is aborted, also when `strict` is false.
@@ -488,9 +499,14 @@ export class ElementRepository {
       // An argument error comes before the signal check.
       if (signal?.aborted && isArgumentError(err)) throw err;
       throwIfAborted(signal);
-      const msg = `No elements found for '${elementName}' on '${pageName}'`;
-      if (strict) throw new Error(msg);
-      console.warn(msg);
+      // A driver error is never read as "nothing matched": a fatal one, and
+      // any error that is not the strategy's typed miss or an unknown
+      // entry, is thrown as it is.
+      if (isFatalDriverError(err)) throw err;
+      const miss = err instanceof ElementNotFoundError;
+      if (!miss && !isArgumentError(err)) throw err;
+      if (strict) throw err;
+      console.warn(miss ? err.message : `No elements found for '${elementName}' on '${pageName}'`);
       return null;
     }
   }

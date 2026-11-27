@@ -4,11 +4,11 @@ import { ElementResolutionOptions, SelectionStrategy } from '../enum/Options';
 import { pickRandomIndex } from '../utils/math';
 import { EnhancedResolver } from './EnhancedResolver';
 import { isFatalDriverError } from '../utils/driverErrors';
-import { TextNotFoundError } from '../types/errors';
+import { ElementNotFoundError, TextNotFoundError } from '../types/errors';
 import type { Platform } from '../enum/Platform';
 import { detectDriverPlatform, readPlatformText } from '../utils/platformText';
 import {
-  abortableSleep, argumentError, ignoreUnlessAborted, raceAbort, rethrowAbort, throwIfAborted, type AbortContext,
+  abortableSleep, argumentError, raceAbort, rethrowAbort, throwIfAborted, type AbortContext,
 } from '../utils/abort';
 import { bindLookupSignal, runLookup } from '../utils/lookupSignal';
 import {
@@ -42,6 +42,30 @@ const HANDLED_STRATEGIES = [
   SelectionStrategy.ATTRIBUTE,
   SelectionStrategy.ALL,
 ].join(', ');
+
+/** Poll interval of the RANDOM / ATTRIBUTE wait between attempts that hit a driver error, or between platform polls. */
+const MATCH_POLL_INTERVAL_MS = 250;
+
+/**
+ * A `.catch()` handler for a best-effort attach probe: an abort and a fatal
+ * driver error ({@link isFatalDriverError}: dead session, invalid selector,
+ * ...) are thrown as they are; any other error is swallowed (the lazy element
+ * is returned and its action reports its own error).
+ */
+function ignoreProbeError(err: unknown): void {
+  rethrowAbort(err);
+  if (isFatalDriverError(err)) throw err;
+}
+
+/**
+ * True for a wait that ran out of time on web: Playwright's `TimeoutError`,
+ * or its `Timeout <n>ms exceeded` message.
+ */
+function isWaitTimeout(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const { name, message } = err as { name?: unknown; message?: unknown };
+  return name === 'TimeoutError' || (typeof message === 'string' && /Timeout \d+ms exceeded/.test(message));
+}
 
 function unhandledStrategyError(strategy: string, elementName: string, pageName: string, handled: string = HANDLED_STRATEGIES): Error {
   return argumentError(
@@ -116,21 +140,11 @@ export class StrategyResolver {
           // paths, which gate a best-effort probe whose failure is swallowed.
           // Use .first() to avoid Playwright strict-mode violations on locators
           // that match multiple elements (e.g. a list of size labels).
-          try {
-            await base.first().waitFor({ state: 'visible', timeout });
-          } catch (err) {
-            rethrowAbort(err);
-            throw new Error(`No elements found for '${elementName}' on '${pageName}'`);
-          }
-          const all = await base.all();
-          if (all.length === 0) {
-            throw new Error(`No elements found for '${elementName}' on '${pageName}'`);
-          }
-          return all[pickRandomIndex(all.length)];
+          return StrategyResolver.pickRandom(base, elementName, pageName, timeout, signal);
         }
         case SelectionStrategy.ALL: {
           const element = web(locator);
-          await element.waitFor({ state: 'attached', timeout: Math.min(timeout, ATTACH_PROBE_TIMEOUT_MS) }).catch(ignoreUnlessAborted);
+          await element.waitFor({ state: 'attached', timeout: Math.min(timeout, ATTACH_PROBE_TIMEOUT_MS) }).catch(ignoreProbeError);
           return element;
         }
         case SelectionStrategy.TEXT: {
@@ -139,7 +153,7 @@ export class StrategyResolver {
           }
           const filtered = locator.filter({ hasText: options.value });
           const element = web(filtered.first());
-          await element.waitFor({ state: 'attached', timeout: Math.min(timeout, ATTACH_PROBE_TIMEOUT_MS) }).catch(ignoreUnlessAborted);
+          await element.waitFor({ state: 'attached', timeout: Math.min(timeout, ATTACH_PROBE_TIMEOUT_MS) }).catch(ignoreProbeError);
           return element;
         }
         case SelectionStrategy.ATTRIBUTE: {
@@ -152,7 +166,7 @@ export class StrategyResolver {
     }
 
     const element = web(locator.first());
-    await element.waitFor({ state: 'attached', timeout: Math.min(timeout, ATTACH_PROBE_TIMEOUT_MS) }).catch(ignoreUnlessAborted);
+    await element.waitFor({ state: 'attached', timeout: Math.min(timeout, ATTACH_PROBE_TIMEOUT_MS) }).catch(ignoreProbeError);
     return element;
   }
 
@@ -231,17 +245,7 @@ export class StrategyResolver {
           // for the rationale (RANDOM is load-bearing, not a swallowed probe).
           // Use .first() to avoid Playwright strict-mode violations on locators
           // that match multiple elements (e.g. a list of size labels).
-          try {
-            await base.first().waitFor({ state: 'visible', timeout });
-          } catch (err) {
-            rethrowAbort(err);
-            throw new Error(`No elements found for '${elementName}' on '${pageName}'`);
-          }
-          const all = await base.all();
-          if (all.length === 0) {
-            throw new Error(`No elements found for '${elementName}' on '${pageName}'`);
-          }
-          return all[pickRandomIndex(all.length)];
+          return StrategyResolver.pickRandom(base, elementName, pageName, timeout, signal);
         }
         case SelectionStrategy.TEXT: {
           if (!options.value?.trim()) {
@@ -255,12 +259,12 @@ export class StrategyResolver {
           }
           const filtered = driver.locator(selector).filter({ hasText: options.value });
           const element = bindLookupSignal(new WebElement(filtered.first(), selector, timeout), signal);
-          await element.waitFor({ state: 'attached', timeout: Math.min(timeout, ATTACH_PROBE_TIMEOUT_MS) }).catch(ignoreUnlessAborted);
+          await element.waitFor({ state: 'attached', timeout: Math.min(timeout, ATTACH_PROBE_TIMEOUT_MS) }).catch(ignoreProbeError);
           return element;
         }
         case SelectionStrategy.ALL: {
           const element = make();
-          await element.waitFor({ state: 'attached', timeout: Math.min(timeout, ATTACH_PROBE_TIMEOUT_MS) }).catch(ignoreUnlessAborted);
+          await element.waitFor({ state: 'attached', timeout: Math.min(timeout, ATTACH_PROBE_TIMEOUT_MS) }).catch(ignoreProbeError);
           return element;
         }
         case SelectionStrategy.ATTRIBUTE: {
@@ -273,7 +277,7 @@ export class StrategyResolver {
     }
 
     const element = make().first();
-    await element.waitFor({ state: 'attached', timeout: Math.min(timeout, ATTACH_PROBE_TIMEOUT_MS) }).catch(ignoreUnlessAborted);
+    await element.waitFor({ state: 'attached', timeout: Math.min(timeout, ATTACH_PROBE_TIMEOUT_MS) }).catch(ignoreProbeError);
     return element;
   }
 
@@ -318,7 +322,7 @@ export class StrategyResolver {
     const base = bindLookupSignal(new PlatformElement(driver, selector, undefined, timeout, { platform }), options?.signal);
 
     if (options?.strategy === SelectionStrategy.ALL) {
-      await base.waitFor({ state: 'attached', timeout }).catch(ignoreUnlessAborted);
+      await base.waitFor({ state: 'attached', timeout }).catch(ignoreProbeError);
       return base;
     }
 
@@ -330,7 +334,7 @@ export class StrategyResolver {
     }
 
     const element = base.first();
-    await element.waitFor({ state: 'attached', timeout }).catch(ignoreUnlessAborted);
+    await element.waitFor({ state: 'attached', timeout }).catch(ignoreProbeError);
     return element;
   }
 
@@ -416,7 +420,8 @@ export class StrategyResolver {
    * cut-off level and the pass's own find runs on the snapshot (any iOS
    * selector; an Android XPath): a match below the cut-off can then be
    * missed even by the full pass. An Android accessibility id, resource id
-   * or class name is found on the live hierarchy, so its full pass's miss
+   * (the full or the short `id=` form), class name or UiAutomator selector
+   * is found on the live hierarchy, so its full pass's miss
    * stands: `false`, with no check. Absent when the check could not run
    * (or on a platform other than iOS and Android).
    *
@@ -602,24 +607,113 @@ export class StrategyResolver {
       throw argumentError('options.value is required when using SelectionStrategy.ATTRIBUTE');
     }
 
-    // Use .first() to avoid Playwright strict-mode violations on locators
-    // that match multiple elements. 'attached' rather than 'visible' —
-    // attribute filters legitimately target non-visible elements.
-    try {
-      await base.first().waitFor({ state: 'attached', timeout });
-    } catch (err) {
-      rethrowAbort(err);
-      throw new Error(`No elements found for '${elementName}' on '${pageName}'`);
-    }
-
-    const all = await base.all();
+    // 'attached' rather than 'visible' — attribute filters legitimately
+    // target non-visible elements.
+    const all = await StrategyResolver.awaitMatches(base, 'attached', elementName, pageName, timeout, 'attribute', options.signal);
     const match = await StrategyResolver.filterByAttribute(all, options.attribute, options.value, undefined, options.signal);
     if (!match) {
-      throw new Error(
-        `Element '${elementName}' on '${pageName}' with attribute [${options.attribute}] matching "${options.value}" not found.`,
-      );
+      // The reads that filter throw their own errors, so a miss here is clean.
+      throw new ElementNotFoundError({
+        elementName, pageName, strategy: 'attribute',
+        message: `Element '${elementName}' on '${pageName}' with attribute [${options.attribute}] matching "${options.value}" not found.`,
+      });
     }
     return match;
+  }
+
+  /**
+   * The RANDOM strategy: waits for the first match to be visible (see
+   * {@link awaitMatches}), then picks one of all the matches at random.
+   * Throws an {@link ElementNotFoundError} (`strategy: 'random'`) when none
+   * is there.
+   */
+  private static async pickRandom(
+    base: Element, elementName: string, pageName: string, timeout: number, signal: AbortSignal | undefined,
+  ): Promise<Element> {
+    const all = await StrategyResolver.awaitMatches(base, 'visible', elementName, pageName, timeout, 'random', signal);
+    if (all.length === 0) throw new ElementNotFoundError({ elementName, pageName, strategy: 'random' });
+    return all[pickRandomIndex(all.length)];
+  }
+
+  /**
+   * The load-bearing wait of RANDOM (`visible`) and ATTRIBUTE (`attached`):
+   * waits up to the caller's full `timeout` for the first match of `base` to
+   * reach `state` and returns every match.
+   *
+   * Driver errors (see {@link isFatalDriverError}): an abort and a fatal
+   * error (dead session, invalid selector, ...) are thrown as they are, at
+   * once. Any other error is not a miss: the wait goes on until the
+   * deadline. When the deadline passes with no match, an
+   * {@link ElementNotFoundError} is thrown whose `lastDriverError` (also its
+   * `cause` and the message suffix ` (last driver error: ...)`) is the last
+   * such error of any poll, and whose `cleanMiss` is `false` when the final
+   * poll hit one.
+   *
+   * - Platform: polls `all()` (one `$$`) every 250 ms; for `visible`, the
+   *   first match's `isDisplayed()` is read too. No match, or a first match
+   *   not shown, is a clean poll.
+   * - Web: Playwright's `waitFor` on the first match (Playwright retries
+   *   inside it); its timeout is the clean miss; any other non-fatal error
+   *   is retried after 250 ms with the time left. On success the matches
+   *   are read with `all()`, whose errors are thrown as they are.
+   */
+  private static async awaitMatches(
+    base: Element,
+    state: 'visible' | 'attached',
+    elementName: string,
+    pageName: string,
+    timeout: number,
+    strategy: 'random' | 'attribute',
+    signal: AbortSignal | undefined,
+  ): Promise<Element[]> {
+    const ctx: AbortContext = { elementName, pageName };
+    const deadline = Date.now() + timeout;
+    let lastError: unknown;
+    let finalFailed = false;
+    const remember = (err: unknown) => {
+      rethrowAbort(err);
+      if (isFatalDriverError(err)) throw err;
+      lastError = err;
+      finalFailed = true;
+    };
+    const miss = () => new ElementNotFoundError({
+      elementName, pageName, strategy, lastDriverError: lastError, cleanMiss: !finalFailed,
+    });
+
+    if (isWeb(base)) {
+      // Use .first() to avoid Playwright strict-mode violations on locators
+      // that match multiple elements (e.g. a list of size labels).
+      for (let attempt = 0; ; attempt++) {
+        const remaining = attempt === 0 ? timeout : deadline - Date.now();
+        try {
+          await base.first().waitFor({ state, timeout: remaining });
+        } catch (err) {
+          rethrowAbort(err);
+          if (isFatalDriverError(err)) throw err;
+          if (isWaitTimeout(err)) { finalFailed = false; throw miss(); }
+          remember(err);
+          const left = deadline - Date.now();
+          if (left <= 0) throw miss();
+          await abortableSleep(Math.min(MATCH_POLL_INTERVAL_MS, left), signal, ctx);
+          continue;
+        }
+        return base.all();
+      }
+    }
+
+    for (;;) {
+      throwIfAborted(signal, ctx);
+      finalFailed = false;
+      try {
+        const all = await base.all();
+        if (all.length > 0 && (state === 'attached' || await all[0].isVisible())) return all;
+      } catch (err) {
+        remember(err);
+      }
+      const left = deadline - Date.now();
+      if (left <= 0) throw miss();
+      await abortableSleep(Math.min(MATCH_POLL_INTERVAL_MS, left), signal, ctx);
+    }
   }
 
   /**

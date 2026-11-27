@@ -38,6 +38,79 @@ export function describeDriverError(err: unknown): string {
   return String(err);
 }
 
+/** What an {@link ElementNotFoundError} reports. */
+export interface ElementNotFoundErrorInit {
+  /** The element name of the repository entry. */
+  elementName: string;
+  /** The page name of the repository entry. */
+  pageName: string;
+  /** The selection strategy whose lookup found nothing, e.g. `'random'` or `'attribute'`. */
+  strategy: 'random' | 'attribute' | (string & {});
+  /** The last non-fatal driver error of the lookup, if one happened in any poll. Becomes the `cause`. */
+  lastDriverError?: unknown;
+  /**
+   * `true` when the final poll ran without a driver error, so the miss is a
+   * real "nothing matched". Defaults to `lastDriverError === undefined`.
+   */
+  cleanMiss?: boolean;
+  /**
+   * The message before the driver-error suffix. Defaults to
+   * `No elements found for '<elementName>' on '<pageName>'`.
+   */
+  message?: string;
+}
+
+/**
+ * Thrown when a `RANDOM` or `ATTRIBUTE` lookup finds no element (the
+ * selection strategies, and `ElementRepository.getRandom(..., strict = true)`).
+ *
+ * Message: `No elements found for '<elementName>' on '<pageName>'` when no
+ * element appeared within the timeout (the `ATTRIBUTE` filter miss keeps its
+ * own text: `Element '<elementName>' on '<pageName>' with attribute [<attr>]
+ * matching "<value>" not found.`), followed by ` (last driver error:
+ * <name>: <message>)` when a non-fatal driver error happened during the
+ * lookup (`lastDriverError`, also the `cause`).
+ *
+ * `cleanMiss` is `true` when the final poll ran without a driver error and
+ * `false` when the final poll hit one; `lastDriverError` may be set while
+ * `cleanMiss` is `true`, when only an earlier poll failed. A fatal driver
+ * error (`isFatalDriverError`) is never wrapped in this error: it is thrown
+ * as it is.
+ *
+ * `TextNotFoundError` (the `TEXT` strategy, `getByText`) is a separate class
+ * and does not extend this one.
+ *
+ * This is the single definition of the class; other packages re-export it so
+ * that `instanceof` checks work across package boundaries.
+ */
+export class ElementNotFoundError extends Error {
+  /** The element name of the repository entry. */
+  readonly elementName: string;
+  /** The page name of the repository entry. */
+  readonly pageName: string;
+  /** The selection strategy whose lookup found nothing. */
+  readonly strategy: string;
+  /** `true` when the final poll ran without a driver error. */
+  readonly cleanMiss: boolean;
+  /** The last non-fatal driver error of the lookup, if any (also the `cause`). */
+  readonly lastDriverError?: unknown;
+
+  /** @param init The entry, the strategy and the driver-error state of the lookup. */
+  constructor(init: ElementNotFoundErrorInit) {
+    const { elementName, pageName, lastDriverError } = init;
+    const base = init.message ?? `No elements found for '${elementName}' on '${pageName}'`;
+    const suffix = lastDriverError === undefined ? '' : ` (last driver error: ${describeDriverError(lastDriverError)})`;
+    super(`${base}${suffix}`, lastDriverError === undefined ? undefined : { cause: lastDriverError });
+    this.name = 'ElementNotFoundError';
+    this.elementName = elementName;
+    this.pageName = pageName;
+    this.strategy = init.strategy;
+    if (lastDriverError !== undefined) this.lastDriverError = lastDriverError;
+    this.cleanMiss = init.cleanMiss ?? lastDriverError === undefined;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
 /** What a {@link TextNotFoundError} reports. */
 export interface TextNotFoundErrorInit {
   /** The element name of the repository entry. */
