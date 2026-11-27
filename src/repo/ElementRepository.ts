@@ -15,7 +15,7 @@ import { ElementResolutionOptions, LookupOptions, SelectionStrategy } from '../e
 import { EnhancedResolver } from './EnhancedResolver';
 import { StrategyResolver } from './StrategyResolver';
 import { TextNotFoundError } from '../types/errors';
-import { argumentError, rethrowAbort, throwIfAborted } from '../utils/abort';
+import { argumentError, isArgumentError, rethrowAbort, throwIfAborted } from '../utils/abort';
 import { bindLookupSignal, releaseLookupSignal, runLookup } from '../utils/lookupSignal';
 
 /** Default element wait timeout in milliseconds. */
@@ -313,6 +313,10 @@ export class ElementRepository {
       element = await this.resolveFromSingleSelector(pageObj, elementName, selector, pageName, options);
     } catch (primaryError) {
       rethrowAbort(primaryError);
+      // An argument error comes before the signal check, as on an entry
+      // without a fallback. Under a live signal the fallback is walked as
+      // without one.
+      if (signal?.aborted && isArgumentError(primaryError)) throw primaryError;
       throwIfAborted(signal);
       try {
         return await this.resolveWithFallback(pageObj, elementName, fallback, pageName, options);
@@ -377,7 +381,9 @@ export class ElementRepository {
       if (EnhancedResolver.isWebPlatform(pageObj)) {
         return StrategyResolver.fromLocator(enhanced, elementName, pageName, attachTimeout, options);
       } else {
-        return StrategyResolver.fromMobileSelector(this._driver, enhanced as string, attachTimeout, options, pageObj.platform);
+        return StrategyResolver.fromMobileSelector(
+          this._driver, enhanced as string, attachTimeout, options, pageObj.platform, elementName, pageName,
+        );
       }
     }
 
@@ -476,6 +482,8 @@ export class ElementRepository {
       return await this.resolveElement(elementName, pageName, { strategy: SelectionStrategy.RANDOM, signal });
     } catch (err) {
       rethrowAbort(err);
+      // An argument error comes before the signal check.
+      if (signal?.aborted && isArgumentError(err)) throw err;
       throwIfAborted(signal);
       const msg = `No elements found for '${elementName}' on '${pageName}'`;
       if (strict) throw new Error(msg);

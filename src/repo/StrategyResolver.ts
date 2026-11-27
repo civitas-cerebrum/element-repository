@@ -287,6 +287,8 @@ export class StrategyResolver {
    * is supported; the lookup's `signal`, see `LookupOptions`).
    * @param platform The page's platform, named by the element's errors
    * (read from the driver when omitted).
+   * @param elementName The repository entry's element name, named by an abort error.
+   * @param pageName The repository entry's page name, named by an abort error.
    * @returns A promise that resolves to the located Element.
    */
   static async fromMobileSelector(
@@ -295,8 +297,13 @@ export class StrategyResolver {
     timeout: number,
     options?: ElementResolutionOptions,
     platform?: Platform,
+    elementName?: string,
+    pageName?: string,
   ): Promise<Element> {
-    return runLookup(options?.signal, {}, () => StrategyResolver.mobileLookup(driver, selector, timeout, options, platform));
+    return runLookup(
+      options?.signal, { elementName, pageName },
+      () => StrategyResolver.mobileLookup(driver, selector, timeout, options, platform),
+    );
   }
 
   /** Body of {@link fromMobileSelector}; the elements it builds carry the lookup signal. */

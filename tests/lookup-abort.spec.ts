@@ -5,6 +5,8 @@ import { ElementRepository, LookupAbortedError, PlatformElement, WebElement, Sel
 import type { LookupOptions, LookupAbortedErrorInit, ElementResolutionOptions } from '../src';
 import { isSessionLostError } from '../src/utils/driverErrors';
 import { readPlatformText } from '../src/utils/platformText';
+import { settleAll } from '../src/utils/abort';
+import { StrategyResolver } from '../src/repo/StrategyResolver';
 
 /**
  * Cancellable lookups: a mock Appium driver whose commands take real time
@@ -268,6 +270,46 @@ test.describe('aborting a lookup', () => {
     expect(wire.calls).toEqual([]);
   });
 
+  test('an argument error on an entry with a fallback comes before an aborted signal', async () => {
+    const wire = new Wire();
+    const signal = AbortSignal.abort();
+    const r = repo(mockDriver(wire));
+    await expect(r.get('chain', 'List', { strategy: SelectionStrategy.INDEX, signal })).rejects.toThrow('options.index is required');
+    await expect(r.get('chain', 'List', { strategy: SelectionStrategy.TEXT, signal })).rejects.toThrow('options.value is required');
+    await expect(r.get('chain', 'List', { strategy: SelectionStrategy.ATTRIBUTE, value: 'x', signal }))
+      .rejects.toThrow('options.attribute is required');
+    await expect(r.get('chain', 'List', { strategy: 'bogus' as SelectionStrategy, signal }))
+      .rejects.toThrow(`Unhandled selection strategy 'bogus'`);
+    expect(wire.calls).toEqual([]);
+  });
+
+  test('an argument error on an entry with a fallback, under a live signal, ends as it does without one', async () => {
+    const wire = new Wire(1, 1);
+    const r = repo(mockDriver(wire));
+    const withSignal = await r.get('chain', 'List', { strategy: SelectionStrategy.INDEX, signal: new AbortController().signal }).then(() => null, e => e);
+    const without = await r.get('chain', 'List', { strategy: SelectionStrategy.INDEX }).then(() => null, e => e);
+    expect(without).toBeInstanceOf(Error);
+    expect((withSignal as Error).message).toBe((without as Error).message);
+  });
+
+  test('getRandom throws an argument error before an aborted signal; without a signal it stays a non-strict miss', async () => {
+    const wire = new Wire();
+    const r = repo(mockDriver(wire));
+    await expect(r.getRandom('missing', 'List', false, { signal: AbortSignal.abort() }))
+      .rejects.toThrow(`Element 'missing' not found on page 'List'`);
+    await expect(r.getRandom('missing', 'List', true, { signal: AbortSignal.abort() }))
+      .rejects.toThrow(`Element 'missing' not found on page 'List'`);
+    const warn = console.warn;
+    console.warn = () => {};
+    try {
+      expect(await r.getRandom('missing', 'List', false)).toBeNull();
+      expect(await r.getRandom('missing', 'List', false, { signal: new AbortController().signal })).toBeNull();
+    } finally {
+      console.warn = warn;
+    }
+    expect(wire.calls).toEqual([]);
+  });
+
   test('an abort during the sleep between TEXT passes wakes the lookup at once', async () => {
     const wire = new Wire();
     const controller = new AbortController();
@@ -481,5 +523,38 @@ test.describe('waitFor({ signal })', () => {
     expect(err).toBeInstanceOf(LookupAbortedError);
     expect((err as Error).message).toMatch(/^Lookup of 'row' on 'Web' aborted\./);
     expect(Date.now() - begun).toBeLessThan(1000);
+  });
+});
+
+test.describe('settleAll and direct resolver calls', () => {
+  test('settleAll throws a fatal driver error seen with the abort as is', async () => {
+    const fatal = Object.assign(new Error('session gone'), { name: 'invalid session id' });
+    const controller = new AbortController();
+    const err = await settleAll<unknown>([
+      async () => { throw new Error('not found'); },
+      async () => { await new Promise(resolve => setTimeout(resolve, 5)); throw fatal; },
+      async () => { await new Promise(resolve => setTimeout(resolve, 10)); controller.abort(); return 1; },
+    ], controller.signal).then(() => null, e => e);
+    expect(err).toBe(fatal);
+  });
+
+  test('settleAll throws the abort over a non-fatal rejection', async () => {
+    const controller = new AbortController();
+    const err = await settleAll<unknown>([
+      async () => { throw new Error('not found'); },
+      async () => { await new Promise(resolve => setTimeout(resolve, 5)); controller.abort(); return 1; },
+    ], controller.signal).then(() => null, e => e);
+    expect(err).toBeInstanceOf(LookupAbortedError);
+  });
+
+  test('fromMobileSelector names the element and page in its abort error when given', async () => {
+    const wire = new Wire();
+    const signal = AbortSignal.abort();
+    const named = await StrategyResolver
+      .fromMobileSelector(mockDriver(wire), 'android=new UiSelector()', 1000, { signal }, 'android', 'rows', 'List')
+      .then(() => null, e => e);
+    expect(named).toBeInstanceOf(LookupAbortedError);
+    expect((named as Error).message).toMatch(/^Lookup of 'rows' on 'List' aborted\./);
+    expect(wire.calls).toEqual([]);
   });
 });

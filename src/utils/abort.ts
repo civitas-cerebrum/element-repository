@@ -9,6 +9,7 @@
  * ({@link raceAbort}).
  */
 import { LookupAbortedError, LookupAbortedErrorInit } from '../types/errors';
+import { isFatalDriverError } from './driverErrors';
 
 /** What an abort error names: the lookup's entry, or the operation. */
 export type AbortContext = Omit<LookupAbortedErrorInit, 'reason'>;
@@ -88,13 +89,17 @@ export function raceAbort<T>(promise: Promise<T>, signal: AbortSignal | undefine
 
 /**
  * Runs `thunks` together, like `Promise.all`. With a signal, every one is
- * waited for (none is left running), the signal is checked, and then the
- * first rejection is rethrown. The signal is checked before they start.
+ * waited for (none is left running); then the first fatal driver error
+ * ({@link isFatalDriverError}) among the rejections is rethrown as is, the
+ * signal is checked, and then the first rejection is rethrown. The signal
+ * is checked before they start.
  */
 export async function settleAll<T>(thunks: Array<() => Promise<T>>, signal: AbortSignal | undefined): Promise<T[]> {
   if (!signal) return Promise.all(thunks.map(run => run()));
   throwIfAborted(signal);
   const results = await Promise.allSettled(thunks.map(run => run()));
+  const fatal = results.find((r): r is PromiseRejectedResult => r.status === 'rejected' && isFatalDriverError(r.reason));
+  if (fatal) throw fatal.reason;
   throwIfAborted(signal);
   const failed = results.find((r): r is PromiseRejectedResult => r.status === 'rejected');
   if (failed) throw failed.reason;
