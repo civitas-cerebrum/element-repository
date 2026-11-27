@@ -242,6 +242,12 @@ export interface Element {
    * timeout nor an {@link Element.action} chain timeout bounds the sweep.
    * The error names the bound that was hit.
    *
+   * Before the first swipe, a platform element dismisses a shown soft
+   * keyboard (see `dismissKeyboard`). On iOS that dismissal may press the
+   * keyboard's action key (Go, Search, Send, Join, Return, Done), which can
+   * submit a form or run a search; to avoid it, call
+   * `dismissKeyboard(driver, 'ios', { tapElement })` before `scrollIntoView`.
+   *
    * On web elements the browser scrolls whatever is needed, `direction`
    * and `maxSwipes` are ignored (`maxSwipes` is still validated), and the
    * Playwright timeout is `options.timeout`, else the element's default

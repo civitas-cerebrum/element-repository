@@ -12,12 +12,23 @@ import type { Element } from '../types/Element';
 export const KEYBOARD_SETTLE_MS = 300;
 
 /**
+ * Upper bound in ms of the iOS `tapElement` step: how long it waits for the
+ * element to be shown, and then for the click, together. A `tapElement`
+ * that is not shown within it (or within what is left of `options.timeout`,
+ * when that is less) fails the step at once, leaving time for the
+ * `mobile: hideKeyboard` steps.
+ */
+export const TAP_ELEMENT_WAIT_MS = 2000;
+
+/**
  * Key names of the iOS "keys" step: the standard names of the keyboard's
  * action (return) key, in both spellings: Done, Return, Go, Search, Send and
- * Join. WebDriverAgent taps a key (or keyboard button) whose identifier or
- * label equals one of them exactly. Tapping it may run the field's action:
- * submit a form, start a search, send a message. Next is deliberately not in
- * the list: it moves the focus to the next field and keeps the keyboard up.
+ * Join. WebDriverAgent searches only the keyboard's own keys and buttons for
+ * an identifier or label equal to one of them exactly, and taps every match
+ * in element-tree order (not in the order of this list) until the keyboard
+ * is gone. Tapping one may run the field's action: submit a form, start a
+ * search, send a message. Next is deliberately not in the list: it moves the
+ * focus to the next field and keeps the keyboard up.
  */
 export const IOS_DISMISS_KEYS: readonly string[] = Object.freeze([
   'done', 'Done', 'return', 'Return', 'go', 'Go', 'search', 'Search', 'send', 'Send', 'join', 'Join',
@@ -38,11 +49,15 @@ export interface DismissKeyboardOptions {
    * before any `mobile: hideKeyboard`, so a screen that ends editing on a
    * tap outside the field dismisses its keyboard without pressing the
    * keyboard's action key (which may submit a form or run a search). It
-   * must be a platform element (`isPlatform`), else the call throws before
-   * anything is sent. One that is not found (the tap waits for it at most
-   * what is left of `timeout`, else the element's own default timeout) is a
-   * failed step, not fatal. The library never taps a coordinate of its own
-   * choosing. Android ignores it.
+   * must be on screen and NOT covered by the keyboard (the screen title or
+   * a navigation-bar label, say); otherwise its tap may land on a key.
+   * It must be a platform
+   * element (`isPlatform`), else the call throws before anything is sent.
+   * The step waits for it to be shown at most {@link TAP_ELEMENT_WAIT_MS}
+   * (or what is left of `timeout`, when that is less), then clicks it; one
+   * not shown within that is a failed step, not fatal, and is not clicked.
+   * The library never taps a coordinate of its own choosing. Android
+   * ignores it.
    */
   tapElement?: Element;
 }
@@ -96,12 +111,20 @@ async function pause(driver: any, ms: number): Promise<void> {
 
 /**
  * iOS step "tap": an element click on the caller's neutral `tapElement`.
- * A click that fails with an error that is not fatal (the element is not
- * found, ...) did not tap: the step fails with no pause or re-check.
+ * It first waits for the element to be shown, at most
+ * {@link TAP_ELEMENT_WAIT_MS} or `timeLeft` when that is less (at least
+ * 1 ms), through the element's own bounded wait, so a missing element costs
+ * that bound and not the element's default timeout or WebdriverIO's implicit
+ * wait. Not shown: the step fails at once, with no click, pause or re-check.
+ * Shown: it is clicked with what is left of that bound. A click that fails
+ * with an error that is not fatal did not tap: the step fails the same way.
  */
 async function tapNeutralElement(tapElement: Element, timeLeft: number | undefined): Promise<void> {
+  const started = Date.now();
+  const bound = Math.max(1, Math.min(TAP_ELEMENT_WAIT_MS, timeLeft ?? TAP_ELEMENT_WAIT_MS));
   try {
-    await tapElement.click(timeLeft === undefined ? undefined : { timeout: timeLeft });
+    await tapElement.waitFor({ state: 'visible', timeout: bound });
+    await tapElement.click({ timeout: Math.max(1, bound - (Date.now() - started)) });
   } catch (err) {
     if (isFatalDriverError(err)) throw err;
     throw new StepRefused(messageOf(err));
@@ -124,7 +147,7 @@ function stepsFor(
   const canExecute = typeof driver?.execute === 'function';
   if (platform === 'ios') {
     const steps: Step[] = [];
-    if (tapElement !== undefined && isPlatform(tapElement)) {
+    if (tapElement !== undefined) {
       steps.push({
         name: `a tap on options.tapElement "${tapElement.selector}"`,
         available: true,
@@ -197,8 +220,12 @@ function stepsFor(
  *      1. Only with `options.tapElement`: an element click on that neutral
  *         element (a title label, ...), which dismisses the keyboard of a
  *         screen that ends editing on a tap outside the field, without
- *         pressing the keyboard's action key. Not found (or any other error
- *         that is not fatal): the step fails, with no pause or re-check.
+ *         pressing the keyboard's action key. It must be on screen and not
+ *         covered by the keyboard, else the tap may land on a key. The step
+ *         waits at most {@link TAP_ELEMENT_WAIT_MS} (or what is left of
+ *         `options.timeout`, when less) for it to be shown, then clicks it.
+ *         Not shown (or any other error that is not fatal): the step fails,
+ *         with no click, pause or re-check.
  *      2. `mobile: hideKeyboard` with no keys. XCUITest adds the key name
  *         `done` itself; on an iPad WebDriverAgent also taps the keyboard's
  *         hide key. On an iPhone keyboard without a Done key WebDriverAgent
@@ -209,7 +236,9 @@ function stepsFor(
  *      3. `mobile: hideKeyboard` with `keys` {@link IOS_DISMISS_KEYS} (the
  *         action-key names done, return, go, search, send and join, each
  *         lower-case and capitalised): WebDriverAgent taps the keyboard key
- *         whose identifier or label is one of them. **This presses the
+ *         whose identifier or label is one of them (searching the keyboard's
+ *         own keys and buttons only, every match in element-tree order until
+ *         the keyboard is gone). **This presses the
  *         keyboard's action key, which can submit a form, run a search or
  *         send a message**; a caller who must not trigger the field's
  *         action passes `options.tapElement`. Next is not in the list (it

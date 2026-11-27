@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { dismissKeyboard, KeyboardStillShownError, KEYBOARD_SETTLE_MS, IOS_DISMISS_KEYS } from '../src';
+import { dismissKeyboard, KeyboardStillShownError, KEYBOARD_SETTLE_MS, IOS_DISMISS_KEYS, TAP_ELEMENT_WAIT_MS } from '../src';
 import { PlatformElement } from '../src/types';
 
 // ---------------------------------------------------------------------------
@@ -18,7 +18,8 @@ const KEYS_STEP = `mobile: hideKeyboard { keys: [${KEYS.map(k => `'${k}'`).join(
 const TAP_SELECTOR = '~login-title';
 /** A selector the fake driver finds nothing for. */
 const MISSING_SELECTOR = '~gone';
-const NOT_FOUND = `Can't call click on element with selector "${MISSING_SELECTOR}" because element wasn't found`;
+/** WebdriverIO's error for a visible wait on an element that never appears. */
+const notDisplayed = (ms: number | undefined) => `element ("${MISSING_SELECTOR}") still not displayed after ${ms}ms`;
 
 /** An error as WebdriverIO raises it for a driver answer: `name` is the W3C error code. */
 function driverError(message: string, name = 'unknown error'): Error {
@@ -37,7 +38,9 @@ type Outcome = 'dismiss' | 'refuse' | 'noop' | Error;
  * `refuse` throws WebDriverAgent's refusal, `noop` succeeds but leaves the
  * keyboard up, an Error is thrown as given. Unlisted calls are `noop`.
  * `tap` is a click on the element {@link TAP_SELECTOR} finds; the element
- * {@link MISSING_SELECTOR} finds does not exist.
+ * {@link MISSING_SELECTOR} finds does not exist. With `slowMissing`, the
+ * waits on that missing element take their whole timeout in real time, as
+ * WebdriverIO's do; otherwise they fail at once.
  */
 function fakeDriver(options: {
   shown?: boolean;
@@ -45,6 +48,7 @@ function fakeDriver(options: {
   caps?: Record<string, unknown>;
   isKeyboardShown?: () => Promise<boolean>;
   omit?: string[];
+  slowMissing?: boolean;
 }) {
   let shown = options.shown ?? true;
   const calls: Call[] = [];
@@ -53,6 +57,10 @@ function fakeDriver(options: {
   const actions: any[] = [];
   const finds: string[] = [];
   const waits: Array<number | undefined> = [];
+  const displayWaits: Array<number | undefined> = [];
+  const sleep = async (ms: number | undefined) => {
+    if (options.slowMissing && ms !== undefined) await new Promise(resolve => setTimeout(resolve, ms));
+  };
   const act = async (name: string) => {
     calls.push(name);
     const outcome = options.outcomes?.[name] ?? 'noop';
@@ -78,13 +86,22 @@ function fakeDriver(options: {
         return {
           elementId: 'title-1',
           waitForExist: async (o?: { timeout?: number }) => { waits.push(o?.timeout); return true; },
+          waitForDisplayed: async (o?: { timeout?: number }) => { displayWaits.push(o?.timeout); return true; },
           click: () => act('tap'),
         };
       }
       return {
         selector,
-        waitForExist: async (o?: { timeout?: number }) => { waits.push(o?.timeout); throw new Error('element still not existing'); },
-        click: async () => { calls.push('missing click'); throw new Error(NOT_FOUND); },
+        waitForExist: async (o?: { timeout?: number }) => {
+          waits.push(o?.timeout); await sleep(o?.timeout); throw new Error('element still not existing');
+        },
+        waitForDisplayed: async (o?: { timeout?: number }) => {
+          displayWaits.push(o?.timeout); await sleep(o?.timeout); throw new Error(notDisplayed(o?.timeout));
+        },
+        click: async () => {
+          calls.push('missing click');
+          throw new Error(`Can't call click on element with selector "${MISSING_SELECTOR}" because element wasn't found`);
+        },
       };
     },
     performActions: async (sources: any[]) => { actions.push(sources); },
@@ -92,7 +109,7 @@ function fakeDriver(options: {
     pause: async (ms: number) => { pauses.push(ms); },
   };
   for (const key of options.omit ?? []) delete driver[key];
-  return { driver, calls, executes, pauses, actions, finds, waits, isShown: () => shown };
+  return { driver, calls, executes, pauses, actions, finds, waits, displayWaits, isShown: () => shown };
 }
 
 const dismissing = (calls: Call[]) => calls.filter(c => c !== 'isKeyboardShown' && c !== 'releaseActions');
@@ -307,10 +324,10 @@ test.describe('dismissKeyboard: iOS tapElement', () => {
     expect(executes.map(e => e[1])).toEqual([{}, { keys: KEYS }]);
   });
 
-  test('a tapElement that is not found is a failed step, not fatal: no pause or re-check, the next step runs', async () => {
+  test('a tapElement that is not found is a failed step, not fatal: no click, no pause or re-check, the next step runs', async () => {
     const { driver, calls, pauses } = fakeDriver({ outcomes: { bare: 'refuse', keys: 'dismiss' } });
     expect(await dismissKeyboard(driver, 'ios', { tapElement: label(driver, MISSING_SELECTOR) })).toBe(true);
-    expect(calls).toEqual(['isKeyboardShown', 'missing click', 'bare', 'isKeyboardShown', 'keys', 'isKeyboardShown']);
+    expect(calls).toEqual(['isKeyboardShown', 'bare', 'isKeyboardShown', 'keys', 'isKeyboardShown']);
     expect(pauses).toEqual([KEYBOARD_SETTLE_MS, KEYBOARD_SETTLE_MS]);
   });
 
@@ -320,7 +337,7 @@ test.describe('dismissKeyboard: iOS tapElement', () => {
     expect(err).toBeInstanceOf(KeyboardStillShownError);
     expect((err as Error).message).toBe(
       'dismissKeyboard: the keyboard is still shown after ' +
-      `a tap on options.tapElement "${MISSING_SELECTOR}" (failed: ${NOT_FOUND}), ` +
+      `a tap on options.tapElement "${MISSING_SELECTOR}" (failed: ${notDisplayed(TAP_ELEMENT_WAIT_MS)}), ` +
       `mobile: hideKeyboard (failed: ${WDA_REFUSAL}), ` +
       `${KEYS_STEP} (failed: ${WDA_REFUSAL})`,
     );
@@ -344,18 +361,54 @@ test.describe('dismissKeyboard: iOS tapElement', () => {
     expect(executes).toEqual([]);
   });
 
-  test('with options.timeout, the tap waits for its element at most the time left', async () => {
-    const { driver, waits } = fakeDriver({ outcomes: { bare: 'dismiss' } });
-    expect(await dismissKeyboard(driver, 'ios', { tapElement: label(driver, MISSING_SELECTOR), timeout: 5000 })).toBe(true);
-    expect(waits).toHaveLength(1);
-    expect(waits[0]).toBeGreaterThan(0);
-    expect(waits[0]).toBeLessThanOrEqual(5000);
+  test('TAP_ELEMENT_WAIT_MS is 2000', () => {
+    expect(TAP_ELEMENT_WAIT_MS).toBe(2000);
   });
 
-  test('without options.timeout, the tap waits for its element the element\'s own default timeout', async () => {
-    const { driver, waits } = fakeDriver({ outcomes: { tap: 'dismiss' } });
-    expect(await dismissKeyboard(driver, 'ios', { tapElement: label(driver) })).toBe(true);
-    expect(waits).toEqual([200]);
+  test('without options.timeout, the tap waits for its element at most TAP_ELEMENT_WAIT_MS, not the element\'s default timeout', async () => {
+    const { driver, waits, displayWaits } = fakeDriver({ outcomes: { tap: 'dismiss' } });
+    const title = new PlatformElement(driver, TAP_SELECTOR, undefined, 30000, { platform: 'ios' });
+    expect(await dismissKeyboard(driver, 'ios', { tapElement: title })).toBe(true);
+    expect(displayWaits).toEqual([TAP_ELEMENT_WAIT_MS]);
+    // The click gets what is left of that bound, never the element's 30 s.
+    expect(waits).toHaveLength(1);
+    expect(waits[0]).toBeGreaterThan(0);
+    expect(waits[0]).toBeLessThanOrEqual(TAP_ELEMENT_WAIT_MS);
+  });
+
+  test('with an options.timeout shorter than TAP_ELEMENT_WAIT_MS, the tap waits at most the time left', async () => {
+    const { driver, displayWaits } = fakeDriver({ outcomes: { bare: 'dismiss' } });
+    expect(await dismissKeyboard(driver, 'ios', { tapElement: label(driver, MISSING_SELECTOR), timeout: 500 })).toBe(true);
+    expect(displayWaits).toHaveLength(1);
+    expect(displayWaits[0]).toBeGreaterThan(0);
+    expect(displayWaits[0]).toBeLessThanOrEqual(500);
+  });
+
+  test('timeout 5000 and a missing tapElement: the tap costs at most TAP_ELEMENT_WAIT_MS and both hideKeyboard steps are still sent', async () => {
+    const { driver, calls, executes } = fakeDriver({ outcomes: { bare: 'refuse', keys: 'refuse' }, slowMissing: true });
+    const title = new PlatformElement(driver, MISSING_SELECTOR, undefined, 30000, { platform: 'ios' });
+    const started = Date.now();
+    const err = await dismissKeyboard(driver, 'ios', { tapElement: title, timeout: 5000 }).then(() => null, (e: unknown) => e);
+    const elapsed = Date.now() - started;
+    expect(err).toBeInstanceOf(KeyboardStillShownError);
+    expect((err as KeyboardStillShownError).steps).toEqual([
+      `a tap on options.tapElement "${MISSING_SELECTOR}"`, 'mobile: hideKeyboard', KEYS_STEP,
+    ]);
+    expect((err as Error).message).not.toContain('timeout 5000 ms');
+    expect(executes.map(e => e[1])).toEqual([{}, { keys: KEYS }]);
+    expect(calls).not.toContain('missing click');
+    expect(elapsed).toBeGreaterThanOrEqual(TAP_ELEMENT_WAIT_MS - 50);
+    expect(elapsed).toBeLessThan(TAP_ELEMENT_WAIT_MS + 1500);
+  });
+
+  test('a fatal driver error of the presence wait is thrown at once: no click, no further step', async () => {
+    const dead = driverError('A session is either terminated or not started', 'invalid session id');
+    const { driver, calls, executes } = fakeDriver({});
+    const title = label(driver);
+    (title as any).waitFor = async () => { throw dead; };
+    await expect(dismissKeyboard(driver, 'ios', { tapElement: title })).rejects.toBe(dead);
+    expect(dismissing(calls)).toEqual([]);
+    expect(executes).toEqual([]);
   });
 
   test('a tapElement that is not a platform element is refused before anything is sent', async () => {

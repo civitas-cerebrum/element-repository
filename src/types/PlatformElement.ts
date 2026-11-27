@@ -479,6 +479,10 @@ export class PlatformElement implements Element {
    * {@link dismissKeyboard}. A keyboard that is still shown after every
    * dismissal step does not fail the call (the sweep runs anyway); any other
    * error of the dismissal, such as a fatal driver error, is thrown.
+   * On iOS the pre-sweep dismissal may press the keyboard's action key
+   * (Go, Search, Send, Join, Return, Done), which can submit a form or run
+   * a search; to avoid it, call `dismissKeyboard(driver, 'ios', { tapElement })`
+   * before `scrollIntoView`.
    */
   async scrollIntoView(options?: ScrollIntoViewOptions): Promise<Element> {
     // Deliberately skip `ensureAttached` here — the whole point of

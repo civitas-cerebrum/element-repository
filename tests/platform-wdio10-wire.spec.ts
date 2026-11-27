@@ -5,7 +5,7 @@ import * as path from 'path';
 import * as ts from 'typescript';
 import type { AddressInfo } from 'net';
 import { PlatformElement } from '../src/types';
-import { ElementRepository, dismissKeyboard } from '../src';
+import { ElementRepository, dismissKeyboard, TAP_ELEMENT_WAIT_MS } from '../src';
 
 // Drives PlatformElement through a REAL WebdriverIO 10 `remote()` session
 // against a tiny local fake WebDriver server, and asserts the HTTP requests
@@ -79,6 +79,8 @@ async function startFakeServer(options: { keyboard?: boolean } = {}): Promise<Fa
         }
       } else if (options.keyboard && method === 'POST' && url === `${s}/element` && body?.value === TITLE_LABEL) {
         value = { [W3C_ELEMENT_KEY]: TITLE };
+      } else if (options.keyboard && method === 'GET' && url === `${s}/element/${TITLE}/displayed`) {
+        value = true;
       } else if (options.keyboard && method === 'POST' && url === `${s}/element/${TITLE}/click`) {
         // A tap outside the field ends editing.
         keyboardShown = false;
@@ -416,6 +418,18 @@ test.describe('dismissKeyboard against a real WebdriverIO 10 session (fake WebDr
     expect(finds.length).toBeGreaterThan(0);
     for (const find of finds) expect(find.body).toEqual({ using: 'accessibility id', value: TITLE_LABEL });
     expect(calls.filter(c => c === `POST /element/${TITLE}/click`)).toHaveLength(1);
+  });
+
+  test('a missing tapElement with timeout 5000: no click, the wait costs about TAP_ELEMENT_WAIT_MS and both hideKeyboard calls are sent', async () => {
+    const missing = new PlatformElement(driver, `~${MISSING}`, undefined, 30000, { platform: 'ios' });
+    const started = Date.now();
+    expect(await dismissKeyboard(driver, 'ios', { tapElement: missing, timeout: 5000 })).toBe(true);
+    const elapsed = Date.now() - started;
+    const hides = server.requests.filter(r => r.body?.script === 'mobile: hideKeyboard');
+    expect(hides.map(r => r.body.args)).toEqual([[{}], [{ keys: KEYS }]]);
+    expect(server.requests.map(route).some(c => c.endsWith('/click'))).toBe(false);
+    expect(elapsed).toBeGreaterThanOrEqual(TAP_ELEMENT_WAIT_MS - 100);
+    expect(elapsed).toBeLessThan(5000);
   });
 });
 
