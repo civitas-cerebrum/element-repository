@@ -31,10 +31,9 @@ const DESCENDANT_TEXTS: Record<string, string> = { 'txt-1': 'Item 1', 'txt-2': '
 
 interface Recorded { method: string; path: string; body: any }
 
-/** The iOS keyboard element the fake server finds for the class-chain keyboard lookup, and its rect. */
-const KEYBOARD = 'kb-1';
-const KEYBOARD_SELECTOR = '**/XCUIElementTypeKeyboard';
-const KEYBOARD_RECT = { x: 0, y: 500, width: 400, height: 300 };
+/** A neutral title label the fake server finds by accessibility id: a click on it ends editing. */
+const TITLE = 'title-1';
+const TITLE_LABEL = 'login-title';
 const WDA_REFUSAL = 'Did not know how to dismiss the keyboard. Try to dismiss it in the way supported by your application under test.';
 
 interface FakeServer { port: number; session: string; requests: Recorded[]; close(): Promise<void> }
@@ -42,9 +41,10 @@ interface FakeServer { port: number; session: string; requests: Recorded[]; clos
 /**
  * A minimal W3C WebDriver endpoint set: session, find, rect, window, actions, css, screenshot.
  * With `keyboard`, it also answers the Appium keyboard check as XCUITest
- * does with a keyboard shown, refuses `mobile: hideKeyboard` as
+ * does with a keyboard shown, refuses the bare `mobile: hideKeyboard` as
  * WebDriverAgent does for a keyboard without a Done key, and hides the
- * keyboard on the first W3C actions it performs.
+ * keyboard on a `mobile: hideKeyboard` whose keys name `return` and on a
+ * click on the title label.
  */
 async function startFakeServer(options: { keyboard?: boolean } = {}): Promise<FakeServer> {
   let keyboardShown = options.keyboard === true;
@@ -68,16 +68,20 @@ async function startFakeServer(options: { keyboard?: boolean } = {}): Promise<Fa
       } else if (options.keyboard && method === 'POST' && url === `${s}/execute/sync` && body?.script === 'mobile: isKeyboardShown') {
         value = keyboardShown;
       } else if (options.keyboard && method === 'POST' && url === `${s}/execute/sync` && body?.script === 'mobile: hideKeyboard') {
-        status = 500;
-        value = { error: 'unknown error', message: WDA_REFUSAL, stacktrace: '' };
-      } else if (options.keyboard && method === 'POST' && /^\/session\/[^/]+\/elements?$/.test(url) && url.startsWith(s)
-        && body?.using === '-ios class chain' && body?.value === KEYBOARD_SELECTOR) {
-        value = url.endsWith('/elements') ? [{ [W3C_ELEMENT_KEY]: KEYBOARD }] : { [W3C_ELEMENT_KEY]: KEYBOARD };
-      } else if (options.keyboard && method === 'GET' && url === `${s}/element/${KEYBOARD}/rect`) {
-        value = KEYBOARD_RECT;
-      } else if (options.keyboard && method === 'POST' && url === `${s}/actions`) {
+        const keys: unknown = body?.args?.[0]?.keys;
+        if (Array.isArray(keys) && keys.includes('return')) {
+          // A keyboard whose return key is named `return`: the keys call taps it.
+          keyboardShown = false;
+        } else {
+          // The bare call on a keyboard without a Done key.
+          status = 400;
+          value = { error: 'unknown error', message: WDA_REFUSAL, stacktrace: '' };
+        }
+      } else if (options.keyboard && method === 'POST' && url === `${s}/element` && body?.value === TITLE_LABEL) {
+        value = { [W3C_ELEMENT_KEY]: TITLE };
+      } else if (options.keyboard && method === 'POST' && url === `${s}/element/${TITLE}/click`) {
+        // A tap outside the field ends editing.
         keyboardShown = false;
-        value = null;
       } else if (method === 'POST' && url === `${s}/element` && body?.value === MISSING) {
         status = 404;
         value = { error: 'no such element', message: 'fake server: no such element', stacktrace: '' };
@@ -382,45 +386,36 @@ test.describe('dismissKeyboard against a real WebdriverIO 10 session (fake WebDr
     await server?.close();
   });
 
-  test('both hideKeyboard calls refused: a non-strict keyboard find, its rect, the window rect and one drag POST /actions', async () => {
+  const KEYS = ['done', 'Done', 'return', 'Return', 'go', 'Go', 'search', 'Search', 'send', 'Send', 'join', 'Join'];
+  const route = (r: Recorded) => `${r.method} ${r.path.replace(`/session/${server.session}`, '')}`;
+
+  test('the bare call refused (HTTP 400), the keys call dismisses: two execute bodies, no find, no W3C actions', async () => {
     expect(await dismissKeyboard(driver, 'ios')).toBe(true);
-    const calls = server.requests.map(r => `${r.method} ${r.path.replace(`/session/${server.session}`, '')}`);
+    const calls = server.requests.map(route);
     // The keyboard check, whichever route WebdriverIO 10 sends it by.
     const check = calls[0];
     expect(['GET /appium/device/is_keyboard_shown', 'POST /execute/sync']).toContain(check);
     const hides = server.requests.filter(r => r.body?.script === 'mobile: hideKeyboard');
-    expect(hides.map(r => r.body.args)).toEqual([[{}], [{ keys: ['return', 'Return', 'done', 'Done'] }]]);
+    expect(hides.map(r => r.body.args)).toEqual([[{}], [{ keys: KEYS }]]);
+    // No drag, no keyboard lookup: nothing but the checks and the two calls.
+    expect(calls.some(c => c.endsWith('/actions'))).toBe(false);
+    expect(calls.some(c => /^POST \/elements?$/.test(c))).toBe(false);
+    expect(calls.filter(c => c !== check && c !== 'POST /execute/sync')).toEqual([]);
+  });
 
-    // A non-strict `$` sends one find-element for the class chain (a strict
-    // one sends a find-elements to count the matches and throws on several).
-    const finds = server.requests.filter(r => r.method === 'POST' && /^\/session\/[^/]+\/elements?$/.test(r.path));
-    expect(finds.map(r => [r.path.replace(`/session/${server.session}`, ''), r.body])).toEqual([
-      ['/element', { using: '-ios class chain', value: KEYBOARD_SELECTOR }],
-    ]);
-    const tail = calls.slice(calls.indexOf('POST /element') + 1).filter(c => !/\/element\/[^/]+\/name$/.test(c));
-    expect(tail).toEqual([
-      `GET /element/${KEYBOARD}/rect`,
-      'GET /window/rect',
-      'POST /actions',
-      'DELETE /actions',
-      check,
-    ]);
-    // Window 400x800, keyboard top 500: from (200, 470) down to (200, 790).
-    const perform = server.requests.find(r => r.method === 'POST' && r.path.endsWith('/actions'))!;
-    expect(perform.body).toEqual({
-      actions: [{
-        type: 'pointer',
-        id: 'finger1',
-        parameters: { pointerType: 'touch' },
-        actions: [
-          { type: 'pointerMove', duration: 0, origin: 'viewport', x: 200, y: 470 },
-          { type: 'pointerDown', button: 0 },
-          { type: 'pause', duration: 50 },
-          { type: 'pointerMove', duration: 300, origin: 'viewport', x: 200, y: 790 },
-          { type: 'pointerUp', button: 0 },
-        ],
-      }],
-    });
+  test('tapElement: finds of the label only and one element click; no hideKeyboard and no W3C actions', async () => {
+    const title = new PlatformElement(driver, `~${TITLE_LABEL}`, undefined, 1000, { platform: 'ios' });
+    expect(await dismissKeyboard(driver, 'ios', { tapElement: title })).toBe(true);
+    const calls = server.requests.map(route);
+    expect(server.requests.filter(r => r.body?.script === 'mobile: hideKeyboard')).toEqual([]);
+    expect(calls).toContain(`POST /element/${TITLE}/click`);
+    expect(calls.some(c => c.endsWith('/actions'))).toBe(false);
+    const finds = server.requests.filter(r => r.method === 'POST' && /^\/session\/[^/]+\/element$/.test(r.path));
+    // WebdriverIO finds the lazy element again for its existence wait: every
+    // find is the label, nothing else (no keyboard lookup).
+    expect(finds.length).toBeGreaterThan(0);
+    for (const find of finds) expect(find.body).toEqual({ using: 'accessibility id', value: TITLE_LABEL });
+    expect(calls.filter(c => c === `POST /element/${TITLE}/click`)).toHaveLength(1);
   });
 });
 

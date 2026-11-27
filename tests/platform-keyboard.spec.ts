@@ -5,14 +5,20 @@ import { PlatformElement } from '../src/types';
 // ---------------------------------------------------------------------------
 // dismissKeyboard: hides a shown soft keyboard with the platform's steps,
 // re-checking after each one. Mock drivers model WebDriverAgent, which
-// answers `mobile: hideKeyboard` with HTTP 500 "Did not know how to dismiss
-// the keyboard" when it finds no key it knows (a keyboard without a Done
-// key), and UiAutomator2.
+// answers `mobile: hideKeyboard` with "Did not know how to dismiss the
+// keyboard" when it finds no key it knows (a keyboard without a Done key),
+// and UiAutomator2.
 // ---------------------------------------------------------------------------
 
 const WDA_REFUSAL = 'Did not know how to dismiss the keyboard. Try to dismiss it in the way supported by your application under test.';
-const WINDOW = { width: 393, height: 852 };
-const KEYBOARD_RECT = { x: 0, y: 516, width: 393, height: 336 };
+/** The key names of the iOS keys step, in order. */
+const KEYS = ['done', 'Done', 'return', 'Return', 'go', 'Go', 'search', 'Search', 'send', 'Send', 'join', 'Join'];
+const KEYS_STEP = `mobile: hideKeyboard { keys: [${KEYS.map(k => `'${k}'`).join(', ')}] }`;
+/** The selector of a neutral label the caller names as `tapElement`. */
+const TAP_SELECTOR = '~login-title';
+/** A selector the fake driver finds nothing for. */
+const MISSING_SELECTOR = '~gone';
+const NOT_FOUND = `Can't call click on element with selector "${MISSING_SELECTOR}" because element wasn't found`;
 
 /** An error as WebdriverIO raises it for a driver answer: `name` is the W3C error code. */
 function driverError(message: string, name = 'unknown error'): Error {
@@ -26,10 +32,12 @@ type Outcome = 'dismiss' | 'refuse' | 'noop' | Error;
 
 /**
  * A fake Appium driver with a keyboard that is shown until a step whose
- * outcome is `dismiss` runs. `outcomes` maps a call name (`bare`, `keys`,
- * `drag`, `hideKeyboard`, `pressKey`, `tapOutside`) to what it does:
+ * outcome is `dismiss` runs. `outcomes` maps a call name (`tap`, `bare`,
+ * `keys`, `hideKeyboard`, `pressKey`, `tapOutside`) to what it does:
  * `refuse` throws WebDriverAgent's refusal, `noop` succeeds but leaves the
  * keyboard up, an Error is thrown as given. Unlisted calls are `noop`.
+ * `tap` is a click on the element {@link TAP_SELECTOR} finds; the element
+ * {@link MISSING_SELECTOR} finds does not exist.
  */
 function fakeDriver(options: {
   shown?: boolean;
@@ -37,14 +45,14 @@ function fakeDriver(options: {
   caps?: Record<string, unknown>;
   isKeyboardShown?: () => Promise<boolean>;
   omit?: string[];
-  keyboardRect?: { x: number; y: number; width: number; height: number };
 }) {
   let shown = options.shown ?? true;
   const calls: Call[] = [];
   const executes: Array<[string, unknown]> = [];
   const pauses: number[] = [];
   const actions: any[] = [];
-  const finds: Array<[string, unknown]> = [];
+  const finds: string[] = [];
+  const waits: Array<number | undefined> = [];
   const act = async (name: string) => {
     calls.push(name);
     const outcome = options.outcomes?.[name] ?? 'noop';
@@ -64,22 +72,33 @@ function fakeDriver(options: {
       if (args?.strategy === 'tapOutside') return act('tapOutside');
       return act('bare');
     },
-    $: async (selector: string, opts?: unknown) => {
-      calls.push(`$ ${selector}`);
-      finds.push([selector, opts]);
-      return { elementId: 'kb-1' };
+    $: async (selector: string) => {
+      finds.push(selector);
+      if (selector === TAP_SELECTOR) {
+        return {
+          elementId: 'title-1',
+          waitForExist: async (o?: { timeout?: number }) => { waits.push(o?.timeout); return true; },
+          click: () => act('tap'),
+        };
+      }
+      return {
+        selector,
+        waitForExist: async (o?: { timeout?: number }) => { waits.push(o?.timeout); throw new Error('element still not existing'); },
+        click: async () => { calls.push('missing click'); throw new Error(NOT_FOUND); },
+      };
     },
-    getElementRect: async () => options.keyboardRect ?? KEYBOARD_RECT,
-    getWindowSize: async () => WINDOW,
-    performActions: async (sources: any[]) => { actions.push(sources); await act('drag'); },
+    performActions: async (sources: any[]) => { actions.push(sources); },
     releaseActions: async () => { calls.push('releaseActions'); },
     pause: async (ms: number) => { pauses.push(ms); },
   };
   for (const key of options.omit ?? []) delete driver[key];
-  return { driver, calls, executes, pauses, actions, finds, isShown: () => shown };
+  return { driver, calls, executes, pauses, actions, finds, waits, isShown: () => shown };
 }
 
-const dismissing = (calls: Call[]) => calls.filter(c => c !== 'isKeyboardShown' && !c.startsWith('$ ') && c !== 'releaseActions');
+const dismissing = (calls: Call[]) => calls.filter(c => c !== 'isKeyboardShown' && c !== 'releaseActions');
+
+/** A platform element on the fake driver, as a caller names it for `tapElement`. */
+const label = (driver: any, selector = TAP_SELECTOR) => new PlatformElement(driver, selector, undefined, 200, { platform: 'ios' });
 
 test.describe('dismissKeyboard: no keyboard', () => {
   test('no keyboard shown: false at once, nothing but the check is sent', async () => {
@@ -150,67 +169,53 @@ test.describe('dismissKeyboard: iOS steps', () => {
     expect(pauses).toEqual([KEYBOARD_SETTLE_MS]);
   });
 
-  test('WebDriverAgent refuses the bare call (HTTP 500), the keys succeed: true, no drag', async () => {
-    const { driver, calls, executes, actions } = fakeDriver({ outcomes: { bare: 'refuse', keys: 'dismiss' } });
+  test('WebDriverAgent refuses the bare call, the keys succeed: true, nothing else sent', async () => {
+    const { driver, calls, executes, actions, finds } = fakeDriver({ outcomes: { bare: 'refuse', keys: 'dismiss' } });
     expect(await dismissKeyboard(driver, 'ios')).toBe(true);
     expect(executes).toEqual([
       ['mobile: hideKeyboard', {}],
-      ['mobile: hideKeyboard', { keys: ['return', 'Return', 'done', 'Done'] }],
+      ['mobile: hideKeyboard', { keys: KEYS }],
     ]);
-    expect(IOS_DISMISS_KEYS).toEqual(['return', 'Return', 'done', 'Done']);
     expect(dismissing(calls)).toEqual(['bare', 'keys']);
     expect(actions).toEqual([]);
+    expect(finds).toEqual([]);
   });
 
-  test('bare and keys refused, the drag onto the keyboard dismisses: true', async () => {
-    const { driver, calls, actions } = fakeDriver({ outcomes: { bare: 'refuse', keys: 'refuse', drag: 'dismiss' } });
-    expect(await dismissKeyboard(driver, 'ios')).toBe(true);
-    expect(dismissing(calls)).toEqual(['bare', 'keys', 'drag']);
-    expect(calls).toContain('$ -ios class chain:**/XCUIElementTypeKeyboard');
-    expect(calls).toContain('releaseActions');
-    // From 30 pt above the keyboard's top (516) to 10 pt above the window's
-    // bottom (852), on the centre line (393 / 2 -> 197), moving, never a tap.
-    expect(actions).toHaveLength(1);
-    expect(actions[0][0].actions).toEqual([
-      { type: 'pointerMove', duration: 0, origin: 'viewport', x: 197, y: 486 },
-      { type: 'pointerDown', button: 0 },
-      { type: 'pause', duration: 50 },
-      { type: 'pointerMove', duration: 300, origin: 'viewport', x: 197, y: 842 },
-      { type: 'pointerUp', button: 0 },
-    ]);
+  test('IOS_DISMISS_KEYS: the standard action-key names in both cases, never Next', () => {
+    expect(IOS_DISMISS_KEYS).toEqual(KEYS);
+    expect(Object.isFrozen(IOS_DISMISS_KEYS)).toBe(true);
+    expect(IOS_DISMISS_KEYS).not.toContain('next');
+    expect(IOS_DISMISS_KEYS).not.toContain('Next');
   });
 
-  test('a step that succeeds but leaves the keyboard up moves on to the next', async () => {
-    const { driver, calls } = fakeDriver({ outcomes: { bare: 'noop', keys: 'noop', drag: 'dismiss' } });
-    expect(await dismissKeyboard(driver, 'ios')).toBe(true);
-    expect(dismissing(calls)).toEqual(['bare', 'keys', 'drag']);
+  test('the keys step sends a copy of the list: a caller cannot change what is sent next time', async () => {
+    const { driver, executes } = fakeDriver({ outcomes: { bare: 'refuse', keys: 'noop' } });
+    await dismissKeyboard(driver, 'ios').catch(() => {});
+    const sent = (executes[1][1] as { keys: string[] }).keys;
+    expect(sent).not.toBe(IOS_DISMISS_KEYS);
+    expect(sent).toEqual(KEYS);
   });
 
-  test('nothing works: throws "still shown" naming every step and its error', async () => {
-    const { driver, calls, pauses } = fakeDriver({ outcomes: { bare: 'refuse', keys: 'refuse', drag: 'noop' } });
+  test('nothing works: throws "still shown" naming the two hideKeyboard steps; no drag or keyboard lookup is ever sent', async () => {
+    const { driver, calls, pauses, actions, finds } = fakeDriver({ outcomes: { bare: 'refuse', keys: 'refuse' } });
     const err = await dismissKeyboard(driver, 'ios').then(() => null, (e: unknown) => e);
     expect(err).toBeInstanceOf(KeyboardStillShownError);
     expect((err as Error).message).toBe(
       'dismissKeyboard: the keyboard is still shown after ' +
       `mobile: hideKeyboard (failed: ${WDA_REFUSAL}), ` +
-      `mobile: hideKeyboard { keys: ['return', 'Return', 'done', 'Done'] } (failed: ${WDA_REFUSAL}), ` +
-      'a drag from above the keyboard down onto it',
+      `${KEYS_STEP} (failed: ${WDA_REFUSAL})`,
     );
-    expect((err as KeyboardStillShownError).steps).toEqual([
-      'mobile: hideKeyboard',
-      "mobile: hideKeyboard { keys: ['return', 'Return', 'done', 'Done'] }",
-      'a drag from above the keyboard down onto it',
-    ]);
-    expect(dismissing(calls)).toEqual(['bare', 'keys', 'drag']);
-    expect(pauses).toEqual([KEYBOARD_SETTLE_MS, KEYBOARD_SETTLE_MS, KEYBOARD_SETTLE_MS]);
+    expect((err as KeyboardStillShownError).steps).toEqual(['mobile: hideKeyboard', KEYS_STEP]);
+    expect(dismissing(calls)).toEqual(['bare', 'keys']);
+    expect(pauses).toEqual([KEYBOARD_SETTLE_MS, KEYBOARD_SETTLE_MS]);
+    expect(actions).toEqual([]);
+    expect(finds).toEqual([]);
   });
 
-  test('a keyboard element that cannot be found fails the drag step, not the call: still shown', async () => {
-    const { driver } = fakeDriver({ outcomes: { bare: 'refuse', keys: 'refuse' } });
-    driver.$ = async () => ({ selector: 'gone' });
-    await expect(dismissKeyboard(driver, 'ios')).rejects.toThrow(
-      /, a drag from above the keyboard down onto it \(failed: the keyboard element was not found\)$/,
-    );
+  test('a step that succeeds but leaves the keyboard up moves on to the next', async () => {
+    const { driver, calls } = fakeDriver({ outcomes: { bare: 'noop', keys: 'dismiss' } });
+    expect(await dismissKeyboard(driver, 'ios')).toBe(true);
+    expect(dismissing(calls)).toEqual(['bare', 'keys']);
   });
 
   test('a fatal driver error of a step is thrown at once: no further step', async () => {
@@ -220,7 +225,7 @@ test.describe('dismissKeyboard: iOS steps', () => {
     expect(dismissing(calls)).toEqual(['bare']);
   });
 
-  test('a fatal driver error of the keys step is thrown at once: no drag', async () => {
+  test('a fatal driver error of the keys step is thrown at once', async () => {
     const lost = driverError('connect ECONNREFUSED <appium-server>');
     const { driver, calls, actions } = fakeDriver({ outcomes: { bare: 'refuse', keys: lost } });
     await expect(dismissKeyboard(driver, 'ios')).rejects.toBe(lost);
@@ -247,12 +252,6 @@ test.describe('dismissKeyboard: iOS steps', () => {
     expect(flaky.executes).toHaveLength(2);
   });
 
-  test('the keyboard is looked up with a non-strict $', async () => {
-    const { driver, finds } = fakeDriver({ outcomes: { bare: 'refuse', keys: 'refuse', drag: 'dismiss' } });
-    expect(await dismissKeyboard(driver, 'ios')).toBe(true);
-    expect(finds).toEqual([['-ios class chain:**/XCUIElementTypeKeyboard', { strict: false }]]);
-  });
-
   test('a step answered "unknown method" is skipped, not fatal: the next step runs at once', async () => {
     const unknown = driverError('Unknown mobile command "mobile: hideKeyboard"', 'unknown method');
     const { driver, calls, pauses } = fakeDriver({ outcomes: { bare: unknown, keys: 'dismiss' } });
@@ -262,7 +261,7 @@ test.describe('dismissKeyboard: iOS steps', () => {
     expect(pauses).toEqual([KEYBOARD_SETTLE_MS]);
   });
 
-  test('every unsupported spelling skips the step; "invalid argument" skips the drag', async () => {
+  test('every unsupported spelling skips the step', async () => {
     for (const err of [
       driverError('The requested resource could not be found', 'unknown command'),
       driverError('Method has not yet been implemented'),
@@ -273,11 +272,6 @@ test.describe('dismissKeyboard: iOS steps', () => {
       expect(await dismissKeyboard(driver, 'ios')).toBe(true);
       expect(dismissing(calls)).toEqual(['bare', 'keys']);
     }
-    const bad = driverError('The coordinates are outside the window', 'invalid argument');
-    const { driver } = fakeDriver({ outcomes: { bare: 'refuse', keys: 'refuse', drag: bad } });
-    await expect(dismissKeyboard(driver, 'ios')).rejects.toThrow(
-      /, a drag from above the keyboard down onto it \(skipped: The coordinates are outside the window\)$/,
-    );
   });
 
   test('"invalid argument" of a hideKeyboard step is not a skip: it is fatal', async () => {
@@ -287,44 +281,108 @@ test.describe('dismissKeyboard: iOS steps', () => {
     expect(dismissing(calls)).toEqual(['bare', 'keys']);
   });
 
-  test('a keyboard below the window leaves no room for the drag: refused with a reason, nothing sent', async () => {
-    // Start 880 - 30 = 850 is not above the end 852 - 10 = 842.
-    const { driver, actions, pauses } = fakeDriver({
-      outcomes: { bare: 'refuse', keys: 'refuse' },
-      keyboardRect: { x: 0, y: 880, width: 393, height: 336 },
-    });
-    await expect(dismissKeyboard(driver, 'ios')).rejects.toThrow(
-      /, a drag from above the keyboard down onto it \(failed: the drag start y 850 \(30 pt above the keyboard's top 880\) is not above its end y 842 \(10 pt above the window's bottom\)\)$/,
-    );
-    expect(actions).toEqual([]);
-    expect(pauses).toEqual([KEYBOARD_SETTLE_MS, KEYBOARD_SETTLE_MS]);
-  });
-
-  test('a keyboard off the window\'s centre line (a floating keyboard) is not dragged', async () => {
-    const { driver, actions } = fakeDriver({
-      outcomes: { bare: 'refuse', keys: 'refuse' },
-      keyboardRect: { x: 220, y: 500, width: 160, height: 250 },
-    });
-    await expect(dismissKeyboard(driver, 'ios')).rejects.toThrow(
-      /\(failed: the window's centre x 197 is outside the keyboard's x range 220-380\)$/,
-    );
-    expect(actions).toEqual([]);
-  });
-
-  test('a keyboard near the top: the drag start is clamped into the window', async () => {
-    const { driver, actions } = fakeDriver({
-      outcomes: { bare: 'refuse', keys: 'refuse', drag: 'dismiss' },
-      keyboardRect: { x: 0, y: 12, width: 393, height: 840 },
-    });
-    expect(await dismissKeyboard(driver, 'ios')).toBe(true);
-    const sent = actions[0][0].actions;
-    expect([sent[0].x, sent[0].y, sent[3].x, sent[3].y]).toEqual([197, 0, 197, 842]);
-  });
-
   test('the platform is read from the driver when not given', async () => {
     const { driver, executes } = fakeDriver({ caps: { platformName: 'iOS' }, outcomes: { bare: 'refuse', keys: 'dismiss' } });
     expect(await dismissKeyboard(driver)).toBe(true);
-    expect(executes.map(e => e[1])).toEqual([{}, { keys: ['return', 'Return', 'done', 'Done'] }]);
+    expect(executes.map(e => e[1])).toEqual([{}, { keys: KEYS }]);
+  });
+});
+
+test.describe('dismissKeyboard: iOS tapElement', () => {
+  const TAP_STEP = `a tap on options.tapElement "${TAP_SELECTOR}"`;
+
+  test('tapElement is tapped first; it dismisses: true, no hideKeyboard is sent', async () => {
+    const { driver, calls, executes, pauses, actions } = fakeDriver({ outcomes: { tap: 'dismiss' } });
+    expect(await dismissKeyboard(driver, 'ios', { tapElement: label(driver) })).toBe(true);
+    expect(calls).toEqual(['isKeyboardShown', 'tap', 'isKeyboardShown']);
+    expect(executes).toEqual([]);
+    expect(actions).toEqual([]);
+    expect(pauses).toEqual([KEYBOARD_SETTLE_MS]);
+  });
+
+  test('the tap leaves the keyboard up: the bare call, then the keys, in that order', async () => {
+    const { driver, calls, executes } = fakeDriver({ outcomes: { tap: 'noop', bare: 'refuse', keys: 'dismiss' } });
+    expect(await dismissKeyboard(driver, 'ios', { tapElement: label(driver) })).toBe(true);
+    expect(dismissing(calls)).toEqual(['tap', 'bare', 'keys']);
+    expect(executes.map(e => e[1])).toEqual([{}, { keys: KEYS }]);
+  });
+
+  test('a tapElement that is not found is a failed step, not fatal: no pause or re-check, the next step runs', async () => {
+    const { driver, calls, pauses } = fakeDriver({ outcomes: { bare: 'refuse', keys: 'dismiss' } });
+    expect(await dismissKeyboard(driver, 'ios', { tapElement: label(driver, MISSING_SELECTOR) })).toBe(true);
+    expect(calls).toEqual(['isKeyboardShown', 'missing click', 'bare', 'isKeyboardShown', 'keys', 'isKeyboardShown']);
+    expect(pauses).toEqual([KEYBOARD_SETTLE_MS, KEYBOARD_SETTLE_MS]);
+  });
+
+  test('the failed tap is named in the still-shown error', async () => {
+    const { driver } = fakeDriver({ outcomes: { bare: 'refuse', keys: 'refuse' } });
+    const err = await dismissKeyboard(driver, 'ios', { tapElement: label(driver, MISSING_SELECTOR) }).then(() => null, (e: unknown) => e);
+    expect(err).toBeInstanceOf(KeyboardStillShownError);
+    expect((err as Error).message).toBe(
+      'dismissKeyboard: the keyboard is still shown after ' +
+      `a tap on options.tapElement "${MISSING_SELECTOR}" (failed: ${NOT_FOUND}), ` +
+      `mobile: hideKeyboard (failed: ${WDA_REFUSAL}), ` +
+      `${KEYS_STEP} (failed: ${WDA_REFUSAL})`,
+    );
+    expect((err as KeyboardStillShownError).steps).toEqual([
+      `a tap on options.tapElement "${MISSING_SELECTOR}"`, 'mobile: hideKeyboard', KEYS_STEP,
+    ]);
+  });
+
+  test('a tap that runs but leaves the keyboard up is named without a failure', async () => {
+    const { driver } = fakeDriver({ outcomes: { bare: 'refuse', keys: 'refuse' } });
+    await expect(dismissKeyboard(driver, 'ios', { tapElement: label(driver) })).rejects.toThrow(
+      `dismissKeyboard: the keyboard is still shown after ${TAP_STEP}, mobile: hideKeyboard (failed: `,
+    );
+  });
+
+  test('a fatal driver error of the tap is thrown at once: no further step', async () => {
+    const dead = driverError('A session is either terminated or not started', 'invalid session id');
+    const { driver, calls, executes } = fakeDriver({ outcomes: { tap: dead } });
+    await expect(dismissKeyboard(driver, 'ios', { tapElement: label(driver) })).rejects.toBe(dead);
+    expect(dismissing(calls)).toEqual(['tap']);
+    expect(executes).toEqual([]);
+  });
+
+  test('with options.timeout, the tap waits for its element at most the time left', async () => {
+    const { driver, waits } = fakeDriver({ outcomes: { bare: 'dismiss' } });
+    expect(await dismissKeyboard(driver, 'ios', { tapElement: label(driver, MISSING_SELECTOR), timeout: 5000 })).toBe(true);
+    expect(waits).toHaveLength(1);
+    expect(waits[0]).toBeGreaterThan(0);
+    expect(waits[0]).toBeLessThanOrEqual(5000);
+  });
+
+  test('without options.timeout, the tap waits for its element the element\'s own default timeout', async () => {
+    const { driver, waits } = fakeDriver({ outcomes: { tap: 'dismiss' } });
+    expect(await dismissKeyboard(driver, 'ios', { tapElement: label(driver) })).toBe(true);
+    expect(waits).toEqual([200]);
+  });
+
+  test('a tapElement that is not a platform element is refused before anything is sent', async () => {
+    for (const tapElement of [
+      { _type: 'web', click: async () => {} },
+      { click: async () => {} },
+      null,
+      'title',
+    ]) {
+      const { driver, calls, executes } = fakeDriver({});
+      await expect(dismissKeyboard(driver, 'ios', { tapElement: tapElement as any }))
+        .rejects.toThrow('dismissKeyboard: options.tapElement must be a platform element');
+      expect(calls).toEqual([]);
+      expect(executes).toEqual([]);
+    }
+  });
+
+  test('no keyboard shown: the tapElement is not tapped', async () => {
+    const { driver, calls } = fakeDriver({ shown: false });
+    expect(await dismissKeyboard(driver, 'ios', { tapElement: label(driver) })).toBe(false);
+    expect(calls).toEqual(['isKeyboardShown']);
+  });
+
+  test('Android ignores tapElement: its steps are unchanged', async () => {
+    const { driver, calls } = fakeDriver({ outcomes: { hideKeyboard: 'dismiss' } });
+    expect(await dismissKeyboard(driver, 'android', { tapElement: label(driver) })).toBe(true);
+    expect(dismissing(calls)).toEqual(['hideKeyboard']);
   });
 });
 
@@ -419,16 +477,11 @@ test.describe('PlatformElement.scrollIntoView dismisses the keyboard first', () 
   function sweepDriver(outcomes: Partial<Record<string, Outcome>>) {
     const fake = fakeDriver({ outcomes });
     const swipes: number[] = [];
-    fake.driver.$ = async (selector: string) => (selector.includes('XCUIElementTypeKeyboard')
-      ? { elementId: 'kb-1' }
-      : { selector, isDisplayed: async () => false, waitForExist: async () => false });
+    fake.driver.$ = async (selector: string) => ({ selector, isDisplayed: async () => false, waitForExist: async () => false });
     fake.driver.$$ = async () => [];
-    const performActions = fake.driver.performActions;
-    fake.driver.performActions = async (sources: any[]) => {
-      // The dismissal drag ends near the window bottom; sweep swipes do not.
-      if (sources[0].actions[3].y === WINDOW.height - 10) return performActions(sources);
-      swipes.push(1);
-    };
+    fake.driver.getWindowSize = async () => ({ width: 393, height: 852 });
+    fake.driver.getElementRect = async () => ({ x: 0, y: 0, width: 393, height: 852 });
+    fake.driver.performActions = async () => { swipes.push(1); };
     return { ...fake, swipes };
   }
   const target = (driver: any) => new PlatformElement(driver, '~row-40', undefined, 200, { platform: 'ios' });
@@ -441,9 +494,9 @@ test.describe('PlatformElement.scrollIntoView dismisses the keyboard first', () 
   });
 
   test('a keyboard still shown after every step does not fail the call: the sweep runs anyway', async () => {
-    const { driver, calls, swipes, isShown } = sweepDriver({ bare: 'refuse', keys: 'refuse', drag: 'noop' });
+    const { driver, calls, swipes, isShown } = sweepDriver({ bare: 'refuse', keys: 'refuse' });
     await expect(target(driver).scrollIntoView({ maxSwipes: 2 })).rejects.toThrow(/after 2 swipes, the swipe limit/);
-    expect(dismissing(calls)).toEqual(['bare', 'keys', 'drag']);
+    expect(dismissing(calls)).toEqual(['bare', 'keys']);
     expect(isShown()).toBe(true);
     expect(swipes).toHaveLength(2);
   });

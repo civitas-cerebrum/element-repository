@@ -42,7 +42,7 @@
 import { test, expect } from '@playwright/test';
 import * as fs from 'fs';
 import * as path from 'path';
-import { ElementRepository, Element, ScrollIntoViewOptions, isPlatform, dismissKeyboard } from '../../src';
+import { ElementRepository, Element, ScrollIntoViewOptions, isPlatform, dismissKeyboard, IOS_DISMISS_KEYS } from '../../src';
 import { flattenCapabilities } from './capabilities';
 
 const PAGES = path.join(__dirname, 'ios-testapp.pages.json');
@@ -295,19 +295,59 @@ test.describe('live iOS test app (SIMULATOR)', () => {
       await openScreen('cardAuth', 'loginForm', { name: 'username', page: 'LoginForm' });
     });
 
-    test('dismissKeyboard hides the keyboard of a filled field and keeps its text; a second call returns false', async () => {
-      // The field's default return key is not a Done key, so WebDriverAgent
-      // refuses a bare `mobile: hideKeyboard` here.
+    /**
+     * The driver with its `execute` calls recorded: the `mobile:` commands
+     * dismissKeyboard sends, in order (the session itself is untouched).
+     */
+    function recording(): { spy: any; sent: Array<[string, unknown]> } {
+      const sent: Array<[string, unknown]> = [];
+      const spy = new Proxy(driver, {
+        get(target, prop) {
+          if (prop === 'execute') {
+            return async (script: string, ...args: unknown[]) => { sent.push([script, args[0]]); return target.execute(script, ...args); };
+          }
+          const value = Reflect.get(target, prop);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      });
+      return { spy, sent };
+    }
+
+    test('dismissKeyboard hides the keyboard of a filled field with the keys step and keeps its text; a second call returns false', async () => {
+      // The field's return key is named Return and there is no Done key, so
+      // WebDriverAgent refuses the bare `mobile: hideKeyboard` here and the
+      // keys step presses Return.
       const username = await get('username', 'LoginForm');
       await username.fill('kbd-check');
       await expect.poll(() => driver.isKeyboardShown(), { timeout: 10_000 }).toBe(true);
 
-      expect(await dismissKeyboard(driver, 'ios')).toBe(true);
+      const { spy, sent } = recording();
+      expect(await dismissKeyboard(spy, 'ios')).toBe(true);
       expect(await driver.isKeyboardShown()).toBe(false);
       expect(await username.textContent()).toBe('kbd-check');
+      expect(sent).toEqual([
+        ['mobile: hideKeyboard', {}],
+        ['mobile: hideKeyboard', { keys: [...IOS_DISMISS_KEYS] }],
+      ]);
 
       expect(await dismissKeyboard(driver, 'ios')).toBe(false);
       expect(await driver.isKeyboardShown()).toBe(false);
+    });
+
+    test('dismissKeyboard with tapElement (the screen title) hides the keyboard by a tap, no key pressed, and keeps the text', async () => {
+      // The screen ends editing on a tap outside the field; the title label
+      // is neutral (tapping it does nothing else).
+      const username = await get('username', 'LoginForm');
+      await username.fill('kbd-tap');
+      await expect.poll(() => driver.isKeyboardShown(), { timeout: 10_000 }).toBe(true);
+
+      const { spy, sent } = recording();
+      const title = await get('title', 'LoginForm');
+      expect(await dismissKeyboard(spy, 'ios', { tapElement: title })).toBe(true);
+      expect(await driver.isKeyboardShown()).toBe(false);
+      expect(await username.textContent()).toBe('kbd-tap');
+      // The tap alone dismissed it: no hideKeyboard (so no action key) was sent.
+      expect(sent).toEqual([]);
     });
   });
 

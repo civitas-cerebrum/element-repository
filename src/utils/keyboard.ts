@@ -5,20 +5,23 @@
 import type { Platform } from '../enum/Platform';
 import { isFatalDriverError } from './driverErrors';
 import { detectDriverPlatform } from './platformText';
-import { performTouchSwipe } from './touch';
+import { isPlatform } from '../types/Element';
+import type { Element } from '../types/Element';
 
 /** Pause after each dismissal step before the keyboard is checked again, in ms (the keyboard's hide animation). */
 export const KEYBOARD_SETTLE_MS = 300;
 
 /**
- * Key names of the key the iOS step "keys" taps: the default return key
- * (identifier `Return`, label `return`) and the Done key, in both
- * spellings. WebDriverAgent taps a key (or keyboard button) whose
- * identifier or label equals one of them exactly. A non-default return key
- * (Go, Search, Send, Next, Join, ...) is not in the list: on such a field
- * WebDriverAgent refuses this step and the drag step runs.
+ * Key names of the iOS "keys" step: the standard names of the keyboard's
+ * action (return) key, in both spellings: Done, Return, Go, Search, Send and
+ * Join. WebDriverAgent taps a key (or keyboard button) whose identifier or
+ * label equals one of them exactly. Tapping it may run the field's action:
+ * submit a form, start a search, send a message. Next is deliberately not in
+ * the list: it moves the focus to the next field and keeps the keyboard up.
  */
-export const IOS_DISMISS_KEYS: readonly string[] = Object.freeze(['return', 'Return', 'done', 'Done']);
+export const IOS_DISMISS_KEYS: readonly string[] = Object.freeze([
+  'done', 'Done', 'return', 'Return', 'go', 'Go', 'search', 'Search', 'send', 'Send', 'join', 'Join',
+]);
 
 /** Options of {@link dismissKeyboard}. */
 export interface DismissKeyboardOptions {
@@ -28,6 +31,20 @@ export interface DismissKeyboardOptions {
    * the "still shown" error. Default: no time bound; the steps bound it.
    */
   timeout?: number;
+  /**
+   * iOS only: a neutral element on the screen that does nothing when
+   * tapped, such as a title label, named by the caller. When given, it is
+   * tapped first (an element click) and the keyboard is checked again,
+   * before any `mobile: hideKeyboard`, so a screen that ends editing on a
+   * tap outside the field dismisses its keyboard without pressing the
+   * keyboard's action key (which may submit a form or run a search). It
+   * must be a platform element (`isPlatform`), else the call throws before
+   * anything is sent. One that is not found (the tap waits for it at most
+   * what is left of `timeout`, else the element's own default timeout) is a
+   * failed step, not fatal. The library never taps a coordinate of its own
+   * choosing. Android ignores it.
+   */
+  tapElement?: Element;
 }
 
 /** The "still shown" outcome of {@link dismissKeyboard}. */
@@ -41,7 +58,7 @@ export class KeyboardStillShownError extends Error {
   }
 }
 
-/** A step that decided not to send its gesture: it failed without touching the screen. */
+/** A step that failed without performing its action (nothing reached the screen): no pause or re-check follows. */
 class StepRefused extends Error {}
 
 interface Step {
@@ -67,13 +84,6 @@ function isUnsupported(err: unknown): boolean {
     || (typeof message === 'string' && UNSUPPORTED_MESSAGE.test(message));
 }
 
-/** True for the driver's "invalid argument" answer (a W3C actions body it will not perform). */
-function isInvalidArgument(err: unknown): boolean {
-  if (!err || typeof err !== 'object') return false;
-  const { name } = err as { name?: unknown };
-  return name === 'invalid argument' || name === 'InvalidArgumentError';
-}
-
 function messageOf(err: unknown): string {
   const text = err instanceof Error ? err.message : String(err);
   return text.split('\n')[0].trim();
@@ -84,59 +94,50 @@ async function pause(driver: any, ms: number): Promise<void> {
   else await new Promise(resolve => setTimeout(resolve, ms));
 }
 
-const clamp = (value: number, min: number, max: number): number => Math.min(Math.max(value, min), max);
-
-/** Distance of the drag's start above the keyboard's top edge, in pt. */
-const DRAG_START_ABOVE_KEYBOARD = 30;
-/** Distance of the drag's end above the window's bottom edge, in pt. */
-const DRAG_END_ABOVE_BOTTOM = 10;
-
 /**
- * iOS step 3: a drag from just above the keyboard down onto it, the gesture
- * a user makes to pull the keyboard away. It dismisses the keyboard of a
- * scroll view whose `keyboardDismissMode` is `interactive` or `onDrag` (and
- * SwiftUI `scrollDismissesKeyboard`). It starts 30 pt above the keyboard's
- * top edge on the window's vertical centre line and ends 10 pt above the
- * window's bottom, moving the whole time, so it never ends as a tap on what
- * is under its start point. It is refused, sending nothing, unless its
- * start is above its end and the centre line crosses the keyboard (not a
- * floating keyboard off the centre); its points are clamped into the window.
+ * iOS step "tap": an element click on the caller's neutral `tapElement`.
+ * A click that fails with an error that is not fatal (the element is not
+ * found, ...) did not tap: the step fails with no pause or re-check.
  */
-async function dragOntoKeyboard(driver: any): Promise<void> {
-  const keyboard = await driver.$('-ios class chain:**/XCUIElementTypeKeyboard', { strict: false });
-  if (!keyboard?.elementId) throw new StepRefused('the keyboard element was not found');
-  const rect = await driver.getElementRect(keyboard.elementId);
-  const size = await driver.getWindowSize();
-  const x = Math.round(size.width / 2);
-  const startY = Math.round(rect.y - DRAG_START_ABOVE_KEYBOARD);
-  const endY = Math.round(size.height - DRAG_END_ABOVE_BOTTOM);
-  if (!(startY < endY)) {
-    throw new StepRefused(
-      `the drag start y ${startY} (${DRAG_START_ABOVE_KEYBOARD} pt above the keyboard's top ${Math.round(rect.y)}) ` +
-      `is not above its end y ${endY} (${DRAG_END_ABOVE_BOTTOM} pt above the window's bottom)`,
-    );
+async function tapNeutralElement(tapElement: Element, timeLeft: number | undefined): Promise<void> {
+  try {
+    await tapElement.click(timeLeft === undefined ? undefined : { timeout: timeLeft });
+  } catch (err) {
+    if (isFatalDriverError(err)) throw err;
+    throw new StepRefused(messageOf(err));
   }
-  if (!(x >= rect.x && x <= rect.x + rect.width)) {
-    throw new StepRefused(
-      `the window's centre x ${x} is outside the keyboard's x range ${Math.round(rect.x)}-${Math.round(rect.x + rect.width)}`,
-    );
-  }
-  const maxX = Math.max(0, Math.round(size.width) - 1);
-  const maxY = Math.max(0, Math.round(size.height) - 1);
-  const from = { x: clamp(x, 0, maxX), y: clamp(startY, 0, maxY) };
-  const to = { x: from.x, y: clamp(endY, 0, maxY) };
-  await performTouchSwipe(driver, from, to, { holdMs: 50, moveMs: 300 });
 }
 
 /**
  * The platform's dismissal steps, in the order they run. Each entry is
  * self-contained, so the order can be changed by moving entries.
+ *
+ * iOS never sends a gesture of its own (no drag, no coordinate tap): a drag
+ * from above the keyboard was tried and dropped. On the iOS simulator it
+ * never dismissed the keyboard of a form, and its start point lands on the
+ * keyboard's input assistant bar (the "Passwords" button above a login
+ * form's keyboard), a control no step may press.
  */
-function stepsFor(driver: any, platform: Platform | undefined): Step[] {
+function stepsFor(
+  driver: any, platform: Platform | undefined, tapElement: Element | undefined, timeLeft: () => number | undefined,
+): Step[] {
   const canExecute = typeof driver?.execute === 'function';
   if (platform === 'ios') {
-    return [
+    const steps: Step[] = [];
+    if (tapElement !== undefined && isPlatform(tapElement)) {
+      steps.push({
+        name: `a tap on options.tapElement "${tapElement.selector}"`,
+        available: true,
+        run: () => tapNeutralElement(tapElement, timeLeft()),
+        skipsOn: () => false,
+      });
+    }
+    steps.push(
       {
+        // Before the keys step: on an iPad this taps the keyboard's hide
+        // key, where the keys step would press the action key instead. On
+        // an iPhone keyboard without a Done key WebDriverAgent refuses it
+        // after about 3.5 s (iOS simulator): that is its cost.
         name: 'mobile: hideKeyboard',
         available: canExecute,
         run: () => driver.execute('mobile: hideKeyboard', {}),
@@ -148,13 +149,8 @@ function stepsFor(driver: any, platform: Platform | undefined): Step[] {
         run: () => driver.execute('mobile: hideKeyboard', { keys: [...IOS_DISMISS_KEYS] }),
         skipsOn: isUnsupported,
       },
-      {
-        name: 'a drag from above the keyboard down onto it',
-        available: typeof driver?.performActions === 'function' && typeof driver?.$ === 'function',
-        run: () => dragOntoKeyboard(driver),
-        skipsOn: err => isUnsupported(err) || isInvalidArgument(err),
-      },
-    ];
+    );
+    return steps;
   }
   // Android and every other platform: the commands the platform element has
   // always sent, unchanged.
@@ -196,40 +192,49 @@ function stepsFor(driver: any, platform: Platform | undefined): Step[] {
  *    {@link KEYBOARD_SETTLE_MS} and asks `isKeyboardShown()` again, and
  *    returns `true` as soon as the keyboard is gone. A step whose command
  *    the driver does not have is skipped.
- *    - iOS (XCUITest):
- *      1. `mobile: hideKeyboard` with no keys. XCUITest adds the key name
+ *    - iOS (XCUITest). The library sends no gesture of its own here: no
+ *      drag, no tap at a coordinate.
+ *      1. Only with `options.tapElement`: an element click on that neutral
+ *         element (a title label, ...), which dismisses the keyboard of a
+ *         screen that ends editing on a tap outside the field, without
+ *         pressing the keyboard's action key. Not found (or any other error
+ *         that is not fatal): the step fails, with no pause or re-check.
+ *      2. `mobile: hideKeyboard` with no keys. XCUITest adds the key name
  *         `done` itself; on an iPad WebDriverAgent also taps the keyboard's
- *         hide key.
- *      2. `mobile: hideKeyboard` with `keys` {@link IOS_DISMISS_KEYS}
- *         (`return`, `Return`, `done`, `Done`): WebDriverAgent taps the
- *         keyboard key whose identifier or label is one of them. A text
- *         field that dismisses on Return (or submits on it) does so here. A
- *         field with another return key (Go, Search, Send, Next, Join, ...)
- *         has no such key: WebDriverAgent refuses the step and the drag runs.
- *      3. A drag from 30 pt above the keyboard's top edge down to 10 pt
- *         above the window's bottom, on the window's vertical centre line
- *         (50 ms hold, 300 ms move, no tap). It dismisses the keyboard of a
- *         scroll view with interactive / on-drag keyboard dismissal. It is
- *         a real drag on whatever is under its start point: a scroll view
- *         may scroll or bounce with it, a list scrolled to its top may
- *         trigger pull-to-refresh, a picker wheel may turn and a map may
- *         pan; a button or slider under it sees a cancelled touch, not a
- *         tap. It is refused (the step fails, nothing is sent) unless its
- *         start lies above its end and the centre line crosses the
- *         keyboard's x range; its points are clamped into the window.
+ *         hide key. On an iPhone keyboard without a Done key WebDriverAgent
+ *         refuses it ("Did not know how to dismiss the keyboard") after
+ *         about 3.5 s (iOS simulator): that is the cost of this step. It
+ *         stays before step 3 because on an iPad step 3 would press the
+ *         action key instead of the hide key.
+ *      3. `mobile: hideKeyboard` with `keys` {@link IOS_DISMISS_KEYS} (the
+ *         action-key names done, return, go, search, send and join, each
+ *         lower-case and capitalised): WebDriverAgent taps the keyboard key
+ *         whose identifier or label is one of them. **This presses the
+ *         keyboard's action key, which can submit a form, run a search or
+ *         send a message**; a caller who must not trigger the field's
+ *         action passes `options.tapElement`. Next is not in the list (it
+ *         moves the focus and keeps the keyboard up).
  *    - Android, and any other platform: WebdriverIO `hideKeyboard()`, then
  *      `mobile: hideKeyboard` with `{ strategy: 'pressKey', key: 'return' }`,
  *      then with `{ strategy: 'tapOutside' }` (the commands the platform
- *      element's pre-scroll dismissal has always sent).
+ *      element's pre-scroll dismissal has always sent). `tapElement` is
+ *      ignored.
+ *
+ *    Verified on the iOS SIMULATOR only (a login form whose keyboard has a
+ *    Return key and no Done key: the bare call was refused, the keys step
+ *    dismissed it and the text was kept); real iPhone verification is
+ *    pending. The Android steps are unchanged and covered by unit tests.
  * 3. A step the driver answers as unsupported (`unknown command`, `unknown
- *    method`, `unsupported operation`, "not (yet) implemented"; for the drag
- *    also `invalid argument`) is skipped: no pause, no re-check, the next
- *    step runs. Any other step error that is not fatal (for example
- *    WebDriverAgent's HTTP 500 "Did not know how to dismiss the keyboard")
- *    moves on to the next step after the pause and re-check. A fatal driver
- *    error ({@link isFatalDriverError}: dead session, lost connection, ...)
- *    of a step or of a re-check is thrown at once. A re-check that fails
- *    with an error that is not fatal counts as "still shown".
+ *    method`, `unsupported operation`, "not (yet) implemented") is skipped:
+ *    no pause or re-check, the next step runs. A step that fails without
+ *    performing its action (a `tapElement` not found) is named as failed,
+ *    also with no pause or re-check. Any other step error that is not fatal
+ *    (for example WebDriverAgent's "Did not know how to dismiss the
+ *    keyboard") moves on to the next step after the pause and re-check. A
+ *    fatal driver error ({@link isFatalDriverError}: dead session, lost
+ *    connection, ...) of a step or of a re-check is thrown at once. A
+ *    re-check that fails with an error that is not fatal counts as "still
+ *    shown".
  * 4. When the keyboard is still shown after the last step, or
  *    `options.timeout` ms have passed before a step, it throws a
  *    {@link KeyboardStillShownError}:
@@ -241,7 +246,9 @@ function stepsFor(driver: any, platform: Platform | undefined): Step[] {
  * @param platform The platform; by default read from the driver's
  *   `platformName` capability, else WebdriverIO's `isIOS` / `isAndroid`.
  *   Only `'ios'` selects the iOS steps.
- * @param options `{ timeout? }`, see {@link DismissKeyboardOptions}.
+ * @param options `{ timeout?, tapElement? }`, see {@link DismissKeyboardOptions}.
+ *   A `tapElement` that is not a platform element throws before anything
+ *   is sent.
  * @returns `true` when a keyboard was shown and is now gone, `false` when
  *   none was shown or the driver cannot tell.
  */
@@ -249,6 +256,10 @@ export async function dismissKeyboard(driver: any, platform?: Platform, options?
   const timeout = options?.timeout;
   if (timeout !== undefined && !(typeof timeout === 'number' && Number.isFinite(timeout) && timeout >= 0)) {
     throw new Error(`dismissKeyboard: options.timeout must be a non-negative number of ms, got ${String(timeout)}`);
+  }
+  const tapElement = options?.tapElement;
+  if (tapElement !== undefined && !(tapElement && typeof tapElement === 'object' && isPlatform(tapElement))) {
+    throw new Error('dismissKeyboard: options.tapElement must be a platform element');
   }
   const started = Date.now();
   if (typeof driver?.isKeyboardShown !== 'function') return false;
@@ -270,7 +281,8 @@ export async function dismissKeyboard(driver: any, platform?: Platform, options?
     );
   };
 
-  for (const step of stepsFor(driver, platform ?? detectDriverPlatform(driver))) {
+  const timeLeft = (): number | undefined => (timeout === undefined ? undefined : Math.max(0, timeout - (Date.now() - started)));
+  for (const step of stepsFor(driver, platform ?? detectDriverPlatform(driver), tapElement, timeLeft)) {
     if (!step.available) continue;
     if (timeout !== undefined && Date.now() - started >= timeout) fail(`timeout ${timeout} ms`);
     names.push(step.name);

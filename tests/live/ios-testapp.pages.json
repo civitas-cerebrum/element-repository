@@ -38,6 +38,7 @@
       "name": "LoginForm",
       "platform": "ios",
       "elements": [
+        { "elementName": "title", "selector": { "predicate": "type == \"XCUIElementTypeStaticText\" AND label == \"Login\"" } },
         { "elementName": "username", "selector": { "accessibility id": "login-username" } },
         { "elementName": "submit", "selector": { "accessibility id": "login-submit" } }
       ]
