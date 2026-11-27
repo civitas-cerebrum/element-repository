@@ -52,3 +52,37 @@ export function isFatalDriverError(err: unknown): boolean {
   if (typeof name === 'string' && FATAL_DRIVER_ERROR_NAMES.has(name)) return true;
   return typeof message === 'string' && FATAL_DRIVER_ERROR_MESSAGES.some(re => re.test(message));
 }
+
+/** Error names that say the session is gone. */
+const SESSION_LOST_ERROR_NAMES = new Set([
+  'invalid session id', 'InvalidSessionIdError',
+  'session not created', 'SessionNotCreatedError',
+]);
+
+/** Messages that say the session or the connection to the driver is gone. */
+const SESSION_LOST_ERROR_MESSAGES = [
+  /invalid session id/i,
+  /session not created/i,
+  /session is either terminated or not started/i,
+  /ECONNREFUSED/,
+  /ECONNRESET|ENOTFOUND|EPIPE/,
+  /instrumentation process is not running/i,
+];
+
+/**
+ * True when `err` says the session or the connection to the driver is gone
+ * (invalid session id, session not created, terminated / not started
+ * session, UiAutomator2 instrumentation not running, connection refused /
+ * reset / host not found / broken pipe): a subset of
+ * {@link isFatalDriverError}. A narrowed text lookup rethrows only these
+ * from its composed query; any other error of that query, including the
+ * ones `isFatalDriverError` calls fatal (`invalid selector`, `invalid
+ * argument`, `unknown command`, ...), means the driver could not run the
+ * composed query, and the lookup reads the full match list instead.
+ */
+export function isSessionLostError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const { name, message } = err as { name?: unknown; message?: unknown };
+  if (typeof name === 'string' && SESSION_LOST_ERROR_NAMES.has(name)) return true;
+  return typeof message === 'string' && SESSION_LOST_ERROR_MESSAGES.some(re => re.test(message));
+}

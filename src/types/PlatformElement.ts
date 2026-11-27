@@ -1079,8 +1079,10 @@ export class PlatformElement implements Element {
    * Platform: a polled element (an index other than the first match, a
    * child made by {@link locateChild}, or an element that matches nothing)
    * is looked up now, without waiting. A real no-match (no element at the
-   * index, a missing parent, a driver answer `no such element` or
-   * WebdriverIO's "wasn't found") is `false`. A `stale element reference`
+   * index, a missing parent, a driver answer `no such element` — by its
+   * error name, or a message that starts with the W3C phrase; an `unknown
+   * error` that only quotes the phrase deeper in its text is not a
+   * no-match — or WebdriverIO's "wasn't found") is `false`. A `stale element reference`
    * (the match left the tree between the lookup and the read) is looked up
    * and read once more. Any other driver error is thrown, so a caller that
    * polls `isVisible()` retries it instead of reading it as "not visible":
@@ -1354,6 +1356,8 @@ export class PlatformElement implements Element {
     // rethrown, so pollUntil keeps trying until its timeout instead of
     // passing "hidden" or "detached" on one transient error. A fatal driver
     // error (dead session, invalid selector) is thrown by pollUntil at once.
+    // At the timeout pollUntil throws the last poll's driver error when that
+    // poll failed, else "<element> did not become <state> within N ms".
     const present = async () => {
       try { await this.resolveNow(); return true; }
       catch (err) { if (PlatformElement.classifyReadError(err) === 'no-match') return false; throw err; }

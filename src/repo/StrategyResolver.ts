@@ -7,6 +7,10 @@ import { isFatalDriverError } from '../utils/driverErrors';
 import { TextNotFoundError } from '../types/errors';
 import type { Platform } from '../enum/Platform';
 import { detectDriverPlatform, readPlatformText } from '../utils/platformText';
+import {
+  normaliseText, pickTextToken, narrowedTextQueries, runNarrowedQueries, pickFromHits,
+  type TextVerdict, type NarrowedPick,
+} from '../utils/textNarrowing';
 
 /**
  * Creates platform-appropriate Element wrappers and applies selection
@@ -304,10 +308,34 @@ export class StrategyResolver {
    * actions, but `all()` / `count()` on it re-query `selector` and return
    * every match, not only the text-matching one.
    *
+   * Narrowing: on iOS and Android, a poll first asks the driver only for
+   * the matches whose text could match (see `textNarrowing`): the longest
+   * word of the value (normalised as above) the query can carry is looked
+   * for, case-insensitively, in each match's own text and in its
+   * descendants' text. Android sends ONE XPath (`(<base>)[contains(...) or
+   * .//*[...contains(...)]]`), iOS TWO disjoint queries (a class chain or
+   * predicate string for own `label` / `value`, a class chain for a match
+   * with a StaticText descendant). The rule above is applied only to those
+   * hits, in the order the driver returned them; on Android that is exactly
+   * the full pass's answer. On iOS, when the winning hits (the exact ones,
+   * else the contains ones) come from both queries, their relative order is
+   * unknown, so that poll runs the full pass. No hit is a clean miss for
+   * the poll, and polling goes on. A hit costs one or two queries plus the
+   * hits' reads, a miss one or two queries, instead of reading every match.
+   * The lookup is not narrowed (every poll is the full pass below) when the
+   * platform is neither, the selector kind cannot be composed onto (only
+   * XPath on Android, a full resource id, an accessibility id, a class
+   * name, an iOS class chain or predicate string), or no word of the value
+   * is safe for the query. When a narrowed query fails, a lost session or
+   * connection (`isSessionLostError`) is thrown; any other error
+   * (also `invalid selector` / `invalid argument`) makes this poll and every
+   * later one a full pass, and is kept as the last driver error without
+   * making the miss unclean.
+   *
    * Because the result is picked eagerly it is load-bearing, like ATTRIBUTE
    * and RANDOM: the lookup polls until a match appears or the caller's full
    * `timeout` elapses, rather than the swallowed 2 s attach probe of the web
-   * path. Each poll is one pass: one `$$` query, then the text of every
+   * path. A full pass is one `$$` query, then the text of every
    * match it returned (an exact match ends the pass early). A started pass
    * always reads every match, so a small budget still finds a match late in
    * a slow list; the deadline only decides whether another pass starts. A
@@ -331,9 +359,8 @@ export class StrategyResolver {
     value: string,
     platform?: Platform,
   ): Promise<Element> {
-    const normalise = (s: string) => s.replace(/\s+/g, ' ').trim().toLowerCase();
     const wanted = value.trim();
-    const wantedNorm = normalise(value);
+    const wantedNorm = normaliseText(value);
     const deadline = Date.now() + timeout;
     const textPlatform = platform ?? detectDriverPlatform(driver);
     let lastError: unknown;
@@ -348,25 +375,62 @@ export class StrategyResolver {
       lastErrorPass = pass;
     };
 
-    for (;;) {
-      pass++;
+    /** A match's text under the rule, trimmed, or `null` when the read failed (non-fatally). */
+    const readText = async (raw: any): Promise<string | null> => {
+      try { return ((await readPlatformText(raw, textPlatform)) ?? '').trim(); } catch (err) { remember(err); return null; }
+    };
+
+    // The full pass: every match of the selector. A started pass reads
+    // every match (the deadline is checked only between passes). An exact
+    // match wins, so the first one ends the reads; otherwise the texts read
+    // are kept for the "contains" fallback.
+    const fullPass = async (): Promise<any> => {
       let raws: any[] = [];
       try { raws = Array.from((await driver.$$(selector)) ?? []); } catch (err) { remember(err); raws = []; }
-
-      // A started pass reads every match (the deadline is checked only
-      // between passes). An exact match wins, so the first one ends the
-      // reads; otherwise the texts read are kept for the "contains" fallback.
       const texts: Array<string | null> = [];
       let index = -1;
       for (const raw of raws) {
-        let text: string | null;
-        try { text = ((await readPlatformText(raw, textPlatform)) ?? '').trim(); } catch (err) { remember(err); text = null; }
+        const text = await readText(raw);
         texts.push(text);
         if (text !== null && text === wanted) { index = texts.length - 1; break; }
       }
+      if (index < 0) index = texts.findIndex(t => t !== null && normaliseText(t).includes(wantedNorm));
+      return index >= 0 ? raws[index] : undefined;
+    };
 
-      if (index < 0) index = texts.findIndex(t => t !== null && normalise(t).includes(wantedNorm));
-      if (index >= 0) return new PlatformElement(driver, selector, raws[index], timeout, { platform });
+    // Narrowed passes (see textNarrowing): the same rule, applied only to
+    // the hits of queries that hold every match whose text could match.
+    // `null` = not narrowed: the selector kind, the platform or every word
+    // of the value is not narrowable, or a narrowed query failed before.
+    const token = pickTextToken(value, textPlatform);
+    let queries = token === undefined ? null : narrowedTextQueries(selector, textPlatform, token);
+    const judge = async (raw: any): Promise<TextVerdict> => {
+      const text = await readText(raw);
+      if (text === null) return 'none';
+      if (text === wanted) return 'exact';
+      return normaliseText(text).includes(wantedNorm) ? 'contains' : 'none';
+    };
+
+    for (;;) {
+      pass++;
+      let picked: NarrowedPick | undefined;
+      if (queries) {
+        const hits = await runNarrowedQueries(driver, queries);
+        if ('error' in hits) {
+          // The driver could not run a narrowed query: this poll and every
+          // later one read the full match list. The error is kept as the
+          // last driver error, but the pass is not marked as failed: its
+          // full pass decides whether the miss is clean.
+          queries = null;
+          lastError = hits.error;
+        } else {
+          picked = await pickFromHits(hits.lists, judge);
+        }
+      }
+      const raw = picked === undefined || picked === 'ambiguous'
+        ? await fullPass()
+        : picked?.raw;
+      if (raw !== undefined) return new PlatformElement(driver, selector, raw, timeout, { platform });
 
       const remaining = deadline - Date.now();
       if (remaining <= 0) break;

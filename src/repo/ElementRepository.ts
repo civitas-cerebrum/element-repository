@@ -4,7 +4,9 @@ import * as path from 'path';
 import { PageRepository, PageRepositoryInput, PageObject, ElementMeta } from '../schema/repository';
 import { Platform, PLATFORMS, isPlatformName } from '../enum/Platform';
 import { pickRandomIndex } from '../utils/math';
-import { Element } from '../types';
+import { Element, PlatformElement } from '../types';
+import { detectDriverPlatform } from '../utils/platformText';
+import { pickTextToken, narrowedTextQueries, runNarrowedQueries, pickFromHits } from '../utils/textNarrowing';
 import {
   SelectorFormatter,
   WEB_FORMATTERS, APPIUM_FORMATTERS, ANDROID_FORMATTERS, IOS_FORMATTERS,
@@ -450,6 +452,16 @@ export class ElementRepository {
    * Matching strategy: first attempts an exact match (trimmed), then falls back
    * to a contains match if no exact match is found.
    *
+   * On iOS and Android pages the elements compared are narrowed first, as
+   * for the platform `TEXT` strategy: the driver is asked only for the
+   * matches whose own or descendant text contains the longest safe word of
+   * `desiredText` (case-insensitively), and this method's own comparison
+   * (exact, then case-sensitive contains, in document order) is applied to
+   * those hits. It compares every match instead when the selector kind or
+   * the text cannot be narrowed, when a narrowed query fails (a lost
+   * session or connection is thrown), or when on iOS the winning hits come
+   * from both narrowed queries.
+   *
    * @param elementName The specific element name to look up.
    * @param pageName The name of the page block in the JSON repository.
    * @param desiredText The string of text to search for within the elements.
@@ -457,25 +469,62 @@ export class ElementRepository {
    * @returns A promise that resolves to the matched Element, or null if not found.
    */
   public async getByText(elementName: string, pageName: string, desiredText: string, strict: boolean = false): Promise<Element | null> {
-    const allElements = await this.getAll(elementName, pageName);
+    const base = await this.resolveElement(elementName, pageName, { strategy: SelectionStrategy.ALL });
 
-    // Each element's text is read once. An exact match wins, so the first
-    // one returns at once; the texts read are kept for the contains pass.
-    const texts: Array<string | undefined> = [];
-    for (const element of allElements) {
-      const text = (await element.textContent())?.trim();
-      if (text === desiredText) return element;
-      texts.push(text);
+    const narrowed = await this.narrowedGetByText(base, pageName, desiredText);
+    if (narrowed) return narrowed;
+    if (narrowed === undefined) {
+      const allElements = await base.all();
+
+      // Each element's text is read once. An exact match wins, so the first
+      // one returns at once; the texts read are kept for the contains pass.
+      const texts: Array<string | undefined> = [];
+      for (const element of allElements) {
+        const text = (await element.textContent())?.trim();
+        if (text === desiredText) return element;
+        texts.push(text);
+      }
+
+      const index = texts.findIndex(text => text?.includes(desiredText));
+      if (index >= 0) return allElements[index];
     }
-
-    const index = texts.findIndex(text => text?.includes(desiredText));
-    if (index >= 0) return allElements[index];
 
     // A text read that fails is not caught here, so a miss is always clean.
     const notFound = new TextNotFoundError({ elementName, pageName, text: desiredText, cleanMiss: true });
     if (strict) throw notFound;
     console.warn(notFound.message);
     return null;
+  }
+
+  /**
+   * `getByText` on a platform element, narrowed (see `textNarrowing`): the
+   * composed queries' hits are compared with `getByText`'s own rule (the
+   * trimmed `textContent()` equal to `desiredText`, else the first that
+   * includes it, case-sensitively). Returns the match, `null` for a miss,
+   * or `undefined` when the lookup is not narrowed (a web element, a
+   * selector kind or text that cannot be narrowed, a composed query the
+   * driver could not run, or winning hits from two iOS queries whose
+   * relative order is unknown): the caller then compares every match.
+   */
+  private async narrowedGetByText(base: Element, pageName: string, desiredText: string): Promise<Element | null | undefined> {
+    if (!(base instanceof PlatformElement)) return undefined;
+    const pagePlatform = this.requirePage(pageName).platform;
+    const platform = pagePlatform ?? detectDriverPlatform(base.driver);
+    const token = pickTextToken(desiredText, platform);
+    const queries = token === undefined ? null : narrowedTextQueries(base.selector, platform, token);
+    if (!queries) return undefined;
+    const hits = await runNarrowedQueries(base.driver, queries);
+    if ('error' in hits) return undefined;
+
+    // The same element `getAll()` would hand out for this match.
+    const wrap = (raw: any) => new PlatformElement(base.driver, base.selector, raw, this.defaultTimeout, { platform: pagePlatform });
+    const picked = await pickFromHits(hits.lists, async raw => {
+      const text = (await wrap(raw).textContent())?.trim();
+      if (text === desiredText) return 'exact';
+      return text?.includes(desiredText) ? 'contains' : 'none';
+    });
+    if (picked === 'ambiguous') return undefined;
+    return picked ? wrap(picked.raw) : null;
   }
 
   /**

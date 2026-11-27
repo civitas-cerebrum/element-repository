@@ -5,6 +5,7 @@ import { SelectionStrategy } from '../src/enum/Options';
 import {
   readPlatformText, ANDROID_DESCENDANT_TEXT_XPATH as EXPORTED_DESCENDANT_XPATH, IOS_DESCENDANT_TEXT_SELECTOR as EXPORTED_IOS_SELECTOR,
 } from '../src/utils/platformText';
+import { answerNarrowed } from './support/narrowedQueries';
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -22,6 +23,8 @@ function nativeElement(id: string, fields: NativeFields): any {
   const xcuiText = fields.text !== undefined ? fields.text : (fields.value || fields.label || '');
   return {
     elementId: id,
+    // What the server sees when it evaluates a narrowed text query.
+    __fields: { type: fields.type ?? 'XCUIElementTypeCell', label: fields.label, value: fields.value, text: xcuiText },
     getTagName: async () => fields.type ?? 'XCUIElementTypeCell',
     getAttribute: async (name: string) => (name === 'label' ? fields.label ?? null : name === 'value' ? fields.value ?? null : null),
     getText: async () => xcuiText,
@@ -37,7 +40,9 @@ function driverOf(raws: any[], capabilities: Record<string, unknown> = {}): any 
   return {
     capabilities,
     $: async () => raws[0],
-    $$: async () => raws,
+    // Every selector matches `raws`; a narrowed text query gets the subset
+    // the server would return.
+    $$: async (selector: string) => answerNarrowed(selector, () => raws) ?? raws,
     pause: async () => {},
   };
 }
@@ -228,7 +233,12 @@ test.describe('readPlatformText round trips on ios', () => {
   });
 });
 
-test.describe('platform text lookups stop reading early', () => {
+/** The same rows behind an iOS XPath, a selector kind the text lookups do not narrow: every match is read. */
+const IOS_XPATH_PAGES = {
+  pages: [{ name: 'Settings', platform: 'ios', elements: [{ elementName: 'rows', selector: { xpath: '//XCUIElementTypeCell' } }] }],
+};
+
+test.describe('platform text lookups stop reading early (full pass)', () => {
   function rows(reads: string[]): any[] {
     return [
       countingElement('wifi', { label: 'Wi-Fi', value: 'Home' }, reads),
@@ -241,7 +251,7 @@ test.describe('platform text lookups stop reading early', () => {
   test('the TEXT strategy stops at the first exact match, and exact still wins over an earlier contains match', async () => {
     const reads: string[] = [];
     const raws = rows(reads);
-    const repo = new ElementRepository(driverOf(raws), IOS_PAGES, { platform: 'ios', timeout: 500 });
+    const repo = new ElementRepository(driverOf(raws), IOS_XPATH_PAGES, { platform: 'ios', timeout: 500 });
     const el = await repo.get('rows', 'Settings', { strategy: SelectionStrategy.TEXT, value: 'General' });
     expect((el as PlatformElement).resolvedElement).toBe(raws[2]);
     expect(reads.some(r => r.startsWith('privacy:'))).toBe(false);
@@ -250,7 +260,7 @@ test.describe('platform text lookups stop reading early', () => {
   test('the TEXT strategy falls back to the first contains match after reading every row once', async () => {
     const reads: string[] = [];
     const raws = rows(reads);
-    const repo = new ElementRepository(driverOf(raws), IOS_PAGES, { platform: 'ios', timeout: 500 });
+    const repo = new ElementRepository(driverOf(raws), IOS_XPATH_PAGES, { platform: 'ios', timeout: 500 });
     const el = await repo.get('rows', 'Settings', { strategy: SelectionStrategy.TEXT, value: 'general' });
     expect((el as PlatformElement).resolvedElement).toBe(raws[1]);
     expect(reads.filter(r => r.endsWith(':label'))).toEqual(['wifi:label', 'general-tab:label', 'general:label', 'privacy:label']);
@@ -258,7 +268,7 @@ test.describe('platform text lookups stop reading early', () => {
 
   test('getByText reads each row once for both the exact and the contains pass', async () => {
     const reads: string[] = [];
-    const repo = new ElementRepository(driverOf(rows(reads)), IOS_PAGES, { platform: 'ios', timeout: 500 });
+    const repo = new ElementRepository(driverOf(rows(reads)), IOS_XPATH_PAGES, { platform: 'ios', timeout: 500 });
     const contains = await repo.getByText('rows', 'Settings', 'Priv', true);
     expect(reads.filter(r => r.endsWith(':label'))).toEqual(['wifi:label', 'general-tab:label', 'general:label', 'privacy:label']);
     expect(await contains!.textContent()).toBe('Privacy');
@@ -266,10 +276,54 @@ test.describe('platform text lookups stop reading early', () => {
 
   test('getByText stops reading at the first exact match, and exact still wins over an earlier contains match', async () => {
     const reads: string[] = [];
-    const repo = new ElementRepository(driverOf(rows(reads)), IOS_PAGES, { platform: 'ios', timeout: 500 });
+    const repo = new ElementRepository(driverOf(rows(reads)), IOS_XPATH_PAGES, { platform: 'ios', timeout: 500 });
     const el = await repo.getByText('rows', 'Settings', 'General', true);
     expect(reads.filter(r => r.endsWith(':label'))).toEqual(['wifi:label', 'general-tab:label', 'general:label']);
     expect(await el!.textContent()).toBe('General');
+  });
+});
+
+test.describe('platform text lookups read only the narrowed hits (accessibility id)', () => {
+  const rows = (reads: string[]) => [
+    countingElement('wifi', { label: 'Wi-Fi', value: 'Home' }, reads),
+    countingElement('general-tab', { label: 'General settings', value: '' }, reads),
+    countingElement('general', { label: 'General', value: '1' }, reads),
+    countingElement('privacy', { label: 'Privacy', value: '' }, reads),
+  ];
+
+  test('TEXT: exact wins over an earlier contains hit; only the hits are read', async () => {
+    const reads: string[] = [];
+    const raws = rows(reads);
+    const repo = new ElementRepository(driverOf(raws), IOS_PAGES, { platform: 'ios', timeout: 500 });
+    const el = await repo.get('rows', 'Settings', { strategy: SelectionStrategy.TEXT, value: 'General' });
+    expect((el as PlatformElement).resolvedElement).toBe(raws[2]);
+    expect(reads.filter(r => r.endsWith(':label'))).toEqual(['general-tab:label', 'general:label']);
+  });
+
+  test('TEXT: the first contains hit when no hit is exact', async () => {
+    const reads: string[] = [];
+    const raws = rows(reads);
+    const repo = new ElementRepository(driverOf(raws), IOS_PAGES, { platform: 'ios', timeout: 500 });
+    const el = await repo.get('rows', 'Settings', { strategy: SelectionStrategy.TEXT, value: 'general' });
+    expect((el as PlatformElement).resolvedElement).toBe(raws[1]);
+    expect(reads.filter(r => r.endsWith(':label'))).toEqual(['general-tab:label', 'general:label']);
+  });
+
+  test('getByText: contains (case-sensitive) and exact, reading only the hits', async () => {
+    const reads: string[] = [];
+    const repo = new ElementRepository(driverOf(rows(reads)), IOS_PAGES, { platform: 'ios', timeout: 500 });
+    const contains = await repo.getByText('rows', 'Settings', 'Priv', true);
+    expect(await contains!.textContent()).toBe('Privacy');
+    expect(reads.filter(r => r.endsWith(':label'))).toEqual(['privacy:label', 'privacy:label']);
+    reads.length = 0;
+    const exact = await repo.getByText('rows', 'Settings', 'General', true);
+    expect(await exact!.textContent()).toBe('General');
+    expect(reads.filter(r => r.endsWith(':label'))).toEqual(['general-tab:label', 'general:label', 'general:label']);
+  });
+
+  test('getByText: a hit that only matches case-insensitively is not a match', async () => {
+    const repo = new ElementRepository(driverOf(rows([])), IOS_PAGES, { platform: 'ios', timeout: 500 });
+    expect(await repo.getByText('rows', 'Settings', 'privacy')).toBeNull();
   });
 });
 
@@ -298,6 +352,9 @@ function androidNode(node: AndroidNode, reads: string[] = []): any {
   const descendants = (n: AndroidNode): AndroidNode[] => (n.children ?? []).flatMap(c => [c, ...descendants(c)]);
   return {
     elementId: node.id,
+    get __fields() {
+      return { text: node.text, showingHint: node.showingHint, children: (node.children ?? []).map(c => androidNode(c, reads)) };
+    },
     getText: async () => { reads.push(`${node.id}:text`); return node.text; },
     getAttribute: async (name: string) => {
       if (name === 'text') return node.text;
@@ -426,6 +483,9 @@ function iosNode(node: IosNode, reads: string[] = []): any {
   const descendants = (n: IosNode): IosNode[] => (n.children ?? []).flatMap(c => [c, ...descendants(c)]);
   return {
     elementId: node.id,
+    get __fields() {
+      return { type: node.type ?? 'XCUIElementTypeCell', label: node.label, value: node.value, children: (node.children ?? []).map(c => iosNode(c, reads)) };
+    },
     getTagName: async () => { reads.push(`${node.id}:tag`); return node.type ?? 'XCUIElementTypeCell'; },
     getAttribute: async (name: string) => {
       reads.push(`${node.id}:${name}`);

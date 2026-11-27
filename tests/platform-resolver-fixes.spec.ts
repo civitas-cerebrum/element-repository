@@ -6,6 +6,7 @@ import {
 } from '../src/repo/formatters';
 import { PlatformElement } from '../src/types';
 import { SelectionStrategy } from '../src/enum/Options';
+import { answerNarrowed, queriedBases, wasQueried } from './support/narrowedQueries';
 
 // ---------------------------------------------------------------------------
 // Mock WebdriverIO driver. `locator` is a Playwright-only API: touching it on
@@ -21,6 +22,8 @@ function mockNativeElement(text: string | null, id: string): any {
   };
   return {
     elementId: id,
+    // What the server sees when it evaluates a narrowed text query.
+    __fields: { text, label: text, type: 'XCUIElementTypeCell' },
     getText: read,
     getTagName: async () => 'XCUIElementTypeCell',
     getAttribute: async (name: string) => (name === 'label' ? read() : null),
@@ -39,9 +42,11 @@ function mockPlatformDriver(texts: Array<string | null>): { driver: any; selecto
       selectors.push(sel);
       return elements[0] ?? mockNativeElement('', 'missing');
     },
+    // Every selector matches the same elements; a narrowed text query
+    // gets the subset the server would return.
     $$: async (sel: string) => {
       selectors.push(sel);
-      return elements;
+      return answerNarrowed(sel, () => elements) ?? elements;
     },
     pause: async (_ms: number) => {},
   };
@@ -69,7 +74,8 @@ for (const page of [androidPage, iosPage]) {
       expect(el).toBeInstanceOf(PlatformElement);
       expect((el as PlatformElement).resolvedElement.elementId).toBe('el-1');
       expect(await el.textContent()).toBe('Wi-Fi');
-      expect(selectors.every(s => s === '~row')).toBe(true);
+      // Every query is the entry's selector or a narrowed query of it.
+      expect(selectors.every(s => queriedBases(s).includes('~row'))).toBe(true);
     });
 
     test('exact match wins over an earlier partial match', async () => {
@@ -269,7 +275,9 @@ test.describe('TEXT on platform pages — driver errors', () => {
   });
 
   test('a stale getText error is appended to not-found', async () => {
-    const { driver } = mockPlatformDriver([null]);
+    // The server found the row by its text (it is a narrowed hit), then it went stale.
+    const stale = { ...mockNativeElement(null, 'el-0'), __fields: { text: 'Wi-Fi' } };
+    const driver = listDriver(async () => [stale]);
     await expect(StrategyResolver.fromSelector(
       driver, '~row', androidPage, 'row', 'Settings', 300,
       { strategy: SelectionStrategy.TEXT, value: 'Wi-Fi' },
@@ -383,7 +391,7 @@ test.describe('TEXT on a platform page walks the fallback chain', () => {
     }
     const driver: any = {
       $: async (sel: string) => (lists[sel] ?? [])[0] ?? mockNativeElement('', 'missing'),
-      $$: async (sel: string) => { queried.push(sel); return lists[sel] ?? []; },
+      $$: async (sel: string) => { queried.push(sel); return answerNarrowed(sel, base => lists[base]) ?? lists[sel] ?? []; },
     };
     Object.defineProperty(driver, 'locator', { get() { throw new Error('locator touched'); } });
     return { driver, queried };
@@ -406,7 +414,7 @@ test.describe('TEXT on a platform page walks the fallback chain', () => {
     expect((el as PlatformElement).resolvedElement.elementId).toBe('~row#1');
     expect((el as PlatformElement).selector).toBe('~row');
     expect(queried).toContain('id=title');
-    expect(queried).not.toContain('//row');
+    expect(wasQueried(queried, '//row')).toBe(false);
   });
 
   test('match only at the end of the chain → resolves to the terminal fallback', async () => {
@@ -419,7 +427,7 @@ test.describe('TEXT on a platform page walks the fallback chain', () => {
     const { driver, queried } = selectorDriver({ 'id=title': ['Display'], '~row': ['Display'] });
     const el = await repoFor(driver).get('row', 'Settings', { strategy: SelectionStrategy.TEXT, value: 'Display', timeout: 300 });
     expect((el as PlatformElement).resolvedElement.elementId).toBe('id=title#0');
-    expect(queried).not.toContain('~row');
+    expect(wasQueried(queried, '~row')).toBe(false);
   });
 
   test('no node matches → the primary\'s not-found error', async () => {
@@ -427,7 +435,7 @@ test.describe('TEXT on a platform page walks the fallback chain', () => {
     await expect(
       repoFor(driver).get('row', 'Settings', { strategy: SelectionStrategy.TEXT, value: 'Display', timeout: 300 }),
     ).rejects.toThrow(/^Element 'row' on 'Settings' with text "Display" not found\.$/);
-    expect(queried).toEqual(expect.arrayContaining(['id=title', '~row', '//row']));
+    for (const base of ['id=title', '~row', '//row']) expect(wasQueried(queried, base)).toBe(true);
   });
 
   test('an entry without fallback still throws straight away', async () => {
