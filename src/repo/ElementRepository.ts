@@ -12,6 +12,7 @@ import {
 import { ElementResolutionOptions, SelectionStrategy } from '../enum/Options';
 import { EnhancedResolver } from './EnhancedResolver';
 import { StrategyResolver } from './StrategyResolver';
+import { TextNotFoundError } from '../types/errors';
 
 /** Default element wait timeout in milliseconds. */
 const DEFAULT_TIMEOUT = 15000;
@@ -452,7 +453,7 @@ export class ElementRepository {
    * @param elementName The specific element name to look up.
    * @param pageName The name of the page block in the JSON repository.
    * @param desiredText The string of text to search for within the elements.
-   * @param strict If true, throws an error if the element is not found. Defaults to false.
+   * @param strict If true, throws a {@link TextNotFoundError} (`cleanMiss` true) if the element is not found. Defaults to false.
    * @returns A promise that resolves to the matched Element, or null if not found.
    */
   public async getByText(elementName: string, pageName: string, desiredText: string, strict: boolean = false): Promise<Element | null> {
@@ -470,9 +471,10 @@ export class ElementRepository {
     const index = texts.findIndex(text => text?.includes(desiredText));
     if (index >= 0) return allElements[index];
 
-    const msg = `Element '${elementName}' on '${pageName}' with text "${desiredText}" not found.`;
-    if (strict) throw new Error(msg);
-    console.warn(msg);
+    // A text read that fails is not caught here, so a miss is always clean.
+    const notFound = new TextNotFoundError({ elementName, pageName, text: desiredText, cleanMiss: true });
+    if (strict) throw notFound;
+    console.warn(notFound.message);
     return null;
   }
 

@@ -662,6 +662,28 @@ try {
 
 This package holds the only definition of the class; consumer packages re-export it, so `instanceof` works across packages.
 
+### `TextNotFoundError`
+
+Thrown when a lookup by text finds no element: the `TEXT` selection strategy on a platform page, and `getByText(..., strict = true)` (web and platform). The message is unchanged: `Element '<elementName>' on '<pageName>' with text "<text>" not found.`, followed on the platform `TEXT` strategy by ` (last driver error: <name>: <message>)` when a non-fatal driver error happened during the lookup.
+
+```typescript
+import { TextNotFoundError, SelectionStrategy } from '@civitas-cerebrum/element-repository';
+
+try {
+  await repo.get('row', 'Settings', { strategy: SelectionStrategy.TEXT, value: 'Wi-Fi' });
+} catch (e) {
+  if (e instanceof TextNotFoundError) {
+    e.elementName;     // 'row'
+    e.pageName;        // 'Settings'
+    e.text;            // 'Wi-Fi'
+    e.cleanMiss;       // true: the final pass read every candidate without a driver error
+    e.lastDriverError; // the last non-fatal driver error of any pass, or undefined
+  }
+}
+```
+
+`cleanMiss` is `false` when the final pass hit a non-fatal driver error (a stale element, an unknown server error), so the miss may be transient rather than a real absence; `lastDriverError` is then that error. `lastDriverError` can be set while `cleanMiss` is `true`, when only an earlier pass failed. `getByText` does not catch text-read errors, so its strict miss is always clean (`cleanMiss` true, no `lastDriverError`). A fatal driver error (`isFatalDriverError`) is still thrown as it is, never wrapped. On a fallback chain the error of the primary node is the one thrown. The class has one definition; consumer packages re-export it, so `instanceof` works across packages.
+
 ### Helpers for consumer packages
 
 Consumer packages import these instead of keeping their own copies, so screen-level gestures and error handling behave exactly like the element primitives:

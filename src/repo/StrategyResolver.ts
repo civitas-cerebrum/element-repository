@@ -4,6 +4,7 @@ import { ElementResolutionOptions, SelectionStrategy } from '../enum/Options';
 import { pickRandomIndex } from '../utils/math';
 import { EnhancedResolver } from './EnhancedResolver';
 import { isFatalDriverError } from '../utils/driverErrors';
+import { TextNotFoundError } from '../types/errors';
 import type { Platform } from '../enum/Platform';
 import { detectDriverPlatform, readPlatformText } from '../utils/platformText';
 
@@ -24,16 +25,6 @@ const ATTACH_PROBE_TIMEOUT_MS = 2_000;
 
 /** Poll interval for the platform TEXT lookup while waiting for a match. */
 const TEXT_POLL_INTERVAL_MS = 250;
-
-/** `<name>: <message>` for a named driver error, the bare message for a plain `Error`. */
-function describeError(err: unknown): string {
-  if (err && typeof err === 'object') {
-    const { name, message } = err as { name?: unknown; message?: unknown };
-    const msg = typeof message === 'string' ? message : String(err);
-    return typeof name === 'string' && name && name !== 'Error' ? `${name}: ${msg}` : msg;
-  }
-  return String(err);
-}
 
 /** Strategies `fromLocator` / `fromSelector` handle — used in the unhandled-strategy error. */
 const HANDLED_STRATEGIES = [
@@ -321,14 +312,15 @@ export class StrategyResolver {
    * always reads every match, so a small budget still finds a match late in
    * a slow list; the deadline only decides whether another pass starts. A
    * long list's last pass may therefore overrun the timeout by up to one
-   * pass. With no match it throws the same not-found error as
-   * `ElementRepository.getByText`.
+   * pass. With no match it throws a {@link TextNotFoundError} with the same
+   * message as `ElementRepository.getByText`.
    *
    * Driver errors: see {@link isFatalDriverError}. A fatal error (invalid
    * selector, invalid or dead session) is rethrown at once. Any other error
    * is treated as a transient missing/stale element: the lookup keeps
    * polling, and the last such error is appended to the final not-found
-   * message as `(last driver error: <name>: <message>)`.
+   * message as `(last driver error: <name>: <message>)` and kept in
+   * `lastDriverError`; `cleanMiss` is `false` when the final pass hit one.
    */
   private static async resolvePlatformByText(
     driver: any,
@@ -345,13 +337,19 @@ export class StrategyResolver {
     const deadline = Date.now() + timeout;
     const textPlatform = platform ?? detectDriverPlatform(driver);
     let lastError: unknown;
+    // The pass being run and the last pass that hit a non-fatal driver
+    // error: the final pass is a clean miss when they differ.
+    let pass = 0;
+    let lastErrorPass = 0;
 
     const remember = (err: unknown) => {
       if (isFatalDriverError(err)) throw err;
       lastError = err;
+      lastErrorPass = pass;
     };
 
     for (;;) {
+      pass++;
       let raws: any[] = [];
       try { raws = Array.from((await driver.$$(selector)) ?? []); } catch (err) { remember(err); raws = []; }
 
@@ -375,8 +373,9 @@ export class StrategyResolver {
       await new Promise(resolve => setTimeout(resolve, Math.min(TEXT_POLL_INTERVAL_MS, remaining)));
     }
 
-    const suffix = lastError === undefined ? '' : ` (last driver error: ${describeError(lastError)})`;
-    throw new Error(`Element '${elementName}' on '${pageName}' with text "${value}" not found.${suffix}`);
+    throw new TextNotFoundError({
+      elementName, pageName, text: value, lastDriverError: lastError, cleanMiss: lastErrorPass !== pass,
+    });
   }
 
   /**
