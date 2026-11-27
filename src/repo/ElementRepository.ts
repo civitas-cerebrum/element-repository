@@ -459,8 +459,11 @@ export class ElementRepository {
    * (exact, then case-sensitive contains, in document order) is applied to
    * those hits. It compares every match instead when the selector kind or
    * the text cannot be narrowed, when a narrowed query fails (a lost
-   * session or connection is thrown), or when on iOS the winning hits come
-   * from both narrowed queries.
+   * session or connection is thrown; any other error of that query is not
+   * reported), or when on iOS the winning hits come from both narrowed
+   * queries. Known limit (Android): the narrowed XPath runs on the page
+   * source, capped at `snapshotMaxDepth` (default 70), so a match deeper
+   * than that is not found.
    *
    * @param elementName The specific element name to look up.
    * @param pageName The name of the page block in the JSON repository.

@@ -46,6 +46,24 @@ test.describe('pickTextToken', () => {
     expect(pickTextToken('$100000 off', 'android')).toBe('$100000');
   });
 
+  test('ios: only words of scripts without spacing or conjoining marks are narrowed on; else the next longest safe word', () => {
+    // Safe: Latin, Greek, Cyrillic, Han, Hiragana / Katakana, Hangul syllables, digits, ASCII punctuation.
+    for (const word of ['straße', 'οδος', 'привет', '東京', 'ひらがな', 'コーヒー', '안녕하세요', '12:30', 'a-b_c!']) {
+      expect(pickTextToken(word, 'ios')).toBe(word);
+    }
+    // Unsafe scripts or characters: the next longest safe word is taken.
+    expect(pickTextToken('नमस्ते Hello', 'ios')).toBe('hello');
+    expect(pickTextToken('สวัสดีครับ hi', 'ios')).toBe('hi');
+    expect(pickTextToken('مرحبا ok', 'ios')).toBe('ok');
+    expect(pickTextToken('שלום ok', 'ios')).toBe('ok');
+    expect(pickTextToken('ﾃﾞｰﾀ ok', 'ios')).toBe('ok');
+    expect(pickTextToken('\u1112\u1161 ok', 'ios')).toBe('ok');
+    expect(pickTextToken('\u20ac100 ok', 'ios')).toBe('ok');
+    expect(pickTextToken('नमस्ते', 'ios')).toBeUndefined();
+    // Android is not restricted this way.
+    expect(pickTextToken('नमस्ते Hello', 'android')).toBe('नमस्ते');
+  });
+
   test('ios: emoji, combining marks and joiners are not narrowed on (NSPredicate matches whole character sequences)', () => {
     expect(pickTextToken('👍 Like', 'ios')).toBe('like');
     expect(pickTextToken('👍', 'ios')).toBeUndefined();
@@ -177,10 +195,28 @@ test.describe('narrowedTextQueries — ios: two disjoint queries per base kind',
       `-ios class chain:**/XCUIElementTypeCell[\`${OWN_APPLE}\`]`,
       `-ios class chain:**/XCUIElementTypeCell${DESC_APPLE}`,
     ]],
-    // Appended to the last segment, after the base's own predicate and index.
-    ['-ios class chain:**/XCUIElementTypeTable/XCUIElementTypeCell[`visible == 1`][2]', [
-      `-ios class chain:**/XCUIElementTypeTable/XCUIElementTypeCell[\`visible == 1\`][2][\`${OWN_APPLE}\`]`,
-      `-ios class chain:**/XCUIElementTypeTable/XCUIElementTypeCell[\`visible == 1\`][2]${DESC_APPLE}`,
+    // Appended to the last segment, after the base's own predicate.
+    ['-ios class chain:**/XCUIElementTypeTable/XCUIElementTypeCell[`visible == 1`]', [
+      `-ios class chain:**/XCUIElementTypeTable/XCUIElementTypeCell[\`visible == 1\`][\`${OWN_APPLE}\`]`,
+      `-ios class chain:**/XCUIElementTypeTable/XCUIElementTypeCell[\`visible == 1\`]${DESC_APPLE}`,
+    ]],
+    // A last segment ending in an index cannot take a predicate after it
+    // (WebDriverAgent: a predicate must come before the position): not narrowed.
+    ['-ios class chain:**/XCUIElementTypeTable/XCUIElementTypeCell[`visible == 1`][2]', null],
+    ['-ios class chain:**/XCUIElementTypeCell[-1]', null],
+    ['-ios class chain:XCUIElementTypeWindow/XCUIElementTypeCell[12]', null],
+    // An index in an earlier segment, or brackets inside a predicate, is no last-segment index.
+    ['-ios class chain:**/XCUIElementTypeTable[1]/XCUIElementTypeCell', [
+      `-ios class chain:**/XCUIElementTypeTable[1]/XCUIElementTypeCell[\`${OWN_APPLE}\`]`,
+      `-ios class chain:**/XCUIElementTypeTable[1]/XCUIElementTypeCell${DESC_APPLE}`,
+    ]],
+    ['-ios class chain:**/XCUIElementTypeCell[`name == "a/b[2]"`]', [
+      `-ios class chain:**/XCUIElementTypeCell[\`name == "a/b[2]"\`][\`${OWN_APPLE}\`]`,
+      `-ios class chain:**/XCUIElementTypeCell[\`name == "a/b[2]"\`]${DESC_APPLE}`,
+    ]],
+    ['-ios class chain:**/XCUIElementTypeCell[$name == "x[2]"$]', [
+      `-ios class chain:**/XCUIElementTypeCell[$name == "x[2]"$][\`${OWN_APPLE}\`]`,
+      `-ios class chain:**/XCUIElementTypeCell[$name == "x[2]"$]${DESC_APPLE}`,
     ]],
     ['~row', [
       `-ios class chain:**/*[\`name == "row"\`][\`${OWN_APPLE}\`]`,
@@ -637,11 +673,39 @@ test.describe('narrowed TEXT falls back to the full pass', () => {
       expect(miss).toBeInstanceOf(TextNotFoundError);
       expect(missServer.finds().filter(isNarrowedQuery)).toHaveLength(1);
       expect(missServer.finds().filter(f => f === '~row').length).toBeGreaterThan(1);
-      // The query error is kept as the last driver error; the full passes were clean.
+      // The query error belongs to a query the user never wrote: it is not
+      // reported; the full passes were clean.
       expect(miss.cleanMiss).toBe(true);
-      expect(miss.lastDriverError).toBe(err);
+      expect(miss.lastDriverError).toBeUndefined();
+      expect(miss.message).not.toContain('last driver error');
+      expect(miss.message).not.toContain(err.message);
     });
   }
+
+  test('isSessionLostError agrees with isFatalDriverError on every session and transport error', () => {
+    const lost = [
+      named('invalid session id', 'x'), named('InvalidSessionIdError', 'x'),
+      named('session not created', 'x'), named('SessionNotCreatedError', 'x'),
+      named('Error', 'A session is either terminated or not started'),
+      named('Error', 'connect ECONNREFUSED <appium-server>'), named('Error', 'read ECONNRESET'),
+      named('Error', 'getaddrinfo ENOTFOUND <appium-server>'), named('Error', 'write EPIPE'),
+      named('Error', 'The instrumentation process is not running (probably crashed)'),
+    ];
+    for (const err of lost) {
+      expect(isSessionLostError(err)).toBe(true);
+      expect(isFatalDriverError(err)).toBe(true);
+    }
+    // Neither list calls these transport errors fatal: a narrowed query failing
+    // with one falls back to the full pass, which polls through it as before.
+    for (const err of [named('Error', 'fetch failed'), named('Error', 'socket hang up'), named('Error', 'connect ETIMEDOUT'), named('Error', 'UND_ERR_SOCKET')]) {
+      expect(isSessionLostError(err)).toBe(isFatalDriverError(err));
+    }
+    // Errors about the query, not the session: fatal elsewhere, not a lost session.
+    for (const err of [named('invalid selector', 'x'), named('invalid argument', 'x'), named('unknown command', 'x'), named('no such window', 'x')]) {
+      expect(isFatalDriverError(err)).toBe(true);
+      expect(isSessionLostError(err)).toBe(false);
+    }
+  });
 
   for (const err of [named('invalid session id', 'session deleted'), named('Error', 'connect ECONNREFUSED <appium-server>')]) {
     test(`a lost session in a narrowed query is thrown: ${err.message}`, async () => {
@@ -713,6 +777,18 @@ test.describe('narrowed getByText', () => {
     const el = await repoOver(server, { 'accessibility id': 'row' }).getByText('rows', 'List', 'Mango', true) as PlatformElement;
     expect(el.resolvedElement.elementId).toBe('r13');
     expect(server.finds().filter(f => f === '~row').length).toBeGreaterThan(0);
+  });
+
+  test('a narrowed query error is not reported in a strict miss', async () => {
+    const server = new MockServer('android', FRUITS.map((f, i) => ({ id: `r${i}`, name: 'row', text: f })));
+    const err = Object.assign(new Error('narrowed query rejected'), { name: 'invalid selector' });
+    server.failNarrowed = err;
+    const miss = await repoOver(server, { 'accessibility id': 'row' }).getByText('rows', 'List', 'Durian', true)
+      .then(() => null, (e: unknown) => e) as TextNotFoundError;
+    expect(miss).toBeInstanceOf(TextNotFoundError);
+    expect(miss.cleanMiss).toBe(true);
+    expect(miss.lastDriverError).toBeUndefined();
+    expect(miss.message).not.toContain('narrowed query rejected');
   });
 
   test('a lost session in its narrowed query is thrown', async () => {

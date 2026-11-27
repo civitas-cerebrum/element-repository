@@ -113,8 +113,11 @@ test.describe('TEXT strategy throws TextNotFoundError', () => {
   });
 
   test('an error in an earlier pass only: cleanMiss true, lastDriverError and suffix kept', async () => {
+    // The narrowed query is rejected (so every poll is a full pass, and its
+    // error is not reported); the first full pass fails, later ones miss.
     let calls = 0;
-    const driver = listDriver(async () => {
+    const driver = listDriver(async (...args: any[]) => {
+      if (args[0] !== '~row') throw namedError('invalid selector', 'narrowed query rejected');
       calls++;
       if (calls === 1) throw namedError('stale element reference', 'first pass');
       return [row('General', 'a')];

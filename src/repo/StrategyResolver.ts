@@ -329,8 +329,17 @@ export class StrategyResolver {
    * is safe for the query. When a narrowed query fails, a lost session or
    * connection (`isSessionLostError`) is thrown; any other error
    * (also `invalid selector` / `invalid argument`) makes this poll and every
-   * later one a full pass, and is kept as the last driver error without
-   * making the miss unclean.
+   * later one a full pass; it is not reported in the not-found message or
+   * `lastDriverError` (the full passes' own errors are, as before). On iOS
+   * a `value CONTAINS` on a non-string value (a switch, a slider) may make
+   * WebDriverAgent fail the narrowed query this way: the lookup is then
+   * slower, but its answer is the same.
+   *
+   * Known limit (Android): the narrowed XPath runs on the page source,
+   * which UiAutomator2 caps at `snapshotMaxDepth` (default 70). A match
+   * deeper than that is not found by a narrowed lookup, and its miss is a
+   * clean miss for the poll; raise `appium:snapshotMaxDepth` for such a
+   * screen.
    *
    * Because the result is picked eagerly it is load-bearing, like ATTRIBUTE
    * and RANDOM: the lookup polls until a match appears or the caller's full
@@ -418,11 +427,10 @@ export class StrategyResolver {
         const hits = await runNarrowedQueries(driver, queries);
         if ('error' in hits) {
           // The driver could not run a narrowed query: this poll and every
-          // later one read the full match list. The error is kept as the
-          // last driver error, but the pass is not marked as failed: its
-          // full pass decides whether the miss is clean.
+          // later one read the full match list. The error belongs to a
+          // query the caller never wrote, so it is not reported: the full
+          // passes' own errors are, and decide whether the miss is clean.
           queries = null;
-          lastError = hits.error;
         } else {
           picked = await pickFromHits(hits.lists, judge);
         }

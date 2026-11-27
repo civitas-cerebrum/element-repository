@@ -84,14 +84,26 @@ const SIGMAS = new Set(['σ', 'ς']);
 const NEVER_SAFE = /[\p{Cc}\p{Cs}]/u;
 
 /**
- * Characters the iOS query does not use. A backtick or `$` would end the
- * class chain predicate. The rest are characters NSPredicate's `CONTAINS`
- * may match only on whole composed character sequences (combining marks,
- * joiners, variation selectors, emoji and their modifiers, regional
- * indicators, conjoining Hangul jamo), where the rule's plain substring test
- * matches inside one.
+ * The characters an iOS word may hold. NSPredicate's `CONTAINS` matches only
+ * on whole composed character sequences, where the rule's plain substring
+ * test matches inside one: a word next to a spacing or conjoining mark, a
+ * virama, a joiner or a variation selector in the element's raw label may
+ * not match although the rule would choose the element. So only characters
+ * of scripts that build no such sequences are carried: Latin, Greek,
+ * Cyrillic, Han, Hiragana, Katakana (with the prolonged sound mark U+30FC),
+ * precomposed Hangul syllables, ASCII digits and ASCII punctuation / symbols
+ * except the backtick and `$` (either would end the class chain predicate).
+ * Grapheme extenders of those scripts (the halfwidth Katakana voiced sound
+ * marks) are excluded too ({@link GRAPHEME_EXTEND}).
+ *
+ * Residual assumption: a safe word can still sit next to a combining mark
+ * in a label (`e` + U+0301 in decomposed text). `CONTAINS[cd]` removes
+ * nonspacing diacritics before comparing, which covers the combining marks
+ * used with Latin, Greek and Cyrillic; a label joining a safe word to a mark
+ * of another script is assumed not to occur.
  */
-const IOS_UNSAFE = /[`$\p{M}‌‍︀-️\u{e0100}-\u{e01ef}\u{1f3fb}-\u{1f3ff}\p{Extended_Pictographic}\p{Regional_Indicator}ᄀ-ᇿꥠ-꥿ힰ-퟿]/u;
+const IOS_SAFE_WORD = /^[\p{Script=Latin}\p{Script=Greek}\p{Script=Cyrillic}\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}ー가-힣0-9\x21-\x23\x25-\x2f\x3a-\x40\x5b-\x5f\x7b-\x7e]+$/u;
+const GRAPHEME_EXTEND = /\p{Grapheme_Extend}/u;
 
 /**
  * The XPath `translate()` mapping that lowercases every character whose
@@ -126,7 +138,7 @@ function androidLowercaseMap(token: string): { from: string; to: string } | null
 function isSafeToken(token: string, platform: Platform): boolean {
   if (NEVER_SAFE.test(token)) return false;
   if (platform === 'android') return androidLowercaseMap(token) !== null;
-  if (platform === 'ios') return !IOS_UNSAFE.test(token);
+  if (platform === 'ios') return IOS_SAFE_WORD.test(token) && !GRAPHEME_EXTEND.test(token);
   return false;
 }
 
@@ -231,10 +243,32 @@ function androidBaseXPath(kind: SelectorKind): string | null {
   }
 }
 
-/** The base selector as a class chain (without the prefix), for every kind but a predicate string. */
+/**
+ * True when the last segment of class chain `chain` ends in an index
+ * (`[2]`, `[-1]`). Brackets and slashes inside a backtick predicate or a
+ * `$...$` descendant predicate are skipped.
+ */
+function classChainEndsInIndex(chain: string): boolean {
+  let outside = '';
+  let quote: string | null = null;
+  for (const ch of chain) {
+    if (quote) { if (ch === quote) quote = null; outside += '_'; continue; }
+    if (ch === '`' || ch === '$') { quote = ch; outside += '_'; continue; }
+    outside += ch;
+  }
+  const last = outside.slice(outside.lastIndexOf('/') + 1);
+  return /\[\s*-?\d+\s*\]\s*$/.test(last);
+}
+
+/**
+ * The base selector as a class chain (without the prefix), for every kind
+ * but a predicate string. A class chain whose last segment ends in an index
+ * is not narrowable: WebDriverAgent takes no predicate after a position
+ * ("Predicate value must be set before position value").
+ */
 function iosBaseClassChain(kind: SelectorKind): string | null {
   switch (kind.using) {
-    case '-ios class chain': return kind.value;
+    case '-ios class chain': return classChainEndsInIndex(kind.value) ? null : kind.value;
     case 'accessibility id':
       return CLASS_CHAIN_DELIMITERS.test(kind.value) ? null : `**/*[\`name == "${escapeDoubleQuoted(kind.value)}"\`]`;
     case 'class name': return IOS_CLASS_NAME.test(kind.value) ? `**/${kind.value}` : null;
@@ -258,7 +292,8 @@ function iosBaseClassChain(kind: SelectorKind): string | null {
  *   `value` contains the token (`CONTAINS[cd]`); descendant: the base's
  *   other matches with an `XCUIElementTypeStaticText` descendant whose
  *   `label` or `value` contains it. A class chain base gets the predicates
- *   appended to its last segment; a predicate string base gets an `AND` for
+ *   appended to its last segment (not narrowed when that segment ends in
+ *   an index); a predicate string base gets an `AND` for
  *   the own query and becomes the class chain `**\/*[`<pred>`]` for the
  *   descendant query.
  */
